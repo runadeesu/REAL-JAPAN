@@ -1,0 +1,116 @@
+#pragma once
+// Application: screens, game session, save/load, settings, localisation.
+
+#include <cmath>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+
+#include "config/settings.hpp"
+#include "game/player.hpp"
+#include "game/town_sim.hpp"
+#include "i18n/i18n.hpp"
+#include "render/renderer.hpp"
+#include "rj/econ/ledger.hpp"
+#include "rj/sim/calendar.hpp"
+#include "ui/ui.hpp"
+#include "world/world.hpp"
+
+namespace rjc {
+
+struct LaunchOptions {
+  std::string screenshot;  // write a PNG after `frames` frames in `state`, then quit
+  int frames = 120;
+  std::string state;       // title | game | pause | phone:map | phone:town | phone:clock | settings | credits
+  std::string time_jst;    // "YYYY-MM-DDTHH:MM"
+  bool has_pos = false;
+  double lat = 0, lon = 0;
+  float yaw_deg = NAN, pitch_deg = NAN;
+  std::string lang;
+  bool fly = false;
+  double alt = 0;
+  int camera_mode = -1;
+};
+
+class App {
+ public:
+  explicit App(LaunchOptions o) : opt_(std::move(o)) {}
+  int run();
+
+ private:
+  enum class Screen { Boot, Loading, Title, Settings, Slots, Credits, Game, Pause, Phone, Fatal };
+  enum class PhoneApp { Home, Map, Clock, Wallet, Town };
+
+  bool boot();
+  void shutdown();
+  void update(float dt);
+  void draw();
+
+  void drawWorldView(const Camera3D& cam);
+  void drawBootScreen();
+  void drawLoading();
+  void drawTitle();
+  void drawSettings();
+  void drawSlots();
+  void drawCredits();
+  void drawHud();
+  void drawBuildingInfo();
+  void drawPause();
+  void drawPhone();
+  void drawMap(Rectangle r, double half_extent_m, bool labels);
+  void drawFatal();
+  void drawToast(float dt);
+
+  void newGame();
+  bool loadSlot(int slot);
+  bool saveSlot(int slot);
+  void endSession();
+  void setLanguage(const std::string& code);
+  void applyWindowMode();
+  void saveSettings();
+  void toast(const std::string& msg);
+  void takeUserScreenshot();
+  void applyLaunchOverrides();
+
+  rj::sim::CivilDateTime jst() const { return clock_.jst(); }
+  std::string dateTimeString() const;
+  std::string tr(const std::string& k) const { return i18n_.tr(k); }
+  Camera3D titleCamera() const;
+
+  LaunchOptions opt_;
+  Settings settings_;
+  I18n i18n_;
+  Ui ui_;
+  World world_;
+  Renderer renderer_;
+  Player player_;
+  rj::sim::GameClock clock_{0};
+  std::unique_ptr<rj::econ::Ledger> ledger_;
+  rj::econ::AccountId player_account_ = 0;
+  TownSim town_;
+  std::filesystem::path slice_dir_;
+
+  Screen screen_ = Screen::Boot;
+  Screen settings_return_ = Screen::Title;
+  Screen slots_return_ = Screen::Title;
+  bool slots_saving_ = false;
+  PhoneApp phone_app_ = PhoneApp::Home;
+  bool in_session_ = false;
+  bool cursor_locked_ = false;
+  double play_seconds_ = 0;
+  double autosave_timer_ = 0;
+  std::string toast_;
+  float toast_t_ = 0;
+  float title_t_ = 0;
+  float session_t_ = 0;
+  std::string fatal_;
+  int frame_ = 0;
+  int shot_frames_ = -1;
+  std::optional<World::Hit> hover_;
+  bool quit_ = false;
+  double map_half_extent_ = 350.0;
+  Lighting lighting_;
+};
+
+}  // namespace rjc

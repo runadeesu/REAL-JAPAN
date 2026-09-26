@@ -11,3 +11,8 @@ dist/
 __pycache__/
 *.pyc
 .pytest_cache/
+third_party/
+# Cooked world data (regenerate: pipeline/fetch_plateau.py + pipeline/cook_slice.py)
+game/data/world/
+# Fetched by tools/fetch_deps.sh (SIL OFL 1.1)
+game/data/fonts/*.ttf

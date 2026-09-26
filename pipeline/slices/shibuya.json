@@ -1,0 +1,33 @@
+{
+  "id": "shibuya",
+  "name_ja": "渋谷駅周辺",
+  "name_en": "Around Shibuya Station",
+  "description": "Phase 1 vertical slice. The four JIS 3rd-level mesh cells around JR Shibuya Station (~2.1 km x 1.85 km). The 1 km x 1 km core box is where Phase 1 quality work is concentrated.",
+  "core_bbox": [
+    35.6535,
+    139.6961,
+    35.6625,
+    139.7071
+  ],
+  "cells": [
+    "53393585",
+    "53393586",
+    "53393595",
+    "53393596"
+  ],
+  "spawn": {
+    "lat": 35.6592,
+    "lon": 139.7006,
+    "heading_deg": 313.0,
+    "label_ja": "ハチ公前広場付近（スクランブル交差点を向く）",
+    "label_en": "Near Hachiko Square, facing the Scramble Crossing"
+  },
+  "plateau": {
+    "city_code": "13113",
+    "city_name": "渋谷区",
+    "year": 2025,
+    "dataset": "13113_shibuya-ku_pref_2025_citygml_1_op",
+    "catalog_api": "https://api.plateauview.mlit.go.jp/datacatalog/citygml/m:{mesh}",
+    "landing_page": "https://www.geospatial.jp/ckan/dataset/plateau-13113-shibuya-ku-2025"
+  }
+}

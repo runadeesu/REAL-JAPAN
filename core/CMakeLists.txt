@@ -40,6 +40,8 @@ add_library(rjcore
 )
 target_include_directories(rjcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+option(RJCORE_BUILD_TESTS "Build rjcore tests and tools" ON)
+if(RJCORE_BUILD_TESTS)
 add_executable(rjcore_tests
   tests/main.cpp
   tests/test_geo.cpp
@@ -61,3 +63,4 @@ target_link_libraries(rj_slice_sim PRIVATE rjcore)
 
 enable_testing()
 add_test(NAME rjcore_tests COMMAND rjcore_tests)
+endif()

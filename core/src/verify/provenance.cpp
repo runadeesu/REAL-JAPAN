@@ -9,8 +9,8 @@ namespace {
 constexpr std::array<LicenseInfo, 6> kLicenses{{
     {"CC-BY-4.0", "Creative Commons Attribution 4.0", true, false, true},
     {"ODbL-1.0", "Open Database License 1.0 (OpenStreetMap)", true, true, true},
-    // PLATEAU site policy: compatible with CC BY 4.0 / 政府標準利用規約(第2.0版).
-    {"PLATEAU-TOU", "PLATEAU Site Policy (CC BY 4.0 compatible)", true, false, true},
+    // PLATEAU site policy §3: 公共データ利用規約(第1.0版) (PDL1.0), compatible with CC BY 4.0.
+    {"PLATEAU-TOU", "PLATEAU Site Policy / PDL1.0 (CC BY 4.0 compatible)", true, false, true},
     // 国土地理院コンテンツ利用規約 (CC BY 4.0 compatible, attribution "国土地理院").
     {"GSI-TOU", "GSI Content Terms of Use (CC BY 4.0 compatible)", true, false, true},
     {"CC0-1.0", "Creative Commons Zero 1.0", false, false, true},

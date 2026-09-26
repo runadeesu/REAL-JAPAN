@@ -1,0 +1,31 @@
+PROJECT: REAL JAPAN — data sources and terms / データ出典と利用条件
+====================================================================
+
+1. 3D都市モデル（Project PLATEAU）渋谷区（2025年度）CityGML
+   Publisher : 国土交通省 都市局（著作権は各地方公共団体に帰属）
+   URL       : https://www.geospatial.jp/ckan/dataset/plateau-13113-shibuya-ku-2025
+   Terms     : PLATEAU Site Policy「3. コンテンツの利用」— 公共データ利用規約（第1.0版）（PDL1.0）準拠、
+               CC BY 4.0 互換（https://www.mlit.go.jp/plateau/site-policy/）
+   Credit    : 「3D都市モデル（Project PLATEAU）渋谷区（2025年度）」（国土交通省）
+               （https://www.geospatial.jp/ckan/dataset/plateau-13113-shibuya-ku-2025）を加工して作成
+   Used for  : building geometry (LOD1/LOD2) and attributes (usage, height, storeys, names),
+               road areas (carriageway, sidewalks, medians).
+   Processing: converted to per-mesh game packages (RJCELL), triangulated, recoloured by usage.
+               This product is not made or endorsed by MLIT.
+   Note      : the site policy warns that some content is additionally restricted by the Survey Act
+               (測量法, public survey results). Whether this distribution needs a procedure has NOT been
+               confirmed yet — to be checked before any public release.
+
+2. 国土地理院 標高タイル（DEM5A / DEM5B / DEM10B, 基盤地図情報 数値標高モデル）
+   Publisher : 国土地理院
+   URL       : https://maps.gsi.go.jp/development/ichiran.html
+   Terms     : 国土地理院コンテンツ利用規約。標高タイルは「基本測量成果」に該当し、測量法に基づく申請が
+               必要な場合がある（リアルタイム読み込みでの利用は出典明示のみで申請不要）。
+   Credit    : 出典：国土地理院 標高タイル（https://maps.gsi.go.jp/development/ichiran.html）を加工して作成
+   Used for  : terrain height grid baked into the game data.
+   Status    : RIGHTS CHECK PENDING — because the heights are baked (not loaded in real time), whether an
+               application under the Survey Act is required has NOT been confirmed. Development/test build
+               only until confirmed. Alternative: PLATEAU terrain model (dem) under the PLATEAU terms.
+
+Not used as asset sources: Google Maps / Google Earth / Street View (reference only under
+their terms, never extracted), company logos, brand designs, copyrighted photographs.

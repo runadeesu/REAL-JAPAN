@@ -45,6 +45,8 @@ class MeshCode {
   static constexpr int kMinLevel = 1;
   static constexpr int kMaxLevel = 6;
 
+  MeshCode() = default;  // level-1 cell "0000" (placeholder value)
+
   static std::optional<MeshCode> fromLatLon(const LatLon& p, int level);
   static std::optional<MeshCode> parse(std::string_view code);
   // Every cell of `level` intersecting the box (row-major, south to north).
