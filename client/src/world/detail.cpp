@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "render/foliage.hpp"
+#include "render/gpu_mesh.hpp"
 
 namespace rjc {
 namespace {
@@ -203,9 +204,7 @@ void uploadDetail(CellDetailCpu& cpu, CellDetailGpu& gpu) {
     }
     m.texcoords2 = t2.data();
     UploadMesh(&m, false);
-    m.vertices = m.normals = m.texcoords = m.texcoords2 = nullptr;
-    m.colors = nullptr;
-    m.indices = nullptr;
+    releaseCpuArrays(m);
     gpu.meshes.push_back(m);
     gpu.mats.push_back(c.mat);
   }

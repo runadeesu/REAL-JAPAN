@@ -33,7 +33,9 @@ struct Walker {
   rj::nav::Vec2 pos, dir{0, 1};
   float z = 0;
   float phase = 0;
-  Color shirt{}, pants{}, skin{};
+  Color shirt{}, pants{}, skin{}, hair{};
+  int variant = 0;        // body variant (appearance only): trousers / long hair / skirt
+  bool waiting = false;   // standing (e.g. at a red pedestrian signal)
   float height_scale = 1.0f;
 };
 

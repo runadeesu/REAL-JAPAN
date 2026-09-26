@@ -207,6 +207,7 @@ bool Renderer::init() {
   if (!tex_.generate(512)) return false;
   leaf_tex_ = generateLeafTexture(512);
   vehicles_.build();
+  humans_.build();
   lit_.locs[SHADER_LOC_MATRIX_VIEW] = GetShaderLocation(lit_, "matView");
   lit_.locs[SHADER_LOC_MATRIX_PROJECTION] = GetShaderLocation(lit_, "matProjection");
 
@@ -247,6 +248,7 @@ void Renderer::shutdown() {
   tex_.unload();
   if (leaf_tex_.id) UnloadTexture(leaf_tex_);
   vehicles_.unload();
+  humans_.unload();
   mat_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   mat_depth_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   for (Shader* s : {&lit_, &depth_, &sky_, &ssao_, &blur_, &bright_, &composite_, &ssr_}) UnloadShader(*s);
@@ -563,9 +565,14 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, bool photo_tex
 }
 
 void Renderer::drawPlayerBody(const Vector3& feet, float yaw_rad) {
-  const Matrix body = MatrixMultiply(MatrixRotateY(-yaw_rad), MatrixTranslate(feet.x, feet.y + 0.05f, feet.z));
-  drawMeshMat(body_, body, kMatCloth, Color{40, 60, 110, 255});
-  drawMeshMat(head_, MatrixTranslate(feet.x, feet.y + 1.58f, feet.z), kMatSkin, Color{220, 188, 160, 255});
+  setI(lit_, "materialOverride", -1);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "surfaceMode", 0);
+  rlDisableBackfaceCulling();
+  const Matrix M = MatrixMultiply(MatrixRotateY(-yaw_rad), MatrixTranslate(feet.x, feet.y, feet.z));
+  drawHuman(humans_.frame(BodyVariant::Trousers, 0.0f, true), M, Color{40, 60, 110, 255}, Color{30, 32, 38, 255}, Color{222, 186, 150, 255},
+            Color{24, 20, 18, 255});
+  rlEnableBackfaceCulling();
 }
 
 void Renderer::drawInterior(const Interior& in) {
@@ -680,18 +687,33 @@ void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const L
   rlEnableBackfaceCulling();
 }
 
+void Renderer::drawHuman(const Mesh& m, const Matrix& model, Color top, Color bottom, Color skin, Color hair) {
+  auto c3 = [](Color c) { return Vector3{c.r / 255.0f, c.g / 255.0f, c.b / 255.0f}; };
+  set3(lit_, "partTop", c3(top));
+  set3(lit_, "partBottom", c3(bottom));
+  set3(lit_, "partSkin", c3(skin));
+  set3(lit_, "partHair", c3(hair));
+  DrawMesh(m, mat_, model);
+  ++draw_calls_;
+  triangles_ += m.triangleCount;
+}
+
 void Renderer::drawPedestrians(const Pedestrians& peds) {
+  setI(lit_, "materialOverride", -1);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "surfaceMode", 0);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  rlDisableBackfaceCulling();
   for (const auto& [id, w] : peds.walkers()) {
     const float s = w.height_scale;
-    const float bob = std::fabs(std::sin(w.phase)) * 0.035f * s;
     const Vector3 feet = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z)});
     const float yaw = std::atan2(static_cast<float>(w.dir.x), static_cast<float>(w.dir.y));
-    const Matrix rot = MatrixRotateY(-yaw);
-    auto at = [&](float y) { return MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), rot), MatrixTranslate(feet.x, feet.y + y, feet.z)); };
-    drawMeshMat(legs_, at(bob), kMatCloth, w.pants);
-    drawMeshMat(torso_, at(0.80f * s + bob), kMatCloth, w.shirt);
-    drawMeshMat(head_, MatrixMultiply(MatrixScale(s, s, s), MatrixTranslate(feet.x, feet.y + 1.58f * s + bob, feet.z)), kMatSkin, w.skin);
+    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), MatrixRotateY(-yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
+    const Mesh& m = humans_.frame(static_cast<BodyVariant>(w.variant % static_cast<int>(BodyVariant::Count)), w.phase, w.waiting);
+    drawHuman(m, M, w.shirt, w.pants, w.skin, w.hair);
   }
+  rlEnableBackfaceCulling();
 }
 
 void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s) {

@@ -26,10 +26,13 @@ void styleFor(Walker& w, const rj::sim::Npc& n) {
                                  {196, 180, 150, 255}, {150, 180, 210, 255}, {96, 104, 72, 255}, {118, 40, 44, 255}};
   static const Color pants[] = {{28, 28, 30, 255}, {38, 46, 72, 255}, {96, 96, 100, 255}, {170, 150, 120, 255}, {60, 80, 120, 255}};
   static const Color skins[] = {{236, 204, 176, 255}, {222, 186, 150, 255}, {204, 166, 132, 255}};
+  static const Color hairs[] = {{22, 18, 16, 255}, {30, 24, 20, 255}, {58, 40, 28, 255}, {92, 66, 44, 255}, {150, 150, 150, 255}};
   rj::sim::Rng r(n.seed ^ 0x5eedULL);
   w.shirt = shirts[r.next() % 8];
   w.pants = pants[r.next() % 5];
   w.skin = skins[r.next() % 3];
+  w.hair = n.age > 62 ? hairs[4] : hairs[r.next() % 4];
+  w.variant = static_cast<int>(r.next() % 3);
   w.height_scale = n.age < 13 ? 0.78f : n.age < 16 ? 0.92f : static_cast<float>(r.uniform(0.94, 1.06));
   w.phase = static_cast<float>(r.uniform(0.0, 6.28));
 }

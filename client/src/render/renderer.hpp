@@ -17,6 +17,7 @@
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
 #include "raylib.h"
+#include "render/humans.hpp"
 #include "render/textures.hpp"
 #include "render/vehicles.hpp"
 #include "world/facade.hpp"
@@ -114,6 +115,8 @@ class Renderer {
   DetailTextures tex_;
   Texture2D leaf_tex_{};
   VehicleModels vehicles_;
+  HumanModels humans_;
+  void drawHuman(const Mesh& m, const Matrix& model, Color top, Color bottom, Color skin, Color hair);
   // shadows: 0 = near cascade, 1 = far cascade
   RenderTexture2D shadow_[2]{};
   int shadow_res_[2] = {2048, 4096};

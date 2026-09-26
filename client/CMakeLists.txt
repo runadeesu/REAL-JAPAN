@@ -50,6 +50,7 @@ set(RJ_SOURCES
   src/render/textures.cpp
   src/render/foliage.cpp
   src/render/vehicles.cpp
+  src/render/humans.cpp
   src/game/player.cpp
   src/game/town_sim.cpp
   src/game/pedestrians.cpp

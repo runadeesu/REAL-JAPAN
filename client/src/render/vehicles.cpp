@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "raymath.h"
+#include "render/gpu_mesh.hpp"
 #include "world/detail.hpp"
 
 namespace rjc {
@@ -58,9 +59,7 @@ struct Geo {
     m.colors = col.data();
     m.indices = idx.data();
     UploadMesh(&m, false);
-    m.vertices = m.normals = m.texcoords = m.texcoords2 = nullptr;
-    m.colors = nullptr;
-    m.indices = nullptr;
+    releaseCpuArrays(m);
     return m;
   }
 };

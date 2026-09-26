@@ -120,6 +120,10 @@ uniform vec4 lightPosR[24];   // xyz, range
 uniform vec3 lightCol[24];
 uniform vec3 emissiveTint;    // per-draw emission (signal lamps)
 uniform vec3 occupancy;       // fraction of lit windows: office, residential, shop (by time of day)
+uniform vec3 partTop;         // per-person colours (sRGB 0..1): clothing top / bottom, skin, hair
+uniform vec3 partBottom;
+uniform vec3 partSkin;
+uniform vec3 partHair;
 out vec4 finalColor;
 float litFrom(float p) {
   float cat = floor(p);
@@ -271,8 +275,10 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   else if (id == 28) { s.rough = 0.22; s.metal = 0.45; s.porosity = 0.0; }            // car paint
   else if (id == 29) { s.albedo = vec3(0.02); s.rough = 0.9; }                        // tyre
   else if (id == 30) { s.albedo = vec3(0.02); s.rough = 0.25; s.emit = emissiveTint; } // signal lamp lens
-  else if (id == 31) { s.rough = 0.92; s.porosity = 0.8; }                            // clothing
-  else if (id == 32) { s.rough = 0.55; }
+  else if (id == 31) { s.albedo = pow(partTop, vec3(2.2)) * fragColor.r; s.rough = 0.9; s.porosity = 0.8; }     // clothing top
+  else if (id == 36) { s.albedo = pow(partBottom, vec3(2.2)) * fragColor.r; s.rough = 0.88; s.porosity = 0.8; }  // bottoms
+  else if (id == 32) { s.albedo = pow(partSkin, vec3(2.2)) * fragColor.r; s.rough = 0.5; }                        // skin
+  else if (id == 37) { s.albedo = pow(partHair, vec3(2.2)) * fragColor.r; s.rough = 0.42; }                       // hair
   else if (id == 33) { s.rough = 0.7; s.porosity = 0.1; }                           // leaves
   else if (id == 34) { s.albedo *= 0.8 + 0.3 * nz.b; s.rough = 0.92; s.porosity = 0.5; } // bark
   else if (id == 35) { s.albedo = pow(fragColor.rgb, vec3(2.2)); s.rough = 0.45; s.porosity = 0.0; }  // untinted

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "render/gpu_mesh.hpp"
 #include "world/coords.hpp"
 #include "world/detail.hpp"
 #include "world/world.hpp"
@@ -90,9 +91,7 @@ class Builder {
     m.texcoords2 = t2_.data();
     m.indices = idx_.data();
     UploadMesh(&m, false);
-    m.vertices = m.normals = m.texcoords = m.texcoords2 = nullptr;
-    m.colors = nullptr;
-    m.indices = nullptr;
+    releaseCpuArrays(m);
     meshes.push_back(m);
     total += static_cast<size_t>(nv);
     pos_.clear();
