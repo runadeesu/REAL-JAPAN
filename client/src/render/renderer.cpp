@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "raymath.h"
+#include "render/foliage.hpp"
 #include "render/shaders.hpp"
 #include "rlgl.h"
 #include "world/coords.hpp"
@@ -204,6 +205,10 @@ bool Renderer::init() {
   setI(lit_, "materialOverride", -1);
   setI(sky_, "texNoise", kSlotNoise);
   if (!tex_.generate(512)) return false;
+  leaf_tex_ = generateLeafTexture(512);
+  vehicles_.build();
+  lit_.locs[SHADER_LOC_MATRIX_VIEW] = GetShaderLocation(lit_, "matView");
+  lit_.locs[SHADER_LOC_MATRIX_PROJECTION] = GetShaderLocation(lit_, "matProjection");
 
   for (int c = 0; c < 2; ++c) {
     RenderTexture2D& s = shadow_[c];
@@ -240,6 +245,8 @@ void Renderer::shutdown() {
       if (s.depth.id) rlUnloadTexture(s.depth.id);
     }
   tex_.unload();
+  if (leaf_tex_.id) UnloadTexture(leaf_tex_);
+  vehicles_.unload();
   mat_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   mat_depth_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   for (Shader* s : {&lit_, &depth_, &sky_, &ssao_, &blur_, &bright_, &composite_, &ssr_}) UnloadShader(*s);
@@ -291,7 +298,7 @@ void Renderer::bindGlobalTextures() {
 
 // ---------------------------------------------------------------------------
 void Renderer::renderShadowMaps(const Camera3D& cam, const World& world, const Lighting& L,
-                                const std::vector<const Mesh*>& extra_casters) {
+                                const std::vector<Caster>& extra_casters) {
   shadow_valid_ = false;
   if (L.sun_elevation_deg < 1.0f || L.sun_visible < 0.05f || L.indoor > 0.5f) return;
   // Do not sample the maps while rendering into them.
@@ -335,7 +342,16 @@ void Renderer::renderShadowMaps(const Camera3D& cam, const World& world, const L
         DrawMesh(cell->gpu.detail.meshes[i], mat_depth_, cell->model);
       }
     }
-    for (const Mesh* m : extra_casters) DrawMesh(*m, mat_depth_, MatrixIdentity());
+    for (const auto& [code, cell] : world.cells()) {
+      for (const auto& t : cell->gpu.detail.trees) {
+        const Matrix m = MatrixMultiply(MatrixTranslate(t.base[0], t.base[1], t.base[2]), cell->model);
+        if (t.bark.vaoId) DrawMesh(t.bark, mat_depth_, m);
+        mat_depth_.maps[MATERIAL_MAP_DIFFUSE].texture = leaf_tex_;
+        if (t.leaves.vaoId) DrawMesh(t.leaves, mat_depth_, m);
+        mat_depth_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+      }
+    }
+    for (const Caster& ec : extra_casters) DrawMesh(*ec.mesh, mat_depth_, ec.model);
     (void)r2;
     rlEnableBackfaceCulling();
     EndMode3D();
@@ -365,6 +381,7 @@ void Renderer::applyFrameUniforms(const Camera3D& cam, const Lighting& L, float 
   setF(lit_, "wetness", L.wetness);
   setF(lit_, "nightFactor", L.night);
   setF(lit_, "timeSec", time_s);
+  setF(lit_, "windStrength", L.wind);
   setF(lit_, "indoor", L.indoor);
   set3(lit_, "occupancy", L.occupancy);
   const int on = shadow_valid_ && opt_.shadows ? 1 : 0;
@@ -517,6 +534,31 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, bool photo_tex
       ++draw_calls_;
       triangles_ += m.triangleCount;
     }
+  // Real PLATEAU trees (procedural shape) and planting.
+  for (const auto& [code, c] : world.cells()) {
+    for (const auto& t : c->gpu.detail.trees) {
+      const Matrix m = MatrixMultiply(MatrixTranslate(t.base[0], t.base[1], t.base[2]), c->model);
+      if (t.bark.vaoId) {
+        mode(0, 0);
+        DrawMesh(t.bark, mat_, m);
+      }
+      if (t.leaves.vaoId) {
+        mode(0, 1);
+        mat_.maps[MATERIAL_MAP_DIFFUSE].texture = leaf_tex_;
+        DrawMesh(t.leaves, mat_, m);
+        mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+        triangles_ += t.leaves.triangleCount;
+      }
+      draw_calls_ += 2;
+    }
+    if (c->gpu.detail.hedge.vaoId) {
+      mode(0, 1);
+      mat_.maps[MATERIAL_MAP_DIFFUSE].texture = leaf_tex_;
+      DrawMesh(c->gpu.detail.hedge, mat_, c->model);
+      mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+    }
+  }
+  mode(0, 0);
   rlEnableBackfaceCulling();
 }
 
@@ -587,6 +629,55 @@ void Renderer::drawSignals(const TrafficSignals& ts, const Camera3D& cam) {
       lamp(pedlens_, {base.x, base.y, base.z - 0.16}, h.facing, walk, kGreen, 7.0f);
     }
   }
+}
+
+namespace {
+Matrix vehicleMatrix(const Vehicle& v) {
+  const Vector3 p = enuToRl(v.pos);
+  return MatrixMultiply(MatrixRotateY(-v.yaw), MatrixTranslate(p.x, p.y, p.z));
+}
+}  // namespace
+
+void Renderer::vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out) const {
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  for (const auto& v : traffic.vehicles())
+    if (std::hypot(v.pos.x - c.x, v.pos.y - c.y) < 90.0) out.push_back({&vehicles_.get(v.type).body, vehicleMatrix(v)});
+}
+
+void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L) {
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  rlDisableBackfaceCulling();
+  for (const auto& v : traffic.vehicles()) {
+    if (std::hypot(v.pos.x - c.x, v.pos.y - c.y) > 320.0) continue;
+    const VehicleModel& m = vehicles_.get(v.type);
+    const Matrix M = vehicleMatrix(v);
+    const Color paint{static_cast<unsigned char>(std::sqrt(v.color[0]) * 255), static_cast<unsigned char>(std::sqrt(v.color[1]) * 255),
+                      static_cast<unsigned char>(std::sqrt(v.color[2]) * 255), 255};
+    // body: per-vertex materials (paint tinted by colDiffuse, glass, trim, plates)
+    setI(lit_, "materialOverride", -1);
+    setI(lit_, "useTexture", 0);
+    setI(lit_, "surfaceMode", 0);
+    mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+    mat_.maps[MATERIAL_MAP_DIFFUSE].color = paint;
+    DrawMesh(m.body, mat_, M);
+    mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    ++draw_calls_;
+    triangles_ += m.body.triangleCount;
+    // wheels: unit cylinder (axis +y) -> axis along the vehicle's right, radius r, width 0.22 m
+    for (const auto& wp : m.wheel_pos) {
+      const float side = wp[0] > 0 ? 1.0f : -1.0f;
+      const Matrix W = MatrixMultiply(MatrixMultiply(MatrixScale(m.wheel_r, 0.22f, m.wheel_r), MatrixRotateZ(-side * PI / 2)),
+                                      MatrixTranslate(wp[0] + (side > 0 ? -0.22f : 0.22f) * 0.0f, m.wheel_r, -wp[1]));
+      drawMeshMat(m.wheel, MatrixMultiply(W, M), kMatTyre, WHITE);
+    }
+    // lamps
+    const float night = L.night;
+    const Vector3 head = Vector3Scale(Vector3{1.0f, 0.96f, 0.88f}, 0.4f + 7.0f * night);
+    const float tail_k = (v.braking ? 5.0f : 0.0f) + 0.25f + 1.6f * night;
+    drawMeshMat(m.head_lamps, M, kMatSignalLamp, WHITE, head);
+    drawMeshMat(m.tail_lamps, M, kMatSignalLamp, WHITE, Vector3Scale(Vector3{1.0f, 0.05f, 0.03f}, tail_k));
+  }
+  rlEnableBackfaceCulling();
 }
 
 void Renderer::drawPedestrians(const Pedestrians& peds) {

@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "render/foliage.hpp"
+
 namespace rjc {
 namespace {
 
@@ -153,6 +155,25 @@ bool parseDetail(const std::vector<unsigned char>& file, CellDetailCpu& out, std
     r.bytes(png.data(), ao_len);
     if (r.ok()) out.ao = LoadImageFromMemory(".png", png.data(), static_cast<int>(ao_len));
   }
+  // Vegetation (appended section; absent in older packages).
+  const uint32_t nt = r.get<uint32_t>();
+  if (r.ok()) {
+    for (uint32_t k = 0; k < nt && r.ok(); ++k) {
+      TreeRec t{};
+      for (float& v : t.base) v = r.get<float>();
+      t.height = r.get<float>();
+      t.crown = r.get<float>();
+      t.kind = r.get<uint32_t>();
+      out.trees.push_back(t);
+    }
+    tris(out.hedges);
+  }
+  if (!r.ok() && !out.chunks.empty()) {
+    // tolerate packages without the vegetation section
+    MemFree(body);
+    out.present = true;
+    return true;
+  }
   MemFree(body);
   if (!r.ok()) {
     err = "truncated detail file";
@@ -190,6 +211,16 @@ void uploadDetail(CellDetailCpu& cpu, CellDetailGpu& gpu) {
   }
   cpu.chunks.clear();
   cpu.chunks.shrink_to_fit();
+  unsigned seed = 1;
+  for (const auto& t : cpu.trees) {
+    CellDetailGpu::Tree g;
+    const TreeMeshes m = buildTree(seed++ * 7919u + static_cast<unsigned>(t.base[0] * 13.0f), t.height, t.crown);
+    g.bark = m.bark;
+    g.leaves = m.leaves;
+    for (int a = 0; a < 3; ++a) g.base[a] = t.base[a];
+    gpu.trees.push_back(g);
+  }
+  if (!cpu.hedges.empty()) gpu.hedge = buildHedge(cpu.hedges.data(), static_cast<int>(cpu.hedges.size() / 9), 0.9f);
   if (cpu.ao.data) {
     gpu.ao = LoadTextureFromImage(cpu.ao);
     GenTextureMipmaps(&gpu.ao);
@@ -206,6 +237,13 @@ void unloadDetail(CellDetailGpu& gpu) {
   gpu.mats.clear();
   if (gpu.ao.id) UnloadTexture(gpu.ao);
   gpu.ao = Texture2D{};
+  for (auto& t : gpu.trees) {
+    if (t.bark.vaoId) UnloadMesh(t.bark);
+    if (t.leaves.vaoId) UnloadMesh(t.leaves);
+  }
+  gpu.trees.clear();
+  if (gpu.hedge.vaoId) UnloadMesh(gpu.hedge);
+  gpu.hedge = Mesh{};
 }
 
 }  // namespace rjc

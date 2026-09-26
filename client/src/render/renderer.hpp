@@ -18,6 +18,7 @@
 #include "game/weather.hpp"
 #include "raylib.h"
 #include "render/textures.hpp"
+#include "render/vehicles.hpp"
 #include "world/facade.hpp"
 #include "world/world.hpp"
 
@@ -38,6 +39,7 @@ struct Lighting {
   float wetness = 0.0f;
   float rain = 0.0f;       // 0..1 visual rain intensity
   float night = 0.0f;      // 0 day .. 1 artificial lights fully on
+  float wind = 0.3f;       // 0..1.5 foliage sway
   float stars = 0.0f;
   Vector3 occupancy{0.5f, 0.3f, 0.8f};  // lit-window fractions: office, residential, shop
   float sun_visible = 1.0f;
@@ -72,8 +74,11 @@ class Renderer {
   void shutdown();
 
   // Frame structure: shadows -> beginScene -> sky + 3D draws -> endScene (post -> backbuffer).
-  void renderShadowMaps(const Camera3D& cam, const World& world, const Lighting& L,
-                        const std::vector<const Mesh*>& extra_casters = {});
+  struct Caster {
+    const Mesh* mesh;
+    Matrix model;
+  };
+  void renderShadowMaps(const Camera3D& cam, const World& world, const Lighting& L, const std::vector<Caster>& extra_casters = {});
   void beginScene(const RenderOptions& o, const Lighting& L, const Camera3D& cam, float time_s);
   void drawSky(const Camera3D& cam, const Lighting& L, float aspect);
   void setLights(const std::vector<PointLight>& lights);
@@ -85,6 +90,8 @@ class Renderer {
   void drawInterior(const Interior& in);
   void drawFacades(const FacadeDetail& f);
   void drawSignals(const TrafficSignals& ts, const Camera3D& cam);
+  void drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L);
+  void vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out) const;
   void drawRain(const Camera3D& cam, const Lighting& L, float time_s);
   void endScene(const Camera3D& cam, const Lighting& L, float time_s);
   void beginTransparent();  // re-enable blending (rain, particles) after the opaque pass
@@ -105,6 +112,8 @@ class Renderer {
   Shader lit_{}, sky_{}, depth_{}, ssao_{}, blur_{}, bright_{}, composite_{}, ssr_{};
   Material mat_{}, mat_depth_{};
   DetailTextures tex_;
+  Texture2D leaf_tex_{};
+  VehicleModels vehicles_;
   // shadows: 0 = near cascade, 1 = far cascade
   RenderTexture2D shadow_[2]{};
   int shadow_res_[2] = {2048, 4096};

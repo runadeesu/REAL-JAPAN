@@ -27,8 +27,9 @@ from realjapan_pipeline.citygml import iter_buildings, iter_furniture, iter_road
 from realjapan_pipeline.dem_gsi import DemSampler  # noqa: E402
 from realjapan_pipeline.geodesy import LocalFrame, Mesh  # noqa: E402
 from realjapan_pipeline.streetdetail import (MARKING_CODES, TerrainSampler, build_furniture, build_markings,  # noqa: E402
-                                             build_sidewalks, group_signals)
+                                             build_sidewalks, group_signals, parse_vegetation)
 from realjapan_pipeline.streetdetail import encode as encode_detail  # noqa: E402
+from realjapan_pipeline.roadgraph import build as build_road_graph  # noqa: E402
 from realjapan_pipeline.interior import build_interior, opening_outlines, parse_underground, street_openings  # noqa: E402
 from realjapan_pipeline.rjcell import (  # noqa: E402
     GEOM_VERIFIED_EXTERIOR, INTERIOR_UNKNOWN, BuildingRec, CellWriter)
@@ -255,6 +256,8 @@ def main() -> int:
 
     pois, residents_homes, workplaces = [], [], []
     summary = []
+    road_frame = LocalFrame(cfg["spawn"]["lat"], cfg["spawn"]["lon"], 0.0)
+    carriageway = []  # LOD2 車道部 / 車道交差部 polygons of every cell (slice frame) -> traffic graph
     for mesh in cfg["cells"]:
         t0 = time.time()
         m = Mesh(mesh)
@@ -340,6 +343,11 @@ def main() -> int:
                 hz[i, jj] = frame.to_local(la, lo, anchor_h if math.isnan(hh) else hh)[2]
         w.set_terrain(hz, lat0, lon0, dlat, dlon)
 
+        for r in roads:
+            for p in r.detail:
+                if p.kind == "road":
+                    carriageway.append(np.array([road_frame.to_local(la, lo, 0.0)[:2] for la, lo, *_ in p.exterior]))
+
         # Street-level detail (RJDET): raised sidewalks + curbs, marking decals, street furniture with
         # materials, street lights and traffic signals. Markings are also painted into the ground raster
         # so they still read at distance.
@@ -360,7 +368,11 @@ def main() -> int:
         group_signals(signals)
         w.ground_png, ground_ao = rasterize_ground(bounds, roads, blds, markings, openings)
         # Walkable tops are the sidewalk/island render chunks themselves; the client derives them.
-        det, dst = encode_detail(geos, [], lights, signals, cross_tris, ground_ao)
+        trees, hedges = [], []
+        vpath = os.path.join(a.raw, "plateau", f"{mesh}_veg_6697_op.gml")
+        if os.path.exists(vpath):
+            trees, hedges = parse_vegetation(vpath, frame, to_local, terrain)
+        det, dst = encode_detail(geos, [], lights, signals, cross_tris, ground_ao, trees, hedges)
         with open(os.path.join(out, "cells", f"{mesh}.rjdet"), "wb") as f:
             f.write(det)
         print(f"  street detail: {dst} -> {len(det) / 1e6:.2f} MB", flush=True)
@@ -372,6 +384,13 @@ def main() -> int:
                         "bytes": len(data), "anchor": [clat, clon, anchor_h], "bounds": bounds})
         print(f"{mesh}: {len(w.buildings)} buildings ({n_lod2} LOD2, {n_tex} photo-textured), {len(roads)} roads, "
               f"{len(data) / 1e6:.1f} MB, {time.time() - t0:.1f}s", flush=True)
+
+    # Drivable road graph (traffic) from the real carriageway.
+    if carriageway:
+        rdata, rst = build_road_graph(carriageway, road_frame)
+        with open(os.path.join(out, "roads.rjroad"), "wb") as f:
+            f.write(rdata)
+        print(f"road graph: {rst}", flush=True)
 
     # Verified interiors: PLATEAU LOD4 underground buildings (floors, walls, stairs; no shop fit-out).
     interiors = []

@@ -45,6 +45,8 @@ enum Mat : int {
   kMatCloth = 31,
   kMatSkin = 32,
   kMatFoliage = 33,
+  kMatBark = 34,
+  kMatUntinted = 35,  // vertex colour only (plates, liveries), not tinted per draw
 };
 
 inline bool matIsFlat(int m) {
@@ -66,6 +68,12 @@ struct SignalHead {
   uint32_t phase;                      // 0/1 (two orthogonal phases, game assumption)
 };
 
+struct TreeRec {
+  float base[3];  // cell ENU (on the terrain)
+  float height, crown;
+  uint32_t kind;
+};
+
 struct CellDetailCpu {
   struct Chunk {
     int mat = 0;
@@ -79,6 +87,8 @@ struct CellDetailCpu {
   std::vector<StreetLight> lights;
   std::vector<SignalHead> signals;
   Image ao{};  // ground contact occlusion (grey), same UV as the ground texture
+  std::vector<TreeRec> trees;   // PLATEAU veg SolitaryVegetationObject
+  std::vector<float> hedges;    // PlantCover footprint triangles (cell ENU)
   bool present = false;
 };
 
@@ -88,6 +98,12 @@ struct CellDetailGpu {
   std::vector<Mesh> meshes;
   std::vector<int> mats;
   Texture2D ao{};
+  struct Tree {
+    Mesh bark{}, leaves{};
+    float base[3];  // cell ENU
+  };
+  std::vector<Tree> trees;
+  Mesh hedge{};
 };
 
 void uploadDetail(CellDetailCpu& cpu, CellDetailGpu& gpu);  // frees the CPU vertex arrays

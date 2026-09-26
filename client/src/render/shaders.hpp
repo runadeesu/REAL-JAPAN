@@ -14,18 +14,29 @@ in vec4 vertexColor;
 uniform mat4 mvp;
 uniform mat4 matModel;
 uniform mat4 matNormal;
+uniform mat4 matView;
+uniform mat4 matProjection;
+uniform float timeSec;
+uniform float windStrength;
 out vec3 fragPos;
 out vec3 fragNormal;
 out vec4 fragColor;
 out vec2 fragUV;
 out vec2 fragMat;
 void main() {
-  fragPos = vec3(matModel * vec4(vertexPosition, 1.0));
+  vec4 wp = matModel * vec4(vertexPosition, 1.0);
+  if (abs(vertexTexCoord2.x - 33.0) < 0.5 && vertexTexCoord2.y > 0.0) {
+    // foliage sways with the wind (tips more than the inner crown)
+    float ph = timeSec * 1.7 + wp.x * 0.21 + wp.z * 0.17;
+    float a = vertexTexCoord2.y * windStrength;
+    wp.xz += vec2(sin(ph), cos(ph * 0.83)) * 0.07 * a + vec2(sin(ph * 3.1), sin(ph * 2.7)) * 0.02 * a;
+  }
+  fragPos = wp.xyz;
   fragNormal = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
   fragColor = vertexColor;
   fragUV = vertexTexCoord;
   fragMat = vertexTexCoord2;
-  gl_Position = mvp * vec4(vertexPosition, 1.0);
+  gl_Position = matProjection * matView * wp;
 }
 )";
 
@@ -262,7 +273,9 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   else if (id == 30) { s.albedo = vec3(0.02); s.rough = 0.25; s.emit = emissiveTint; } // signal lamp lens
   else if (id == 31) { s.rough = 0.92; s.porosity = 0.8; }                            // clothing
   else if (id == 32) { s.rough = 0.55; }
-  else if (id == 33) { s.rough = 0.75; }
+  else if (id == 33) { s.rough = 0.7; s.porosity = 0.1; }                           // leaves
+  else if (id == 34) { s.albedo *= 0.8 + 0.3 * nz.b; s.rough = 0.92; s.porosity = 0.5; } // bark
+  else if (id == 35) { s.albedo = pow(fragColor.rgb, vec3(2.2)); s.rough = 0.45; s.porosity = 0.0; }  // untinted
   return s;
 }
 
@@ -369,6 +382,10 @@ void main() {
     }
     col += (kdiff * (1.0 - F) + PI * spec) * sunColor * NdL * sh;
   }
+  if (id == 33 && surfaceMode == 0) {
+    float back = max(dot(-n, sunDir), 0.0);
+    col += s.albedo * vec3(1.0, 1.05, 0.7) * sunColor * back * 0.45 * sunShadow(ng);
+  }
   // Ambient: hemisphere diffuse + sky reflection (split-sum-ish approximation).
   float hemi = n.y * 0.5 + 0.5;
   vec3 irr = mix(ambientGround, ambientSky, hemi);
@@ -416,12 +433,19 @@ void main() {
 
 inline const char* kDepthVs = R"(#version 330
 in vec3 vertexPosition;
+in vec2 vertexTexCoord;
 uniform mat4 mvp;
-void main() { gl_Position = mvp * vec4(vertexPosition, 1.0); }
+out vec2 fragUV;
+void main() { fragUV = vertexTexCoord; gl_Position = mvp * vec4(vertexPosition, 1.0); }
 )";
 inline const char* kDepthFs = R"(#version 330
+in vec2 fragUV;
+uniform sampler2D texture0;
 out vec4 finalColor;
-void main() { finalColor = vec4(1.0); }
+void main() {
+  if (texture(texture0, fragUV).a < 0.5) discard;  // alpha-tested foliage
+  finalColor = vec4(1.0);
+}
 )";
 
 // ---------------------------------------------------------------------------

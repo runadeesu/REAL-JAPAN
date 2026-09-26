@@ -48,11 +48,14 @@ set(RJ_SOURCES
   src/world/facade.cpp
   src/render/renderer.cpp
   src/render/textures.cpp
+  src/render/foliage.cpp
+  src/render/vehicles.cpp
   src/game/player.cpp
   src/game/town_sim.cpp
   src/game/pedestrians.cpp
   src/game/weather.cpp
   src/game/traffic_signals.cpp
+  src/game/traffic.cpp
   src/ui/ui.cpp
 )
 if(WIN32)

@@ -22,6 +22,8 @@ body (all positions in the cell's local ENU frame, metres):
   u32 n_signals    + n * (f32 pos[3], f32 axis_yaw, f32 facing_yaw, f32 length, u32 kind, i32 group, u32 phase)
   u32 n_cross_tris + f32[9n]  crosswalk areas (frn 1110)
   u32 ao_png_len + PNG        ground contact-occlusion raster (grey, same UV as the ground texture)
+  u32 n_trees + n * (f32 base[3], f32 height, f32 crown_radius, u32 kind)   PLATEAU veg (kind 0 tree, 1 shrub area centroid)
+  u32 n_hedge_tris + f32[9n]  PlantCover footprints (low planting)
 Yaw angles are compass headings in radians (0 = north, clockwise).
 """
 
@@ -409,7 +411,53 @@ def group_signals(signals: list) -> None:
             signals[i] += [gi, ph]
 
 
-def encode(geos: dict, walk_tris: list, lights: list, signals: list, cross_tris: list, ao_png: bytes = b"") -> tuple[bytes, dict]:
+VEG = "{http://www.opengis.net/citygml/vegetation/2.0}"
+GML = "{http://www.opengis.net/gml}"
+
+
+def parse_vegetation(path: str, frame, to_local, terrain) -> tuple[list, list]:
+    """PLATEAU veg: SolitaryVegetationObject -> (base, height, crown radius); PlantCover -> footprint tris."""
+    import xml.etree.ElementTree as ET
+    from .citygml import _parse_poslist
+    trees, hedges = [], []
+    for ev, el in ET.iterparse(path, events=("end",)):
+        tag = el.tag
+        if tag == VEG + "SolitaryVegetationObject":
+            pts = []
+            for pl in el.iter(GML + "posList"):
+                pts.extend(_parse_poslist(pl.text))
+            if pts:
+                L = to_local(frame, pts)
+                c = L[:, :2].mean(axis=0)
+                zmin, zmax = L[:, 2].min(), L[:, 2].max()
+                r = float(np.max(np.hypot(L[:, 0] - c[0], L[:, 1] - c[1])))
+                base = np.array([c[0], c[1], float(terrain(c[0], c[1]))])
+                trees.append((base, float(max(zmax - zmin, 2.0)), max(r, 0.8), 0))
+            el.clear()
+        elif tag == VEG + "PlantCover":
+            for poly in el.iter(GML + "Polygon"):
+                ext = poly.find(f"{GML}exterior/{GML}LinearRing/{GML}posList")
+                ring = _parse_poslist(ext.text if ext is not None else None)
+                if len(ring) < 3:
+                    continue
+                L = to_local(frame, ring)
+                if np.ptp(L[:, 2]) > 0.3:  # keep the horizontal footprint faces only
+                    continue
+                try:
+                    part = Polygon(L[:, :2]).buffer(0)
+                except Exception:
+                    continue
+                for pp in _parts(part):
+                    v2, t = _earcut2d(orient(pp, 1.0))
+                    if len(t):
+                        V = np.column_stack([v2, terrain(v2[:, 0], v2[:, 1])])
+                        hedges.append(V[t])
+            el.clear()
+    return trees, hedges
+
+
+def encode(geos: dict, walk_tris: list, lights: list, signals: list, cross_tris: list, ao_png: bytes = b"",
+           trees: list = (), hedges: list = ()) -> tuple[bytes, dict]:
     body = bytearray()
     chunks = []
     for name, g in geos.items():
@@ -464,8 +512,13 @@ def encode(geos: dict, walk_tris: list, lights: list, signals: list, cross_tris:
     X = np.concatenate(cross_tris).astype(np.float32) if cross_tris else np.zeros((0, 3, 3), np.float32)
     body += struct.pack("<I", len(X)) + X.tobytes()
     body += struct.pack("<I", len(ao_png)) + ao_png
+    body += struct.pack("<I", len(trees))
+    for base, h, r, k in trees:
+        body += struct.pack("<5fI", *base, h, r, k)
+    H = np.concatenate(hedges).astype(np.float32) if hedges else np.zeros((0, 3, 3), np.float32)
+    body += struct.pack("<I", len(H)) + H.tobytes()
     comp = zlib.compressobj(9, zlib.DEFLATED, -15)
     data = comp.compress(bytes(body)) + comp.flush()
-    stats = {"chunks": len(chunks), "vertices": nv_total, "walk_tris": len(W), "lights": len(lights),
+    stats = {"chunks": len(chunks), "vertices": nv_total, "walk_tris": len(W), "lights": len(lights), "trees": len(trees),
              "signals": len(signals), "crosswalk_tris": len(X)}
     return b"RJDET001" + struct.pack("<I", len(body)) + data, stats

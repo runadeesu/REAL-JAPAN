@@ -45,6 +45,24 @@ class LocalFrame:
         )
 
 
+    def to_geodetic(self, x: float, y: float, z: float = 0.0) -> tuple[float, float]:
+        """Inverse of to_local (lat, lon in degrees), iterative on GRS80."""
+        m = self._m  # type: ignore[attr-defined]
+        ox, oy, oz = self._o  # type: ignore[attr-defined]
+        X = ox + m[0][0] * x + m[1][0] * y + m[2][0] * z
+        Y = oy + m[0][1] * x + m[1][1] * y + m[2][1] * z
+        Z = oz + m[0][2] * x + m[1][2] * y + m[2][2] * z
+        lon = math.atan2(Y, X)
+        p = math.hypot(X, Y)
+        lat = math.atan2(Z, p * (1 - E2))
+        for _ in range(5):
+            s = math.sin(lat)
+            n = A / math.sqrt(1 - E2 * s * s)
+            h = p / math.cos(lat) - n
+            lat = math.atan2(Z, p * (1 - E2 * n / (n + h)))
+        return math.degrees(lat), math.degrees(lon)
+
+
 # --- JIS X 0410 mesh codes (subset needed by the pipeline) -------------------
 
 

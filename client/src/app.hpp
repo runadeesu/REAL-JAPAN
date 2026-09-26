@@ -13,6 +13,7 @@
 #include "game/pedestrians.hpp"
 #include "game/player.hpp"
 #include "game/town_sim.hpp"
+#include "game/traffic.hpp"
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
 #include "i18n/i18n.hpp"
@@ -139,6 +140,8 @@ class App {
   WeatherSim weather_;
   FacadeDetail facades_;
   TrafficSignals signals_;
+  Traffic traffic_;
+  bool traffic_placed_ = false;
   int64_t weather_prev_unix_ = 0;
   float render_time_ = 0.0f;
   std::vector<PointLight> collectLights(const Camera3D& cam) const;

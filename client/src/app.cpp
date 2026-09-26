@@ -71,6 +71,10 @@ bool App::boot() {
     return false;
   }
   town_.load(slice_dir_ / "residents.csv");
+  {
+    std::string terr;
+    if (!traffic_.load(slice_dir_ / "roads.rjroad", terr)) TraceLog(LOG_WARNING, "RJ: traffic disabled: %s", terr.c_str());
+  }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
   for (size_t i = 0; i < town_.size(); ++i) collectCodepoints(town_.npc(i).fullName(), cps);
@@ -278,10 +282,35 @@ void App::update(float dt) {
   if (world_.update(focus, settings_.view_distance_m)) {
     if (in_session_) player_.pos = focus;
     facades_.clear();  // facade meshes live in origin coordinates
+    traffic_placed_ = false;
   }
   if (in_session_ && screen_ != Screen::Loading) facades_.update(world_, player_.pos, opt_.screenshot.empty() ? 6 : 60);
   if (frame_ % 60 == 0) signals_.rebuild(world_);
   signals_.update(GetTime());
+  if (in_session_ && screen_ != Screen::Loading && traffic_.loaded()) {
+    if (!traffic_placed_ && world_.residentCount() > 0) {
+      traffic_.place(world_);
+      traffic_placed_ = true;
+    }
+    if (traffic_placed_ && screen_ != Screen::Pause && screen_ != Screen::Settings)
+      traffic_.update(dt, world_, signals_, player_.pos, clock_.jst().hour);
+    if (frame_ % 30 == 0 && std::getenv("RJ_DEBUG")) {
+      double dmin = 1e9;
+      const Vehicle* nv = nullptr;
+      for (const auto& v : traffic_.vehicles()) {
+        const double d = std::hypot(v.pos.x - player_.pos.x, v.pos.y - player_.pos.y);
+        if (d < dmin) {
+          dmin = d;
+          nv = &v;
+        }
+      }
+      TraceLog(LOG_DEBUG, "RJ: traffic %zu vehicles, nearest %.0f m, edges %zu, %.1f km", traffic_.vehicles().size(), dmin,
+               traffic_.edgeCount(), traffic_.networkKm());
+      if (nv)
+        TraceLog(LOG_DEBUG, "RJ: nearest vehicle dx %.1f dy %.1f dz %.2f yaw %.0f type %d v %.1f", nv->pos.x - player_.pos.x,
+                 nv->pos.y - player_.pos.y, nv->pos.z - player_.pos.z, nv->yaw * RAD2DEG, static_cast<int>(nv->type), nv->v);
+    }
+  }
 
   if (screen_ == Screen::Loading) {
     if (world_.residentCount() >= world_.knownCount() || (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > 600)) {
@@ -474,6 +503,7 @@ void App::update(float dt) {
     const float shop = band(10, 21) ? 0.9f : band(21, 24) ? 0.4f : band(7, 10) ? 0.3f : 0.1f;
     lighting_.occupancy = Vector3{office, resid, shop};
   }
+  lighting_.wind = std::clamp(weather_.now().wind_ms / 8.0f, 0.15f, 1.6f);
   // Keep the end of the drawn world inside the haze.
   lighting_.fog_density = std::max(lighting_.fog_density, 1.1f / (static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f));
   // Underground: blend to artificial light as the eye drops below the street surface, so stairwells
@@ -639,10 +669,11 @@ void App::drawWorldView(const Camera3D& cam) {
   ro.ssao = settings_.post_fx;
   ro.bloom = settings_.post_fx;
   if (ro.shadows) {
-    std::vector<const Mesh*> casters;
+    std::vector<Renderer::Caster> casters;
     facades_.forEachMesh([&](const Mesh& m, int lod) {
-      if (lod == 0) casters.push_back(&m);
+      if (lod == 0) casters.push_back({&m, MatrixIdentity()});
     });
+    renderer_.vehicleCasters(traffic_, cam, casters);
     renderer_.renderShadowMaps(cam, world_, lighting_, casters);
   }
   // Indoors walls can be 0.3 m from the eye: pull the near plane in so it never cuts through them.
@@ -659,6 +690,7 @@ void App::drawWorldView(const Camera3D& cam) {
   if (!deep) {
     if (!no_facades) renderer_.drawFacades(facades_);
     renderer_.drawSignals(signals_, cam);
+    renderer_.drawVehicles(traffic_, cam, lighting_);
   }
   if (in) {
     renderer_.drawInterior(*in);

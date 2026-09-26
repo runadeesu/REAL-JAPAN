@@ -1,0 +1,93 @@
+#pragma once
+// Road traffic on the real carriageway graph (RJROAD, derived from PLATEAU tran LOD2).
+//
+//  * left-hand traffic; lanes per direction from the measured carriageway width
+//    (lane counts / one-way rules are not in the data: every road is two-way)
+//  * IDM car-following, speed by road class, yielding at unsignalised junctions
+//  * obeys the real traffic signals (PLATEAU frn 4900 heads; timing is a game assumption)
+//  * Traffic Simulation LOD: vehicles exist only within ~380 m of the player; density follows
+//    the time of day (rush hours, night)
+//  * vehicle mix typical of central Tokyo: sedans, taxis, kei cars, minivans, delivery vans,
+//    2 t trucks, buses (wide roads only)
+
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include "rj/geo/local_frame.hpp"
+
+namespace rjc {
+
+class World;
+class TrafficSignals;
+
+enum class VehicleType : int { Sedan = 0, Taxi, Kei, Minivan, Van, Truck, Bus, Count };
+
+struct Vehicle {
+  int id = 0;
+  VehicleType type = VehicleType::Sedan;
+  int edge = -1;
+  int dir = 0;    // 0: a -> b, 1: b -> a
+  int lane = 0;   // 0 = leftmost (kerb side)
+  double s = 0;   // metres along the edge in travel direction
+  double v = 0;   // m/s
+  double acc = 0;
+  int next_edge = -1, next_dir = 0;
+  bool braking = false;
+  float color[3] = {1, 1, 1};
+  // render state (origin ENU)
+  rj::geo::Vec3d pos;
+  float yaw = 0;  // compass radians
+  float pitch = 0;
+};
+
+class Traffic {
+ public:
+  bool load(const std::filesystem::path& file, std::string& err);
+  void place(const World& world);  // (re)compute origin ENU geometry (after load / origin rebase)
+  void update(double dt, const World& world, const TrafficSignals& signals, const rj::geo::Vec3d& player, int hour);
+  const std::vector<Vehicle>& vehicles() const { return veh_; }
+  bool loaded() const { return !edges_.empty(); }
+  size_t edgeCount() const { return edges_.size(); }
+  double networkKm() const;
+  static float lengthOf(VehicleType t);
+
+ private:
+  struct Edge {
+    int a, b;
+    float width;
+    std::vector<rj::geo::Geodetic> geo;
+    std::vector<rj::geo::Vec3d> pts;  // origin ENU (z = terrain)
+    std::vector<double> cum;          // cumulative length
+    double length = 0;
+    int lanes = 1;                    // per direction
+    double lane_w = 3.0;
+    double v0 = 11.0;
+  };
+  struct Node {
+    rj::geo::Geodetic geo;
+    rj::geo::Vec3d pos;
+    std::vector<int> edges;
+    int signal_group = -1;  // nearest real signal group (vehicle heads within 30 m)
+  };
+  void samplePose(const Edge& e, int dir, int lane, double s, rj::geo::Vec3d& p, double& heading) const;
+  double headingAtEnd(const Edge& e, int dir) const;
+  void chooseNext(Vehicle& v);
+  bool spawnOne(const rj::geo::Vec3d& player, double rmin, double rmax);
+  void assignSignals(const TrafficSignals& signals);
+
+  std::vector<Node> nodes_;
+  std::vector<Edge> edges_;
+  std::vector<Vehicle> veh_;
+  int next_id_ = 1;
+  uint32_t rng_ = 1234567u;
+  double signal_check_t_ = 0;
+  std::vector<int> cand_;
+  std::vector<float> cand_w_;
+  rj::geo::Vec3d cand_at_{1e30, 1e30, 0};
+  int warm_frames_ = 0;
+  float rnd();
+};
+
+}  // namespace rjc
