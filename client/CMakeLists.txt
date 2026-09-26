@@ -43,6 +43,7 @@ set(RJ_SOURCES
   src/save/save.cpp
   src/world/cell.cpp
   src/world/world.cpp
+  src/world/interior.cpp
   src/render/renderer.cpp
   src/game/player.cpp
   src/game/town_sim.cpp

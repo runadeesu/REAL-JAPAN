@@ -41,7 +41,8 @@ int App::run() {
     drawToast(dt);
     EndDrawing();
     ++frame_;
-    if (shot_frames_ >= 0 && --shot_frames_ < 0) {
+    const bool walking = player_.auto_forward_s > 0.0f || !walk_legs_.empty();  // scripted walk finishes first
+    if (shot_frames_ >= 0 && !walking && --shot_frames_ < 0) {
       Image img = LoadImageFromScreen();
       ExportImage(img, opt_.screenshot.c_str());
       UnloadImage(img);
@@ -146,6 +147,7 @@ std::string App::dateTimeString() const {
 void App::newGame() {
   const auto& m = world_.meta();
   player_ = Player{};
+  inside_id_.clear();
   player_.pos = world_.toLocal({m.spawn_lat, m.spawn_lon, 0.0});
   player_.yaw = static_cast<float>(m.spawn_heading * DEG2RAD);
   player_.snapToGround(world_);
@@ -180,6 +182,7 @@ bool App::saveSlot(int slot) {
   s.game_unix = clock_.unixUtc();
   s.money = ledger_ ? ledger_->balance(player_account_) : 0;
   s.play_seconds = play_seconds_;
+  s.interior = inside_id_;
   const bool ok = writeSave(slot, s);
   if (slot != kAutosaveSlot) toast(tr(ok ? "save.saved" : "save.failed"));
   return ok;
@@ -197,7 +200,9 @@ bool App::loadSlot(int slot) {
   player_.pitch = s->pitch_deg * DEG2RAD;
   player_.fly = s->fly;
   player_.camera_mode = s->camera_mode;
-  if (!player_.fly) player_.snapToGround(world_);
+  inside_id_.clear();
+  if (!s->interior.empty() && world_.forceLoadInterior(s->interior)) inside_id_ = s->interior;
+  if (!player_.fly && inside_id_.empty()) player_.snapToGround(world_);
   clock_ = rj::sim::GameClock(s->game_unix, settings_.time_scale);
   ledger_ = std::make_unique<rj::econ::Ledger>();
   player_account_ = ledger_->open(rj::econ::AccountKind::Person, "player");
@@ -214,6 +219,7 @@ bool App::loadSlot(int slot) {
 void App::endSession() {
   if (in_session_) saveSlot(kAutosaveSlot);
   in_session_ = false;
+  inside_id_.clear();
   screen_ = Screen::Title;
 }
 
@@ -283,6 +289,34 @@ void App::update(float dt) {
           newGame();
           applyLaunchOverrides();
           if (st == "pause") screen_ = Screen::Pause;
+          if (st == "interior" && !world_.meta().interiors.empty()) {
+            const auto& im = world_.meta().interiors.front();
+            if (world_.forceLoadInterior(im.id)) {
+              const Interior* in = world_.interior(im.id);
+              const Interior::Entrance* best = nullptr;
+              const auto& ents = in->entrances();
+              if (opt_.entrance >= 0 && opt_.entrance < static_cast<int>(ents.size())) best = &ents[opt_.entrance];
+              for (const auto& e : ents)
+                if (opt_.entrance < 0 &&
+                    (!best || std::hypot(e.street.x - player_.pos.x, e.street.y - player_.pos.y) <
+                                  std::hypot(best->street.x - player_.pos.x, best->street.y - player_.pos.y)))
+                  best = &e;
+              if (best) {
+                player_.pos = {best->inside.x, best->inside.y, best->inside.z + 0.05};
+                inside_id_ = im.id;
+              }
+            }
+          }
+          player_.auto_forward_s = opt_.autowalk;
+          walk_start_ = player_.pos;
+          // "--walk 0:12,270:8": walk each leg (compass yaw, seconds) in turn after any --autowalk.
+          for (size_t p0 = 0; p0 < opt_.walk.size();) {
+            size_t p1 = opt_.walk.find(',', p0);
+            if (p1 == std::string::npos) p1 = opt_.walk.size();
+            float yd = 0, sec = 0;
+            if (std::sscanf(opt_.walk.substr(p0, p1 - p0).c_str(), "%f:%f", &yd, &sec) == 2) walk_legs_.push_back({yd, sec});
+            p0 = p1 + 1;
+          }
           if (st.rfind("phone", 0) == 0) {
             screen_ = Screen::Phone;
             if (st == "phone:map") phone_app_ = PhoneApp::Map;
@@ -322,11 +356,51 @@ void App::update(float dt) {
         autosave_timer_ = 0;
         saveSlot(kAutosaveSlot);
       }
-      player_.update(dt, world_, settings_, screen_ == Screen::Game);
+      if (!inside_id_.empty() && !insideInterior()) world_.forceLoadInterior(inside_id_);
+      if (player_.auto_forward_s <= 0.0f && !walk_legs_.empty()) {
+        player_.yaw = walk_legs_.front().first * DEG2RAD;
+        player_.auto_forward_s = walk_legs_.front().second;
+        walk_legs_.erase(walk_legs_.begin());
+      }
+      const Interior* nearby = nullptr;  // outside: the interior whose stairwell openings are closest
+      if (inside_id_.empty()) {
+        double best = 25.0;
+        for (const auto& [id, in] : world_.interiors())
+          if (const double d = in->distanceToOpening(player_.pos.x, player_.pos.y); d < best) {
+            best = d;
+            nearby = in.get();
+          }
+      }
+      player_.update(dt, world_, settings_, screen_ == Screen::Game, insideInterior(), nearby);
+      if (!inside_id_.empty() && player_.left_interior) {
+        // Walked up the stairs and out onto the pavement.
+        inside_id_.clear();
+        toast(tr("interior.exited"));
+        TraceLog(LOG_INFO, "RJ: walked out onto the street at z %.2f", player_.pos.z);
+      } else if (nearby && !player_.fly && nearby->overOpening(player_.pos.x, player_.pos.y)) {
+        // Walked into a real stairwell opening: continue on the verified interior's stairs.
+        if (auto f = nearby->floorBelow(player_.pos.x, player_.pos.y, player_.pos.z + 0.3, 12.0)) {
+          if (player_.pos.z - *f > 0.6) player_.grounded = false;
+          inside_id_ = nearby->id();
+          toast(i18n_.f("interior.entered", {{"name", nearby->name()}}));
+          TraceLog(LOG_INFO, "RJ: walked into stairwell of %s (floor %.2f m below)", nearby->id().c_str(), player_.pos.z - *f);
+        }
+      }
+      if (player_.auto_forward_s > 0.0f && (frame_ % 30) == 0)
+        TraceLog(LOG_DEBUG, "RJ: walk pos %.2f %.2f z %.2f grounded %d (from start %.2f %.2f %.2f)", player_.pos.x, player_.pos.y,
+                 player_.pos.z, player_.grounded, player_.pos.x - walk_start_.x, player_.pos.y - walk_start_.y,
+                 player_.pos.z - walk_start_.z);
       peds_.update(town_, world_, clock_.jst(), player_.pos, dt);
       if (screen_ == Screen::Game) {
-        hover_ = world_.pick(player_.eyeEnu(), player_.forwardEnu(), 300.0);
-        hover_walker_ = peds_.pick(player_.eyeEnu(), player_.forwardEnu(), hover_ ? std::min(40.0, hover_->distance) : 40.0);
+        updateInteriorAction();
+        if (inside_id_.empty()) {
+          hover_ = world_.pick(player_.eyeEnu(), player_.forwardEnu(), 300.0);
+          hover_walker_ =
+              peds_.pick(player_.eyeEnu(), player_.forwardEnu(), hover_ ? std::min(40.0, hover_->distance) : 40.0);
+        } else {
+          hover_.reset();
+          hover_walker_ = nullptr;
+        }
         if (IsKeyPressed(KEY_ESCAPE)) screen_ = Screen::Pause;
         if (IsKeyPressed(KEY_TAB)) {
           screen_ = Screen::Phone;
@@ -364,6 +438,49 @@ void App::update(float dt) {
   const auto sun = rj::env::sunPosition(clock_.unixUtc(), g.lat_deg, g.lon_deg);
   lighting_ = lightingForSun(static_cast<float>(sun.elevation_deg), static_cast<float>(sun.azimuth_deg),
                              static_cast<float>(settings_.view_distance_m));
+  // Underground: blend to artificial light as the eye drops below the street surface, so stairwells
+  // near an entrance still see daylight and the sky.
+  underground_ = 0.0f;
+  if (in_session_ && insideInterior() && screen_ != Screen::Title) {
+    const rj::geo::Vec3d eye = player_.eyeEnu();
+    const double street = world_.terrainHeight(eye.x, eye.y).value_or(eye.z + 10.0);
+    underground_ = static_cast<float>(std::clamp((street - eye.z + 0.3) / 2.5, 0.0, 1.0));
+    lighting_ = lerpLighting(lighting_, indoorLighting(), underground_);
+  }
+}
+
+void App::updateInteriorAction() {
+  prompt_.clear();
+  const bool press = IsKeyPressed(KEY_E);
+  if (const Interior* in = insideInterior()) {
+    for (const auto& e : in->entrances()) {
+      if (std::hypot(player_.pos.x - e.inside.x, player_.pos.y - e.inside.y) < 4.0 && std::fabs(player_.pos.z - e.inside.z) < 2.5) {
+        prompt_ = tr("interior.exit");
+        if (press) {
+          player_.pos = e.street;
+          player_.snapToGround(world_);
+          inside_id_.clear();
+          toast(tr("interior.exited"));
+        }
+        return;
+      }
+    }
+    return;
+  }
+  for (const auto& [id, in] : world_.interiors())
+    for (const auto& e : in->entrances()) {
+      if (std::hypot(player_.pos.x - e.street.x, player_.pos.y - e.street.y) < 4.0 && std::fabs(player_.pos.z - e.street.z) < 2.5) {
+        prompt_ = i18n_.f("interior.enter", {{"name", in->name()}});
+        if (press) {
+          player_.pos = {e.inside.x, e.inside.y, e.inside.z + 0.05};
+          player_.vel_z = 0;
+          player_.fly = false;
+          inside_id_ = id;
+          toast(i18n_.f("interior.entered", {{"name", in->name()}}));
+        }
+        return;
+      }
+    }
 }
 
 void App::runSelfTest() {
@@ -391,6 +508,26 @@ void App::runSelfTest() {
   check(loadSlot(3), "load slot 3");
   check(std::hypot(player_.pos.x - spawn.x, player_.pos.y - spawn.y) < 0.05, "position restored after load");
   check(ledger_ && ledger_->balance(player_account_) == kStartMoney, "money restored after load");
+  // Verified interior: enter through a real entrance, stand on a real floor, walls block.
+  check(!world_.meta().interiors.empty(), "interior listed in slice");
+  if (!world_.meta().interiors.empty()) {
+    const auto& im = world_.meta().interiors.front();
+    const bool loaded = world_.forceLoadInterior(im.id);
+    check(loaded, "interior package loads");
+    if (const Interior* in = world_.interior(im.id); in && !in->entrances().empty()) {
+      const auto& e = in->entrances().front();
+      check(in->floorBelow(e.inside.x, e.inside.y, e.inside.z + 0.5, 2.0).has_value(), "entrance lands on an interior floor");
+      check(e.inside.z < e.street.z - 0.2, "interior entrance is below street level");
+      player_.pos = {e.inside.x, e.inside.y, e.inside.z + 0.05};
+      inside_id_ = im.id;
+      const auto before = player_.pos;
+      for (int k = 0; k < 120; ++k) player_.update(1.0f / 60.0f, world_, settings_, false, in);
+      check(std::hypot(player_.pos.x - before.x, player_.pos.y - before.y) < 0.6 && player_.grounded, "player stands inside");
+      check(saveSlot(3) && readSave(3) && readSave(3)->interior == im.id, "interior state saved");
+      inside_id_.clear();
+      player_.pos = spawn;
+    }
+  }
   const std::string lang0 = settings_.language;
   setLanguage("en");
   const std::string en = tr("menu.new_game");
@@ -427,14 +564,24 @@ Camera3D App::titleCamera() const {
 }
 
 void App::drawWorldView(const Camera3D& cam) {
-  if (settings_.shadows) renderer_.renderShadowMap(cam, world_, lighting_);
-  ClearBackground(BLACK);
+  const Interior* in = (screen_ != Screen::Title) ? insideInterior() : nullptr;
+  const bool deep = in && underground_ > 0.98f;  // nothing of the outside is visible any more
+  const bool shadows = settings_.shadows && underground_ < 0.5f;
+  if (shadows) renderer_.renderShadowMap(cam, world_, lighting_);
+  ClearBackground(deep ? Color{58, 58, 60, 255} : BLACK);
   const float aspect = static_cast<float>(GetScreenWidth()) / static_cast<float>(std::max(1, GetScreenHeight()));
-  renderer_.drawSky(cam, lighting_, aspect);
-  Renderer::setClipPlanes(0.3f, static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
+  if (!deep) renderer_.drawSky(cam, lighting_, aspect);
+  // Indoors walls can be 0.3 m from the eye: pull the near plane in so it never cuts through them.
+  Renderer::setClipPlanes(in ? 0.08f : 0.3f, static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
   BeginMode3D(cam);
-  renderer_.drawWorld(cam, world_, lighting_, settings_.shadows, settings_.photo_textures);
-  if (in_session_ && screen_ != Screen::Title) renderer_.drawPedestrians(peds_);
+  renderer_.drawWorld(cam, world_, lighting_, shadows, settings_.photo_textures, !in);
+  if (in) {
+    renderer_.drawInterior(*in, cam, lighting_);
+  } else if (in_session_ && screen_ != Screen::Title) {
+    // From the street the stairs are visible through the real openings cut into the pavement.
+    for (const auto& [id, interior] : world_.interiors()) renderer_.drawInterior(*interior, cam, lighting_);
+  }
+  if (in_session_ && screen_ != Screen::Title && !deep) renderer_.drawPedestrians(peds_);
   if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title)
     renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw, lighting_);
   EndMode3D();
@@ -461,7 +608,17 @@ void App::draw() {
   const bool game_view = in_session_ && screen_ != Screen::Title && screen_ != Screen::Credits &&
                          !(screen_ == Screen::Settings && settings_return_ == Screen::Title) &&
                          !(screen_ == Screen::Slots && slots_return_ == Screen::Title);
-  drawWorldView(game_view ? player_.camera(settings_.fov) : titleCamera());
+  float third_dist = 4.5f;
+  if (const Interior* in = insideInterior(); in && player_.camera_mode == 1) {
+    // Keep the chase camera on this side of the nearest wall.
+    const rj::geo::Vec3d f = player_.forwardEnu();
+    rj::geo::Vec3d back{-f.x * 4.5, -f.y * 4.5, -f.z * 4.5 + 0.6};
+    const double len = std::sqrt(back.x * back.x + back.y * back.y + back.z * back.z);
+    back = {back.x / len, back.y / len, back.z / len};
+    if (auto hit = in->raycast(player_.eyeEnu(), back, len))
+      third_dist = static_cast<float>(std::max(0.3, (*hit - 0.25) / len * 4.5));
+  }
+  drawWorldView(game_view ? player_.camera(settings_.fov, third_dist) : titleCamera());
 
   switch (screen_) {
     case Screen::Title: drawTitle(); break;
@@ -745,8 +902,14 @@ void App::drawHud() {
   // Minimap bottom-right.
   if (screen_ != Screen::Phone) drawMap({vw - 360, 700, 330, 330}, 220.0, false);
   if (screen_ == Screen::Game) {
-    if (hover_walker_) drawWalkerInfo();
+    if (insideInterior()) drawInteriorInfo();
+    else if (hover_walker_) drawWalkerInfo();
     else drawBuildingInfo();
+    if (!prompt_.empty()) {
+      const float w = ui_.measure(prompt_, 30) + 60;
+      ui_.panel({(vw - w) / 2, 760, w, 60}, Color{0, 0, 0, 190});
+      ui_.textCentered(prompt_, vw / 2, 773, 30, theme::kWarn);
+    }
   }
   if (session_t_ < 25.0f && screen_ == Screen::Game)
     ui_.textCentered(tr("hud.controls"), vw / 2, 1030, 24, Color{255, 255, 255, static_cast<unsigned char>(std::min(1.0f, (25.0f - session_t_) / 3.0f) * 220)});
@@ -770,9 +933,12 @@ void App::drawBuildingInfo() {
   };
   row(tr("info.usage"), tr("usage." + std::to_string(b.usage)));
   row(tr("info.height"), b.measured_height > 0 ? fixed(b.measured_height, 1) + " m" : tr("info.unknown"));
-  row(tr("info.storeys"), b.storeys_above >= 0 ? i18n_.f("info.storeys_value", {{"a", std::to_string(b.storeys_above)},
-                                                                             {"b", std::to_string(std::max<int>(0, b.storeys_below))}})
-                                               : tr("info.unknown"));
+  // PLATEAU uses 9999 for "unknown" storey counts.
+  const bool storeys_known = b.storeys_above >= 0 && b.storeys_above < 9999;
+  const int below = (b.storeys_below >= 0 && b.storeys_below < 9999) ? b.storeys_below : 0;
+  row(tr("info.storeys"), storeys_known ? i18n_.f("info.storeys_value", {{"a", std::to_string(b.storeys_above)},
+                                                                        {"b", std::to_string(below)}})
+                                        : tr("info.unknown"));
   row(tr("info.lod"), tr(b.lod >= 2 ? "info.lod2" : "info.lod1"));
   yy += 6;
   ui_.text(tr(b.geometry_status == 0 ? "verify.badge.verified_exterior" : "verify.badge.unverified"), x + 22, yy, 24,
@@ -783,6 +949,27 @@ void App::drawBuildingInfo() {
   yy += ui_.textWrapped(tr("info.source") + "  " + tr("info.source_short." + std::to_string(b.source_index)), x + 22, yy,
                         w - 44, 18, theme::kMuted);
   ui_.text(tr("info.id") + " " + b.id, x + 22, yy, 18, theme::kMuted);
+}
+
+void App::drawInteriorInfo() {
+  const Interior* in = insideInterior();
+  if (!in) return;
+  const float w = 560, x = ui_.vw() - w - 30, y = 20;
+  ui_.panel({x, y, w, 290});
+  float yy = y + 18;
+  ui_.text(tr("interior.title"), x + 22, yy, 22, theme::kMuted);
+  yy += 34;
+  ui_.text(in->name(), x + 22, yy, 34, theme::kText);
+  yy += 52;
+  const auto g = world_.toGeodetic(player_.pos);
+  const auto street = world_.terrainHeight(player_.pos.x, player_.pos.y);
+  const double depth = street ? player_.pos.z - *street : 0.0;
+  ui_.text(i18n_.f("interior.depth", {{"d", fixed(depth, 1)}, {"h", fixed(g.h_ellipsoidal_m, 1)}}), x + 22, yy, 24, theme::kText);
+  yy += 38;
+  ui_.text(tr("interior.badge"), x + 22, yy, 24, theme::kGood);
+  yy += 36;
+  yy += ui_.textWrapped(tr("interior.note"), x + 22, yy, w - 44, 20, theme::kWarn);
+  ui_.textWrapped(tr("info.source") + "  " + tr("info.source_short.0"), x + 22, yy + 4, w - 44, 18, theme::kMuted);
 }
 
 void App::drawWalkerInfo() {

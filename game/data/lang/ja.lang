@@ -168,3 +168,12 @@ npc.age = {n}歳
 npc.walking_to = 徒歩で移動中 → 次は「{next}」
 npc.schedule = 予定：{a}〜{b} に移動
 npc.fictional = 架空の住民です（実在の人物ではありません）。自宅・目的地は実在の建物、1日の予定はシミュレーションで生成しています。
+
+interior.enter = E：地下街に入る（{name}・内部は公的3Dモデル）
+interior.exit = E：地上に出る
+interior.entered = 地下街に入りました：{name}
+interior.exited = 地上に出ました
+interior.title = 建物内部（地下街）
+interior.badge = 内部：検証済み（PLATEAU LOD4 地下街モデル）
+interior.depth = 地表から {d} m（T.P. {h} m）
+interior.note = 床・壁・天井・階段は公的データのとおり。店舗名・内装・看板はデータに無いため再現していません（無地で表示）。

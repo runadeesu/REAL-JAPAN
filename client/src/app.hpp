@@ -6,6 +6,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "config/settings.hpp"
 #include "game/pedestrians.hpp"
@@ -34,6 +36,9 @@ struct LaunchOptions {
   int camera_mode = -1;
   int time_scale = 0;  // override (0 = use settings)
   bool selftest = false;  // run automated checks against the real game systems, then quit
+  float autowalk = 0.0f;  // test aid: walk forward for N seconds
+  std::string walk;       // test aid: scripted legs "yaw_deg:seconds,yaw_deg:seconds,..."
+  int entrance = -1;      // --state interior: which entrance to use (-1 = nearest to spawn)
 };
 
 class App {
@@ -97,6 +102,14 @@ class App {
   TownSim town_;
   Pedestrians peds_;
   const Walker* hover_walker_ = nullptr;
+  std::string inside_id_;  // interior the player is in (empty = outside)
+  std::string prompt_;     // context action shown on the HUD (E key)
+  const Interior* insideInterior() const { return inside_id_.empty() ? nullptr : world_.interior(inside_id_); }
+  float underground_ = 0.0f;  // 0 = eye at/above the street surface, 1 = fully underground (lighting blend)
+  rj::geo::Vec3d walk_start_;
+  std::vector<std::pair<float, float>> walk_legs_;  // scripted walk (yaw_deg, seconds), test aid
+  void updateInteriorAction();
+  void drawInteriorInfo();
   std::filesystem::path slice_dir_;
 
   Screen screen_ = Screen::Boot;

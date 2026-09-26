@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <sstream>
 
 #include "platform/paths.hpp"
@@ -82,6 +83,28 @@ bool World::loadMeta(const std::filesystem::path& dir, std::string& err) {
       } else if (k == "source") {
         const auto v = splitWs(head[1], 3);
         meta_.sources.push_back({v.at(1), v.size() > 2 ? v[2] : ""});
+      } else if (k == "interior") {
+        const auto v = splitWs(head[1], 5);
+        InteriorMeta im;
+        im.id = v.at(0);
+        im.file = v.at(1);
+        im.source_index = std::stoi(v.at(2));
+        im.status = v.at(3);
+        im.name = v.size() > 4 ? v[4] : "";
+        meta_.interiors.push_back(im);
+      } else if (k == "entrance") {
+        const auto v = splitWs(head[1]);
+        for (auto& im : meta_.interiors)
+          if (im.id == v.at(0)) im.entrances.push_back({std::stod(v.at(1)), std::stod(v.at(2)), std::stod(v.at(3))});
+      } else if (k == "opening") {
+        const auto v = splitWs(head[1]);
+        std::vector<rj::geo::Geodetic> ring;
+        for (size_t i = 1; i < v.size(); ++i) {
+          double la = 0, lo = 0;
+          if (std::sscanf(v[i].c_str(), "%lf,%lf", &la, &lo) == 2) ring.push_back({la, lo, 0.0});
+        }
+        for (auto& im : meta_.interiors)
+          if (im.id == v.at(0) && ring.size() >= 3) im.openings.push_back(std::move(ring));
       } else if (k == "poi") {
         const auto v = splitWs(head[1], 5);
         meta_.pois.push_back({std::stod(v.at(0)), std::stod(v.at(1)), std::stoi(v.at(2)), std::stof(v.at(3)),
@@ -106,6 +129,49 @@ void World::resetOrigin(const rj::geo::Geodetic& g) {
   streamer_ = std::make_unique<rj::stream::HierarchicalStreamer>(std::vector<rj::stream::LayerConfig>{city},
                                                                  size_t{3} << 30, 2, *this);
   current_view_ = 0;
+  interior_streamer_ = std::make_unique<rj::stream::InteriorStreamer>(250.0, 350.0, size_t{512} << 20, *this);
+  interior_candidates_.clear();
+  for (const auto& im : meta_.interiors) {
+    if (im.entrances.empty()) continue;
+    rj::stream::InteriorCandidate c;
+    c.building_id = im.id;
+    c.exterior_cell = *rj::geo::MeshCode::fromLatLon({im.entrances[0].lat_deg, im.entrances[0].lon_deg}, 3);
+    for (const auto& e : im.entrances) c.entrances.push_back({e.lat_deg, e.lon_deg});
+    c.interior_bytes = 16u << 20;
+    interior_candidates_.push_back(c);
+  }
+}
+
+void World::loadInterior(const std::string& id) {
+  if (interiors_.count(id)) return;
+  for (const auto& im : meta_.interiors) {
+    if (im.id != id) continue;
+    auto in = std::make_unique<Interior>();
+    std::string err;
+    if (!in->load(dir_ / "interiors" / im.file, err)) {
+      TraceLog(LOG_WARNING, "RJ: interior %s: %s", id.c_str(), err.c_str());
+      return;
+    }
+    in->place(origin_->frame());
+    interiors_[id] = std::move(in);
+  }
+}
+
+void World::unloadInterior(const std::string& id) {
+  auto it = interiors_.find(id);
+  if (it == interiors_.end()) return;
+  it->second->unload();
+  interiors_.erase(it);
+}
+
+bool World::forceLoadInterior(const std::string& id) {
+  loadInterior(id);
+  return interiors_.count(id) > 0;
+}
+
+const Interior* World::interior(const std::string& id) const {
+  auto it = interiors_.find(id);
+  return it == interiors_.end() ? nullptr : it->second.get();
 }
 
 void World::requestLoad(const rj::stream::StreamKey& key) {
@@ -152,6 +218,8 @@ void World::unloadAll() {
   for (auto& [k, c] : loaded_) unloadCell(c->gpu);
   loaded_.clear();
   hash_.clear();
+  for (auto& [k, in] : interiors_) in->unload();
+  interiors_.clear();
 }
 
 void World::placeCell(LoadedCell& c) {
@@ -220,6 +288,7 @@ bool World::update(rj::geo::Vec3d& player, double view_distance_m) {
     rebased = true;
     for (auto& [k, c] : loaded_) placeCell(*c);
     rebuildHash();
+    for (auto& [k, in] : interiors_) in->place(origin_->frame());
   }
   current_view_ = view_distance_m;  // affects rendering range; streaming radius is fixed per layer
   const rj::geo::Geodetic g = toGeodetic(player);
@@ -262,6 +331,9 @@ bool World::update(rj::geo::Vec3d& player, double view_distance_m) {
     streamer_->onLoaded(key, bytes);
     uploaded = true;
   }
+  if (interior_streamer_)
+    interior_streamer_->update({g.lat_deg, g.lon_deg}, interior_candidates_,
+                               [&](const rj::geo::MeshCode& m) { return loaded_.count(m.str()) > 0; });
   return rebased;
 }
 

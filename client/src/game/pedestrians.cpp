@@ -70,6 +70,16 @@ void Pedestrians::buildNav(const World& world) {
       for (const auto& p : fp) poly.push_back({p.x, p.y});
       nav_.blockPolygon(poly);
     }
+  // Stairwell openings of verified underground spaces: nobody walks across the hole.
+  for (const auto& im : world.meta().interiors)
+    for (const auto& ring : im.openings) {
+      std::vector<rj::nav::Vec2> poly;
+      for (const auto& g : ring) {
+        const auto p = world.toLocal(g);
+        poly.push_back({p.x, p.y});
+      }
+      nav_.blockPolygon(poly);
+    }
   nav_.computeComponents();
   if (std::getenv("RJ_DEBUG")) {  // dump the walkability grid for inspection
     Image img = GenImageColor(nav_.width(), nav_.height(), WHITE);

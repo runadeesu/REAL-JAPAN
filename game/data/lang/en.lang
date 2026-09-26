@@ -168,3 +168,12 @@ npc.age = age {n}
 npc.walking_to = Walking → next: "{next}"
 npc.schedule = Scheduled trip: {a}–{b}
 npc.fictional = A fictional resident (not a real person). Home and destination are real buildings; the daily plan is simulated.
+
+interior.enter = E: Enter the underground mall ({name}, official 3D interior)
+interior.exit = E: Go up to the street
+interior.entered = Entered: {name}
+interior.exited = Back on the street
+interior.title = Interior (underground mall)
+interior.badge = Interior: verified (PLATEAU LOD4 underground model)
+interior.depth = {d} m below the street (T.P. {h} m)
+interior.note = Floors, walls, ceilings and stairs follow the official data. Shop names, fit-out and signs are not in the data and are not invented (shown plain).

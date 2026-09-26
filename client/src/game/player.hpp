@@ -8,6 +8,7 @@
 namespace rjc {
 
 class World;
+class Interior;
 struct Settings;
 
 struct Player {
@@ -19,13 +20,18 @@ struct Player {
   bool grounded = false;
   int camera_mode = 0;  // 0 = first person, 1 = third person
   double distance_walked = 0.0;
+  float auto_forward_s = 0.0f;  // scripted forward walking (tests / demos)
+  bool left_interior = false;   // set by update(): walked out of a stairwell onto the pavement
 
   static constexpr float kEyeHeight = 1.60f;
   static constexpr float kRadius = 0.35f;
 
-  void update(float dt, const World& world, const Settings& s, bool input_enabled);
+  // inside: the verified interior the player is in; nearby (when outside): an interior whose
+  // stairwell parapets should block. Sets left_interior when the player stepped out onto the street.
+  void update(float dt, const World& world, const Settings& s, bool input_enabled, const Interior* inside = nullptr,
+              const Interior* nearby = nullptr);
   void snapToGround(const World& world);
-  Camera3D camera(float fov_deg) const;
+  Camera3D camera(float fov_deg, float third_person_dist = 4.5f) const;
   rj::geo::Vec3d eyeEnu() const { return {pos.x, pos.y, pos.z + kEyeHeight}; }
   rj::geo::Vec3d forwardEnu() const;
 };

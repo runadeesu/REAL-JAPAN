@@ -6,6 +6,7 @@
 #include "config/settings.hpp"
 #include "raymath.h"
 #include "world/coords.hpp"
+#include "world/interior.hpp"
 #include "world/world.hpp"
 
 namespace rjc {
@@ -22,7 +23,8 @@ void Player::snapToGround(const World& world) {
   }
 }
 
-void Player::update(float dt, const World& world, const Settings& s, bool input) {
+void Player::update(float dt, const World& world, const Settings& s, bool input, const Interior* inside,
+                    const Interior* nearby) {
   dt = std::min(dt, 0.1f);
   if (input) {
     const Vector2 md = GetMouseDelta();
@@ -47,6 +49,11 @@ void Player::update(float dt, const World& world, const Settings& s, bool input)
     if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) { fx += cy; fy -= sy; }
     if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) { fx -= cy; fy += sy; }
   }
+  if (auto_forward_s > 0.0f) {
+    auto_forward_s -= dt;
+    fx += std::sin(yaw);
+    fy += std::cos(yaw);
+  }
   const double len = std::hypot(fx, fy);
   if (len > 1e-6) {
     fx /= len;
@@ -61,14 +68,32 @@ void Player::update(float dt, const World& world, const Settings& s, bool input)
     pos.y += fy * speed * dt;
     if (input && IsKeyDown(KEY_SPACE)) pos.z += speed * dt;
     if (input && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_C))) pos.z -= speed * dt;
-    if (auto h = world.terrainHeight(pos.x, pos.y)) pos.z = std::max(pos.z, *h);
+    if (!inside)
+      if (auto h = world.terrainHeight(pos.x, pos.y)) pos.z = std::max(pos.z, *h);
     grounded = false;
   } else {
     const double speed = run ? 4.2 : 1.45;  // m/s: brisk run / normal walking pace
     pos.x += fx * speed * dt;
     pos.y += fy * speed * dt;
-    world.collide(pos, kRadius);
-    const auto ground = world.terrainHeight(pos.x, pos.y);
+    std::optional<double> ground;
+    left_interior = false;
+    if (inside) {
+      // Verified interior: walls block, floors and stair ramps carry the player (step up to 0.55 m).
+      // Walking never drops more than 2.5 m (no stepping off through a slab); falling can go further.
+      inside->collide(pos, 0.3);
+      ground = inside->floorBelow(pos.x, pos.y, pos.z + 0.55, grounded ? 2.5 : 12.0);
+      if (!ground) {
+        // Top of a stairwell: the next step is the pavement.
+        if (auto th = world.terrainHeight(pos.x, pos.y); th && *th <= pos.z + 0.55 && *th >= pos.z - 1.0) {
+          ground = th;
+          left_interior = true;
+        }
+      }
+    } else {
+      world.collide(pos, kRadius);
+      if (nearby) nearby->collide(pos, kRadius);  // stairwell parapets that stand above the pavement
+      ground = world.terrainHeight(pos.x, pos.y);
+    }
     if (!ground) {
       // Outside the loaded data: stay on the edge.
       pos.x = before.x;
@@ -92,12 +117,14 @@ void Player::update(float dt, const World& world, const Settings& s, bool input)
   distance_walked += std::hypot(pos.x - before.x, pos.y - before.y);
 }
 
-Camera3D Player::camera(float fov_deg) const {
+Camera3D Player::camera(float fov_deg, float third_person_dist) const {
   Camera3D c{};
   const rj::geo::Vec3d eye = eyeEnu();
   const rj::geo::Vec3d f = forwardEnu();
   if (camera_mode == 1) {
-    const rj::geo::Vec3d back{eye.x - f.x * 4.5, eye.y - f.y * 4.5, eye.z - f.z * 4.5 + 0.6};
+    const double k = third_person_dist / 4.5;
+    const rj::geo::Vec3d back{eye.x - f.x * third_person_dist, eye.y - f.y * third_person_dist,
+                              eye.z - f.z * third_person_dist + 0.6 * k};
     c.position = enuToRl(back);
     c.target = enuToRl(eye);
   } else {

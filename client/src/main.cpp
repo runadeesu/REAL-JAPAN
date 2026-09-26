@@ -28,6 +28,9 @@ rjc::LaunchOptions parseArgs(int argc, char** argv) {
     else if (a == "--third-person") o.camera_mode = 1;
     else if (a == "--timescale") o.time_scale = std::atoi(next().c_str());
     else if (a == "--selftest") o.selftest = true;
+    else if (a == "--autowalk") o.autowalk = static_cast<float>(std::atof(next().c_str()));
+    else if (a == "--walk") o.walk = next();
+    else if (a == "--entrance") o.entrance = std::atoi(next().c_str());
     else if (a == "--pos") {
       const std::string v = next();
       if (std::sscanf(v.c_str(), "%lf,%lf", &o.lat, &o.lon) == 2) o.has_pos = true;

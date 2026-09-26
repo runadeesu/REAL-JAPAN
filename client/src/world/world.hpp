@@ -16,6 +16,7 @@
 #include "rj/geo/local_frame.hpp"
 #include "rj/stream/streamer.hpp"
 #include "world/cell.hpp"
+#include "world/interior.hpp"
 
 namespace rjc {
 
@@ -39,6 +40,7 @@ struct SliceMeta {
   std::vector<CellMeta> cells;
   std::vector<Poi> pois;
   std::vector<SourceMeta> sources;
+  std::vector<InteriorMeta> interiors;
 };
 
 struct LoadedCell {
@@ -55,7 +57,7 @@ struct LoadedCell {
   Vector2 ex{}, ey{}, p00{};      // affine approximation of the terrain grid
 };
 
-class World : public rj::stream::ICellIO {
+class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
  public:
   World();
   ~World() override;
@@ -91,9 +93,16 @@ class World : public rj::stream::ICellIO {
   size_t buildingCount() const;
   std::optional<double> minTerrainZ() const;
 
+  // Verified interiors (streamed near their entrances via rj::stream::InteriorStreamer).
+  const Interior* interior(const std::string& id) const;
+  const std::map<std::string, std::unique_ptr<Interior>>& interiors() const { return interiors_; }
+  bool forceLoadInterior(const std::string& id);
+
  private:
   void requestLoad(const rj::stream::StreamKey& key) override;
   void requestUnload(const rj::stream::StreamKey& key) override;
+  void loadInterior(const std::string& id) override;
+  void unloadInterior(const std::string& id) override;
   void placeCell(LoadedCell& c);
   void rebuildHash();
 
@@ -111,6 +120,9 @@ class World : public rj::stream::ICellIO {
   std::vector<Job> jobs_;
   std::vector<rj::stream::StreamKey> empty_completions_;
   std::map<std::string, std::unique_ptr<LoadedCell>> loaded_;
+  std::map<std::string, std::unique_ptr<Interior>> interiors_;
+  std::unique_ptr<rj::stream::InteriorStreamer> interior_streamer_;
+  std::vector<rj::stream::InteriorCandidate> interior_candidates_;
 
   static constexpr double kBucket = 25.0;
   std::unordered_map<int64_t, std::vector<std::pair<const LoadedCell*, int>>> hash_;

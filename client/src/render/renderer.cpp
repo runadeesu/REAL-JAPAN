@@ -72,7 +72,11 @@ float shadowFactor(vec3 n) {
 }
 void main() {
   vec3 base = toLinear(fragColor.rgb * colDiffuse.rgb);
-  if (useTexture == 1) base *= toLinear(texture(texture0, fragUV).rgb);
+  if (useTexture == 1) {
+    vec4 t = texture(texture0, fragUV);
+    if (t.a < 0.5) discard;  // ground raster alpha = real openings (stairwells) in the pavement
+    base *= toLinear(t.rgb);
+  }
   vec3 n = normalize(fragNormal);
   if (!gl_FrontFacing) n = -n;
   float ndl = max(dot(n, sunDir), 0.0);
@@ -165,6 +169,35 @@ Lighting lightingForSun(float el, float az, float view_distance_m) {
   L.ambient_sky = lerp3(lerp3(amb_night, amb_dusk, twi), amb_day, day);
   L.ambient_ground = Vector3Scale(L.ambient_sky, 0.45f);
   L.fog_density = 0.9f / std::max(300.0f, view_distance_m);
+  return L;
+}
+
+Lighting indoorLighting() {
+  // Artificial light for underground spaces: soft overhead key + bright even ambient.
+  Lighting L;
+  L.sun_dir = {0.15f, 1.0f, 0.1f};
+  L.sun_dir = Vector3Normalize(L.sun_dir);
+  L.sun_elevation_deg = -90.0f;  // no sun disc
+  L.sun_color = {0.55f, 0.55f, 0.52f};
+  L.ambient_sky = {0.72f, 0.73f, 0.72f};
+  L.ambient_ground = {0.38f, 0.38f, 0.37f};
+  L.sky_zenith = L.sky_horizon = {0.30f, 0.30f, 0.31f};
+  L.fog_density = 0.0035f;
+  return L;
+}
+
+Lighting lerpLighting(const Lighting& a, const Lighting& b, float t) {
+  if (t <= 0.0f) return a;
+  if (t >= 1.0f) return b;
+  Lighting L;
+  L.sun_dir = Vector3Normalize(Vector3Lerp(a.sun_dir, b.sun_dir, t));
+  L.sun_elevation_deg = t < 0.5f ? a.sun_elevation_deg : b.sun_elevation_deg;
+  L.sun_color = Vector3Lerp(a.sun_color, b.sun_color, t);
+  L.sky_zenith = Vector3Lerp(a.sky_zenith, b.sky_zenith, t);
+  L.sky_horizon = Vector3Lerp(a.sky_horizon, b.sky_horizon, t);
+  L.ambient_sky = Vector3Lerp(a.ambient_sky, b.ambient_sky, t);
+  L.ambient_ground = Vector3Lerp(a.ambient_ground, b.ambient_ground, t);
+  L.fog_density = a.fog_density + (b.fog_density - a.fog_density) * t;
   return L;
 }
 
@@ -295,7 +328,8 @@ void Renderer::drawSky(const Camera3D& cam, const Lighting& L, float aspect) {
   EndShaderMode();
 }
 
-void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows, bool photo_textures) {
+void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows, bool photo_textures,
+                         bool neutral_floor) {
   applyLightingUniforms(lit_, cam, L, shadows);
   const int slot = 10;
   rlEnableShader(lit_.id);
@@ -330,7 +364,7 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting
   use_tex = 0;
   SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
-  if (auto mz = world.minTerrainZ()) {
+  if (auto mz = world.minTerrainZ(); mz && neutral_floor) {
     // Neutral floor outside the data coverage (no invented content), below all real terrain.
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{92, 92, 90, 255};
     DrawMesh(plane_, mat_, MatrixTranslate(0.0f, static_cast<float>(*mz) - 1.5f, 0.0f));
@@ -355,6 +389,17 @@ void Renderer::drawPlayerBody(const Vector3& feet, float yaw_rad, const Lighting
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{230, 200, 170, 255};
   DrawMesh(head_, mat_, MatrixTranslate(feet.x, feet.y + 1.58f, feet.z));
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+}
+
+void Renderer::drawInterior(const Interior& in, const Camera3D& cam, const Lighting& L, bool shadows) {
+  applyLightingUniforms(lit_, cam, L, shadows);
+  int use_tex = 0;
+  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  rlDisableBackfaceCulling();
+  for (const auto& m : in.meshes()) DrawMesh(m, mat_, in.model());
+  rlEnableBackfaceCulling();
 }
 
 void Renderer::drawPedestrians(const Pedestrians& peds) {

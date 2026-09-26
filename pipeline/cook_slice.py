@@ -26,6 +26,7 @@ from realjapan_pipeline.atlas import Atlas, fetch_images  # noqa: E402
 from realjapan_pipeline.citygml import iter_buildings, iter_furniture, iter_roads, parse_appearance  # noqa: E402
 from realjapan_pipeline.dem_gsi import DemSampler  # noqa: E402
 from realjapan_pipeline.geodesy import LocalFrame, Mesh  # noqa: E402
+from realjapan_pipeline.interior import build_interior, opening_outlines, parse_underground, street_openings  # noqa: E402
 from realjapan_pipeline.rjcell import (  # noqa: E402
     GEOM_VERIFIED_EXTERIOR, INTERIOR_UNKNOWN, BuildingRec, CellWriter)
 from realjapan_pipeline.triangulate import triangulate  # noqa: E402
@@ -157,7 +158,9 @@ def building_mesh(b, frame: LocalFrame, app=None, atlas: Atlas | None = None):
     return out, ground
 
 
-def rasterize_ground(bounds, roads, buildings, markings=()) -> bytes:
+def rasterize_ground(bounds, roads, buildings, markings=(), holes=()) -> bytes:
+    """Ground colour raster; `holes` (street-level openings of underground spaces) become transparent
+    so the client can cut them out of the terrain and show the real stairwell below."""
     min_lat, min_lon, max_lat, max_lon = bounds
     ss = 2
     W = H = TEX * ss
@@ -186,9 +189,23 @@ def rasterize_ground(bounds, roads, buildings, markings=()) -> bytes:
             d.polygon(px(b.footprint), fill=GROUND_COLORS["footprint"])
     img = img.resize((TEX, TEX), Image.LANCZOS)
     # Few flat colours + anti-aliased edges: an adaptive 64-colour palette is visually lossless here.
-    img = img.quantize(colors=64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    img = img.quantize(colors=63, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    save = {}
+    if holes:
+        mask = Image.new("L", (W, H), 0)
+        md = ImageDraw.Draw(mask)
+        for ring in holes:
+            md.polygon(px(ring), fill=255)
+        m = np.asarray(mask.resize((TEX, TEX), Image.BILINEAR)) >= 128
+        if m.any():
+            pal = img.getpalette()[: 63 * 3] + [0, 0, 0]
+            idx = np.asarray(img).copy()
+            idx[m] = 63
+            img = Image.fromarray(idx, mode="P")
+            img.putpalette(pal)
+            save["transparency"] = 63
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, format="PNG", optimize=True, **save)
     return buf.getvalue()
 
 
@@ -218,6 +235,18 @@ def main() -> int:
          "attribution": "出典：国土地理院 標高タイル（https://maps.gsi.go.jp/development/ichiran.html）を加工して作成", "retrieved_at": today, "usage": "asset",
          "rights_note": "基本測量成果。焼き込み配布時の測量法上の申請要否は未確認（公開配布前に要確認）"},
     ]
+
+    # PLATEAU LOD4 underground buildings first: their street-level openings are cut out of the ground.
+    undergrounds, openings = [], []
+    for mesh in cfg["cells"]:
+        upath = os.path.join(a.raw, "plateau", f"{mesh}_ubld_6697_op.gml")
+        if not os.path.exists(upath):
+            continue
+        for u in parse_underground(upath):
+            if len(u.polys) < 100:
+                continue  # LOD1-only blocks carry no interior
+            undergrounds.append((mesh, u))
+            openings.extend(street_openings(u, dem))
 
     pois, residents_homes, workplaces = [], [], []
     summary = []
@@ -340,7 +369,7 @@ def main() -> int:
                 hh = dem.height(la, lo)
                 hz[i, jj] = frame.to_local(la, lo, anchor_h if math.isnan(hh) else hh)[2]
         w.set_terrain(hz, lat0, lon0, dlat, dlon)
-        w.ground_png = rasterize_ground(bounds, roads, blds, markings)
+        w.ground_png = rasterize_ground(bounds, roads, blds, markings, openings)
 
         data = w.to_bytes()
         with open(os.path.join(out, "cells", f"{mesh}.rjcell"), "wb") as f:
@@ -349,6 +378,22 @@ def main() -> int:
                         "bytes": len(data), "anchor": [clat, clon, anchor_h], "bounds": bounds})
         print(f"{mesh}: {len(w.buildings)} buildings ({n_lod2} LOD2, {n_tex} photo-textured), {len(roads)} roads, "
               f"{len(data) / 1e6:.1f} MB, {time.time() - t0:.1f}s", flush=True)
+
+    # Verified interiors: PLATEAU LOD4 underground buildings (floors, walls, stairs; no shop fit-out).
+    interiors = []
+    os.makedirs(os.path.join(out, "interiors"), exist_ok=True)
+    for mesh, u in undergrounds:
+        lat_c = float(np.mean([p[0] for _, r in u.polys for p in r]))
+        lon_c = float(np.mean([p[1] for _, r in u.polys for p in r]))
+        frame = LocalFrame(lat_c, lon_c, 0.0)
+        data, st, ents = build_interior(u, frame, dem, triangulate, to_local, 0)
+        fname = f"{u.gml_id}.rjint"
+        with open(os.path.join(out, "interiors", fname), "wb") as f:
+            f.write(data)
+        geo_ents = [g for _, _, g in ents]
+        interiors.append({"id": u.gml_id, "file": fname, "name": u.name, "entrances": geo_ents,
+                          "openings": opening_outlines(street_openings(u, dem))})
+        print(f"interior {u.name} ({mesh}): {st} -> {len(data) / 1e6:.1f} MB", flush=True)
 
     # Fictional residents placed in real residential buildings; jobs in real workplaces.
     rng = np.random.default_rng(20260926)
@@ -429,6 +474,13 @@ def main() -> int:
             f.write(f"source {i} {s['license']} {s['attribution']}\n")
         for p in pois:
             f.write(f"poi {p['lat']:.7f} {p['lon']:.7f} {p['usage']} {p['height']:.1f} {p['name']}\n")
+        for it in interiors:
+            f.write(f"interior {it['id']} {it['file']} 0 VERIFIED {it['name']}\n")
+            for la, lo, h in it["entrances"]:
+                f.write(f"entrance {it['id']} {la:.8f} {lo:.8f} {h:.3f}\n")
+            # Street-level openings (for pedestrian navigation; the terrain holes live in the ground rasters).
+            for ring in it["openings"]:
+                f.write(f"opening {it['id']} " + " ".join(f"{la:.8f},{lo:.8f}" for la, lo in ring) + "\n")
     print(f"residents {len(rows)}, pois {len(pois)} -> {out}")
     return 0
 

@@ -20,6 +20,7 @@ struct SaveGame {
   int64_t game_unix = 0;
   int64_t money = 0;
   double play_seconds = 0.0;
+  std::string interior;  // id of the interior the player is in (empty = outside)
 };
 
 constexpr int kAutosaveSlot = 0;

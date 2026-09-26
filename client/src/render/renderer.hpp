@@ -25,6 +25,8 @@ struct Lighting {
 };
 
 Lighting lightingForSun(float elevation_deg, float azimuth_deg, float view_distance_m);
+Lighting indoorLighting();
+Lighting lerpLighting(const Lighting& a, const Lighting& b, float t);
 
 class Renderer {
  public:
@@ -33,9 +35,12 @@ class Renderer {
 
   void renderShadowMap(const Camera3D& cam, const World& world, const Lighting& L);
   void drawSky(const Camera3D& cam, const Lighting& L, float aspect);
-  void drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows, bool photo_textures);
+  // neutral_floor: the flat stand-in plane outside data coverage (off underground, where it would cut through).
+  void drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows, bool photo_textures,
+                 bool neutral_floor = true);
   void drawPlayerBody(const Vector3& feet, float yaw_rad, const Lighting& L);
   void drawPedestrians(const Pedestrians& peds);
+  void drawInterior(const Interior& in, const Camera3D& cam, const Lighting& L, bool shadows = false);
 
   static void setClipPlanes(float near_m, float far_m);
 
