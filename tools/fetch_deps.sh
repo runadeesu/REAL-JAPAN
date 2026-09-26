@@ -19,7 +19,9 @@ if [ ! -f "$ROOT/game/data/fonts/BIZUDPGothic-Regular.ttf" ]; then
     (cd "$TP/gfonts" && git sparse-checkout set ofl/bizudpgothic)
   fi
   mkdir -p "$ROOT/game/data/fonts"
-  cp "$TP/gfonts/ofl/bizudpgothic/BIZUDPGothic-Regular.ttf" "$ROOT/game/data/fonts/"
+  # Subset (JIS X 0208 + kana + symbols + every character used by the game) to keep downloads small.
+  python3 "$ROOT/tools/subset_font.py" "$TP/gfonts/ofl/bizudpgothic/BIZUDPGothic-Regular.ttf" \
+    "$ROOT/game/data/fonts/BIZUDPGothic-Regular.ttf"
   cp "$TP/gfonts/ofl/bizudpgothic/OFL.txt" "$ROOT/game/data/fonts/OFL.txt"
 fi
 echo "dependencies ready"

@@ -65,4 +65,4 @@ PROJECT: REAL JAPAN  —  渋谷 Vertical Slice（Phase 1 開発ビルド） v0.
   「設定」→「建物の写真テクスチャ」でオフにできます。
 
 ■ ライセンス
-  LICENSES フォルダを参照してください（raylib: zlib License、BIZ UDPゴシック: SIL OFL 1.1）。
+  LICENSES フォルダを参照してください（raylib: zlib License、BIZ UDPゴシック: SIL OFL 1.1・サブセット化して同梱）。

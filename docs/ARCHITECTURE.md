@@ -95,7 +95,7 @@ REAL-JAPAN/
 主なテーブル：`prefecture`, `municipality`, `district`, `mesh_cell`, `road_link`, `road_node`, `lane`, `building`, `building_part`, `interior_space`, `business`, `station`, `railway_line`, `track_segment`, `airport`, `runway`, `port`, `poi`, `npc`, `vehicle`, `weather_region`, `economy_account`, `event`, `source`, `license`。
 DDL の叩き台：[sql/worlddb_schema.sql](sql/worlddb_schema.sql)。
 
-**(b) 実行時パッケージ RJCELL（✅）** — JIS 3次メッシュ（約 1 km）単位にクックしたバイナリ。形式は `pipeline/realjapan_pipeline/rjcell.py` に定義し、C++ 側 `client/src/world/cell.cpp` が同じ形式を読む。
+**(b) 実行時パッケージ RJCELL v3（✅）** — JIS 3次メッシュ（約 1 km）単位にクックしたバイナリ（頂点をチャンクごとのスケールで int16 量子化し、全体を DEFLATE 圧縮）。形式は `pipeline/realjapan_pipeline/rjcell.py` に定義し、C++ 側 `client/src/world/cell.cpp` が同じ形式を読む。
 内容：セル原点（測地座標）、建物テーブル（ID・名称・用途・高さ・階数・LOD・検証状態・出典番号・外形）、メッシュチャンク（≤65535 頂点、位置/法線/色/UV）、地形高さグリッド、地面テクスチャ（PNG）、写真アトラス（JPEG）。
 ゲームは SQL を実行時に引かない。マスタ → クック → パッケージ、の一方向。
 
@@ -222,7 +222,7 @@ LOD0/1：IDM 追従＋MOBIL 車線変更、信号現示（公開データが無�
 
 ## 19. 性能予算
 
-**実測（本ビルド）**：4 セルで建物 9,535 棟・約 90 万三角形。RJCELL は 1 セル 13〜15 MB（幾何）＋写真アトラス数 MB。
+**実測（本ビルド）**：4 セルで建物 9,535 棟＋都市設備 2,008 個・約 110 万三角形。RJCELL v3（頂点量子化＋DEFLATE）は 1 セル 6〜8 MB（幾何約 3 MB＋写真アトラス JPEG 約 3.5 MB＋地面テクスチャ約 0.7 MB）。配布 ZIP は 28.7 MiB。
 
 **目標（Phase 1, 1080p/60fps, GTX 1660 / RTX 3050 クラス）**
 
@@ -231,7 +231,7 @@ LOD0/1：IDM 追従＋MOBIL 車線変更、信号現示（公開データが無�
 | CPU フレーム | 16.6 ms：Sim LOD0 2 ms / LOD1 1 ms / ストリーミング 1 ms / 物理 2 ms / 描画発行 3 ms / UI 1 ms / 余裕 6.6 ms |
 | GPU フレーム | 影 2.5 ms / 不透明 6 ms / 空・霧・ポスト 1.5 ms / UI 0.5 ms / 余裕 6 ms |
 | 常駐メモリ | ワールド 3 GB（ストリーマ予算）、VRAM 4 GB（テクスチャ 2.5 GB） |
-| ディスク | PLATEAU LOD2 都市部で約 18 MB/km²（本ビルド実測）。LOD2 都市部 1 万 km² で約 180 GB → 圧縮（メッシュ量子化＋BC7）で 1/3〜1/4 を目標 |
+| ディスク | PLATEAU LOD2＋写真の都市部で約 7 MB/km²（本ビルド実測, v3）。LOD2 都市部 1 万 km² で約 70 GB → メッシュレット圧縮と BCn テクスチャでさらに半減を目標 |
 | 遠距離シミュレーション | 全国の LOD3 更新はゲーム内 1 時間ごと、1 回 5 ms 以内に分割 |
 
 ## 20. 最初に実装したコード（本リポジトリの現状）

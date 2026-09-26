@@ -61,4 +61,4 @@ DATA SOURCES
   switch them off in Settings -> "Building photo textures".
 
 LICENCES
-  See the LICENSES folder (raylib: zlib License; BIZ UDPGothic: SIL Open Font License 1.1).
+  See the LICENSES folder (raylib: zlib License; BIZ UDPGothic: SIL Open Font License 1.1, bundled as a subset).

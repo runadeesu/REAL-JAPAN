@@ -185,6 +185,8 @@ def rasterize_ground(bounds, roads, buildings, markings=()) -> bytes:
         if b.footprint:
             d.polygon(px(b.footprint), fill=GROUND_COLORS["footprint"])
     img = img.resize((TEX, TEX), Image.LANCZOS)
+    # Few flat colours + anti-aliased edges: an adaptive 64-colour palette is visually lossless here.
+    img = img.quantize(colors=64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
@@ -248,7 +250,7 @@ def main() -> int:
                         pass
             atlas = Atlas(a.atlas_size)
             atlas.build(imgs)
-            w.atlas_jpegs.append(atlas.jpeg())
+            w.atlas_jpegs.append(atlas.jpeg(quality=75))
             print(f"  textures: {len(imgs)}/{len(app.images)} images, atlas scale {atlas.scale:.2f}", flush=True)
 
         n_lod2 = n_tex = 0

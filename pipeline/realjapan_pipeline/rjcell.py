@@ -6,13 +6,16 @@ exactly like rj::geo::LocalFrame, so the client can place any cell relative
 to its floating origin. Little-endian throughout. The C++ reader lives in
 client/src/world/cell_loader.cpp and must stay in sync with this file.
 
-Layout (v2)
-  header (struct HEADER)
+File (v3) = b"RJCELL03" + u32 body_len + raw-DEFLATE(body)
+Body layout
+  header (struct HEADER, magic repeated)
   strings blob (UTF-8)
   buildings  n_buildings * BUILDING
   footprints n_footprint_pts * (f32 x, f32 y)
-  chunks     n_chunks * [u32 nv, u32 ni, i32 page, f32 pos[3nv], f32 nrm[3nv], u8 rgba[4nv],
-                         f32 uv[2nv], u16 idx[ni], pad4]      page = texture atlas index or -1
+  chunks     n_chunks * [u32 nv, u32 ni, i32 page, f32 pos_scale, i16 pos[3nv] pad4, i8 nrm[4nv],
+                         u8 rgba[4nv], u16 uv[2nv], u16 idx[ni], pad4]
+             page = texture atlas index or -1; position = i16 * pos_scale (metres, cell ENU);
+             normal = i8 / 127; uv = u16 / 65535
   terrain    f32 heights[nx*ny] (row-major, south->north rows, west->east columns), local-ENU z
   ground texture (PNG bytes, covers the cell bounds, north up)
   atlases    u32 n_pages, then n_pages * [u32 len, JPEG bytes]   (PLATEAU facade/roof photos)
@@ -21,11 +24,12 @@ Layout (v2)
 from __future__ import annotations
 
 import struct
+import zlib
 from dataclasses import dataclass, field
 
 import numpy as np
 
-MAGIC = b"RJCELL02"
+MAGIC = b"RJCELL03"
 HEADER = struct.Struct("<8s16s3d4d6I4dI3I")
 BUILDING = struct.Struct("<4I2Hf2h4BIf6f2I3I")
 
@@ -147,11 +151,17 @@ class CellWriter:
         if fps:
             out += np.asarray(fps, dtype=np.float32).tobytes()
         for c in chunks:
-            out += struct.pack("<2Ii", c.nv, c.ni, c.page)
-            out += np.concatenate(c.pos).tobytes()
-            out += np.concatenate(c.nrm).tobytes()
-            out += np.concatenate(c.col).tobytes()
-            out += np.concatenate(c.uv).tobytes()
+            pos = np.concatenate(c.pos).astype(np.float64)
+            scale = max(float(np.abs(pos).max()) / 32767.0, 1e-4)
+            out += struct.pack("<2Iif", c.nv, c.ni, c.page, scale)
+            qp = np.clip(np.round(pos / scale), -32767, 32767).astype(np.int16).tobytes()
+            out += qp + b"\0" * ((4 - len(qp) % 4) % 4)
+            nrm = np.concatenate(c.nrm).astype(np.float64)
+            qn = np.zeros((len(nrm), 4), dtype=np.int8)
+            qn[:, :3] = np.clip(np.round(nrm * 127.0), -127, 127).astype(np.int8)
+            out += qn.tobytes()
+            out += np.concatenate(c.col).astype(np.uint8).tobytes()
+            out += np.clip(np.round(np.concatenate(c.uv) * 65535.0), 0, 65535).astype(np.uint16).tobytes()
             idx = np.concatenate(c.idx).tobytes()
             out += idx
             if len(idx) % 4:
@@ -162,11 +172,19 @@ class CellWriter:
         out += struct.pack("<I", len(self.atlas_jpegs))
         for j in self.atlas_jpegs:
             out += struct.pack("<I", len(j)) + j
-        return bytes(out)
+        comp = zlib.compressobj(9, zlib.DEFLATED, -15)  # raw DEFLATE (raylib DecompressData / sinfl)
+        body = comp.compress(bytes(out)) + comp.flush()
+        return MAGIC + struct.pack("<I", len(out)) + body
 
 
-def read_cell(data: bytes) -> dict:
+def read_cell(file_bytes: bytes) -> dict:
     """Reference reader (used by tests; mirrors the C++ loader)."""
+    if file_bytes[:8] != MAGIC:
+        raise ValueError("bad magic")
+    (blen,) = struct.unpack_from("<I", file_bytes, 8)
+    data = zlib.decompress(file_bytes[12:], -15)
+    if len(data) != blen:
+        raise ValueError("body length mismatch")
     h = HEADER.unpack_from(data, 0)
     if h[0] != MAGIC:
         raise ValueError("bad magic")
@@ -192,14 +210,15 @@ def read_cell(data: bytes) -> dict:
     off += nfp * 8
     chunks = []
     for _ in range(nc):
-        nv, ni, page = struct.unpack_from("<2Ii", data, off)
-        off += 12
-        pos = np.frombuffer(data, np.float32, nv * 3, off).reshape(-1, 3)
-        off += nv * 12
-        off += nv * 12  # normals
+        nv, ni, page, scale = struct.unpack_from("<2Iif", data, off)
+        off += 16
+        pos = np.frombuffer(data, np.int16, nv * 3, off).reshape(-1, 3).astype(np.float64) * scale
+        off += nv * 6
+        off += (4 - (nv * 6) % 4) % 4
+        off += nv * 4  # normals
         off += nv * 4  # colors
-        uv = np.frombuffer(data, np.float32, nv * 2, off).reshape(-1, 2)
-        off += nv * 8
+        uv = np.frombuffer(data, np.uint16, nv * 2, off).reshape(-1, 2) / 65535.0
+        off += nv * 4
         idx = np.frombuffer(data, np.uint16, ni, off)
         off += ni * 2
         off += (4 - (ni * 2) % 4) % 4

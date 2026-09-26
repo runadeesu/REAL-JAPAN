@@ -19,7 +19,8 @@
 | 設定ファイル | ✅ | 既定値 `data/config/default.ini`、ユーザー設定 `%APPDATA%\RealJapan\settings.ini`（ゲーム内で変更・自動保存） |
 | セーブデータ機能 | ✅ | 3 スロット＋オートセーブ（5 分ごと・終了時）、`%APPDATA%\RealJapan\saves\`、ポータブルモード |
 | ランチャー／直接起動 | ✅ | 直接起動（EXE ダブルクリック） |
-| Release Build | ✅ | `-O3`、シンボル除去、アイコン・バージョン情報・マニフェスト（DPI 対応・UTF-8 コードページ）埋め込み |
+| Release Build | ✅ | `-O3`、シンボル除去、アイコン・バージョン情報・マニフェスト（DPI 対応・UTF-8 コードページ）埋め込み。配布 ZIP 28.7 MiB |
+| 起動確認 | ✅（Wine） | 配布 ZIP を日本語を含むパスに展開し、新規 Wine 環境で `RealJapan.exe --selftest`（ワールド読込・新規開始・セーブ/ロード・設定保存・日英・住民）15 項目合格 |
 | 日本語・英語 | ✅ | 全 UI を `data/lang/ja.lang` / `en.lang` で切替（ゲーム内設定から即時反映） |
 | コード署名 | ⬜ | 未署名。初回に SmartScreen の警告が出る |
 | インストーラ | ⬜ | ZIP 展開のみ（インストール不要） |

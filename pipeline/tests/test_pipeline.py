@@ -144,4 +144,5 @@ def test_rjcell_roundtrip():
     assert c["mesh"] == "53393586" and c["buildings"][0]["name"] == "名前"
     assert c["chunks"][0]["page"] == 0 and c["chunks"][0]["nv"] == 3
     assert c["terrain"].shape == (3, 3) and c["pages"] == [b"JPEG-fake"]
-    assert struct.unpack_from("<8s", w.to_bytes())[0] == b"RJCELL02"
+    assert struct.unpack_from("<8s", w.to_bytes())[0] == b"RJCELL03"
+    assert np.allclose(c["chunks"][0]["pos"], pos, atol=1e-3) and np.allclose(c["chunks"][0]["uv"], [[0, 0], [1, 0], [0, 1]], atol=1e-4)

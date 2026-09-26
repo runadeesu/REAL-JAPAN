@@ -61,12 +61,32 @@ void releaseVertexCopies(Mesh& m) {
 
 }  // namespace
 
-bool parseCell(const std::vector<unsigned char>& data, CellCpu& c, std::string& err) {
+bool parseCell(const std::vector<unsigned char>& file, CellCpu& c, std::string& err) {
+  // File = "RJCELL03" + u32 body_len + raw DEFLATE(body).
+  if (file.size() < 12 || std::memcmp(file.data(), "RJCELL03", 8) != 0) {
+    err = "bad magic (expected RJCELL03; re-cook the world data)";
+    return false;
+  }
+  uint32_t body_len = 0;
+  std::memcpy(&body_len, file.data() + 8, 4);
+  if (body_len > 60u * 1024u * 1024u) {
+    err = "cell body too large";
+    return false;
+  }
+  int out_len = 0;
+  unsigned char* raw = DecompressData(file.data() + 12, static_cast<int>(file.size() - 12), &out_len);
+  if (!raw || static_cast<uint32_t>(out_len) != body_len) {
+    if (raw) MemFree(raw);
+    err = "decompression failed";
+    return false;
+  }
+  const std::vector<unsigned char> data(raw, raw + out_len);
+  MemFree(raw);
   Reader r(data);
   char magic[8];
   r.bytes(magic, 8);
-  if (!r.ok() || std::memcmp(magic, "RJCELL02", 8) != 0) {
-    err = "bad magic (expected RJCELL02; re-cook the world data)";
+  if (!r.ok() || std::memcmp(magic, "RJCELL03", 8) != 0) {
+    err = "bad body magic";
     return false;
   }
   char mesh[16];
@@ -121,20 +141,30 @@ bool parseCell(const std::vector<unsigned char>& data, CellCpu& c, std::string& 
   for (auto& ch : c.chunks) {
     const uint32_t nv = r.get<uint32_t>(), ni = r.get<uint32_t>();
     ch.page = r.get<int32_t>();
+    const float scale = r.get<float>();
     if (!r.ok() || nv > 65535) {
       err = "bad chunk";
       return false;
     }
+    // Dequantise: i16 positions * scale, i8 normals / 127, u16 uv / 65535.
+    std::vector<int16_t> qp(nv * 3);
+    std::vector<int8_t> qn(nv * 4);
+    std::vector<uint16_t> qu(nv * 2);
+    r.bytes(qp.data(), qp.size() * 2);
+    r.skip((4 - (nv * 6) % 4) % 4);
+    r.bytes(qn.data(), qn.size());
+    ch.col.resize(nv * 4);
+    r.bytes(ch.col.data(), ch.col.size());
+    r.bytes(qu.data(), qu.size() * 2);
+    ch.idx.resize(ni);
+    r.bytes(ch.idx.data(), ch.idx.size() * 2);
     ch.pos.resize(nv * 3);
     ch.nrm.resize(nv * 3);
-    ch.col.resize(nv * 4);
     ch.uv.resize(nv * 2);
-    ch.idx.resize(ni);
-    r.bytes(ch.pos.data(), ch.pos.size() * 4);
-    r.bytes(ch.nrm.data(), ch.nrm.size() * 4);
-    r.bytes(ch.col.data(), ch.col.size());
-    r.bytes(ch.uv.data(), ch.uv.size() * 4);
-    r.bytes(ch.idx.data(), ch.idx.size() * 2);
+    for (size_t k = 0; k < qp.size(); ++k) ch.pos[k] = static_cast<float>(qp[k]) * scale;
+    for (size_t v = 0; v < nv; ++v)
+      for (int a = 0; a < 3; ++a) ch.nrm[v * 3 + a] = static_cast<float>(qn[v * 4 + a]) / 127.0f;
+    for (size_t k = 0; k < qu.size(); ++k) ch.uv[k] = static_cast<float>(qu[k]) / 65535.0f;
     r.skip((4 - (ni * 2) % 4) % 4);
   }
   c.theight.resize(static_cast<size_t>(c.tnx) * static_cast<size_t>(c.tny));

@@ -7,14 +7,15 @@
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git python3 python3-pip \
   mingw-w64 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev
-pip install numpy pillow mapbox-earcut
+pip install numpy pillow mapbox-earcut fonttools pytest
 # 任意（Windows EXE の起動確認）: sudo apt-get install -y wine64 xvfb
 ```
 
 ## 2. 依存ソースとフォント
 
 ```bash
-tools/fetch_deps.sh        # third_party/raylib (5.5) と BIZ UDPゴシック (OFL) を取得
+tools/fetch_deps.sh        # third_party/raylib (5.5) と BIZ UDPゴシック (OFL) を取得し、フォントを
+                           # JIS 第1・第2水準＋ゲーム内の全文字にサブセット化（要 pip install fonttools）
 ```
 
 ## 3. 実データの取得とクック

@@ -102,5 +102,5 @@ class Atlas:
     def jpeg(self, quality: int = 88) -> bytes:
         buf = io.BytesIO()
         assert self.image is not None
-        self.image.save(buf, format="JPEG", quality=quality, optimize=True, subsampling=0)
+        self.image.save(buf, format="JPEG", quality=quality, optimize=True, subsampling=2)
         return buf.getvalue()
