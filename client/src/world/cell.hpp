@@ -9,6 +9,7 @@
 
 #include "raylib.h"
 #include "rj/geo/local_frame.hpp"
+#include "world/detail.hpp"
 
 namespace rjc {
 
@@ -27,6 +28,8 @@ struct BuildingInfo {
   float ground_z = 0.0f;
   float bmin[3] = {0, 0, 0}, bmax[3] = {0, 0, 0};  // cell-local ENU
   uint32_t fp_first = 0, fp_count = 0;
+  int32_t chunk = -1;     // first render chunk of the building
+  bool textured = false;  // faces carry PLATEAU photo textures (real facade imagery)
 };
 
 struct CellCpu {
@@ -50,6 +53,7 @@ struct CellCpu {
   std::vector<unsigned short> tidx;
   Image ground{};  // decoded ground texture (CPU)
   std::vector<Image> pages;  // decoded photo atlases (CPU), uploaded then freed
+  CellDetailCpu detail;      // street-level detail (RJDET), optional
   size_t bytes = 0;
 };
 
@@ -62,6 +66,7 @@ struct CellGpu {
   std::vector<Texture2D> pages;
   Mesh terrain{};
   Texture2D ground{};
+  CellDetailGpu detail;
   bool uploaded = false;
 };
 

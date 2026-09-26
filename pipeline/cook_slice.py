@@ -26,6 +26,9 @@ from realjapan_pipeline.atlas import Atlas, fetch_images  # noqa: E402
 from realjapan_pipeline.citygml import iter_buildings, iter_furniture, iter_roads, parse_appearance  # noqa: E402
 from realjapan_pipeline.dem_gsi import DemSampler  # noqa: E402
 from realjapan_pipeline.geodesy import LocalFrame, Mesh  # noqa: E402
+from realjapan_pipeline.streetdetail import (MARKING_CODES, TerrainSampler, build_furniture, build_markings,  # noqa: E402
+                                             build_sidewalks, group_signals)
+from realjapan_pipeline.streetdetail import encode as encode_detail  # noqa: E402
 from realjapan_pipeline.interior import build_interior, opening_outlines, parse_underground, street_openings  # noqa: E402
 from realjapan_pipeline.rjcell import (  # noqa: E402
     GEOM_VERIFIED_EXTERIOR, INTERIOR_UNKNOWN, BuildingRec, CellWriter)
@@ -43,16 +46,6 @@ GROUND_COLORS = {"base": (150, 146, 136), "road": (72, 72, 76), "sidewalk": (190
                  "footprint": (85, 82, 76)}
 TEX = 2048
 
-# PLATEAU CityFurniture_function codes (codelist) -> render treatment.
-MARKING_CODES = range(1000, 1300)          # 道路標示・区画線・横断歩道・停止線 -> painted into the ground texture
-FURNITURE_COLORS = {2000: (150, 150, 146),  # 柵・壁
-                    4800: (96, 98, 102), 4810: (96, 98, 102), 4820: (96, 98, 102), 4830: (96, 98, 102),
-                    4840: (120, 116, 108),  # 電柱
-                    4200: (118, 120, 124),  # 照明施設
-                    4900: (58, 60, 64),     # 交通信号機
-                    4020: (132, 130, 126), 4010: (150, 150, 150), 4030: (150, 150, 150),
-                    8010: (120, 130, 140)}  # 停留所
-DEFAULT_FURNITURE = (128, 128, 128)
 
 
 def jitter(bid: str) -> float:
@@ -158,7 +151,7 @@ def building_mesh(b, frame: LocalFrame, app=None, atlas: Atlas | None = None):
     return out, ground
 
 
-def rasterize_ground(bounds, roads, buildings, markings=(), holes=()) -> bytes:
+def rasterize_ground(bounds, roads, buildings, markings=(), holes=()) -> tuple[bytes, bytes]:
     """Ground colour raster; `holes` (street-level openings of underground spaces) become transparent
     so the client can cut them out of the terrain and show the real stairwell below."""
     min_lat, min_lon, max_lat, max_lon = bounds
@@ -184,9 +177,21 @@ def rasterize_ground(bounds, roads, buildings, markings=(), holes=()) -> bytes:
                         d.polygon(px(hole), fill=GROUND_COLORS["base"])
     for poly in markings:  # real road markings (crosswalks, lane lines, stop lines) from PLATEAU frn
         d.polygon(px(poly.exterior), fill=(226, 226, 220))
+    fpm = Image.new("L", (W, H), 0)
+    fd = ImageDraw.Draw(fpm)
     for b in buildings:
         if b.footprint:
             d.polygon(px(b.footprint), fill=GROUND_COLORS["footprint"])
+            fd.polygon(px(b.footprint), fill=255)
+    # Contact occlusion at building feet (~1.5 m falloff), kept separate from the colours so the
+    # client can still classify the ground material from them (stored in the cell's RJDET).
+    from PIL import ImageFilter
+    ao = np.asarray(fpm.filter(ImageFilter.GaussianBlur(radius=5)), np.float32) / 255.0
+    shade = 1.0 - 0.45 * np.clip(ao * 1.6, 0.0, 1.0)
+    shade[np.asarray(fpm) > 0] = 1.0
+    ao_img = Image.fromarray(np.clip(shade * 255.0, 0, 255).astype(np.uint8), "L").resize((TEX, TEX), Image.BILINEAR)
+    abuf = io.BytesIO()
+    ao_img.save(abuf, format="PNG", optimize=True)
     img = img.resize((TEX, TEX), Image.LANCZOS)
     # Few flat colours + anti-aliased edges: an adaptive 64-colour palette is visually lossless here.
     img = img.quantize(colors=63, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
@@ -206,7 +211,7 @@ def rasterize_ground(bounds, roads, buildings, markings=(), holes=()) -> bytes:
             save["transparency"] = 63
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True, **save)
-    return buf.getvalue()
+    return buf.getvalue(), abuf.getvalue()
 
 
 def main() -> int:
@@ -323,41 +328,6 @@ def main() -> int:
             elif b.usage in (401, 402, 403, 404, 421, 422, 431, 441):
                 workplaces.append(entry)
 
-        # Street furniture (PLATEAU frn): markings -> ground texture, the rest -> 3D meshes snapped to terrain.
-        markings, n_frn = [], 0
-        fpath = os.path.join(a.raw, "plateau", f"{mesh}_frn_6697_op.gml")
-        if os.path.exists(fpath):
-            for f in iter_furniture(fpath):
-                if f.function in MARKING_CODES:
-                    markings.extend(f.polys)
-                    continue
-                P, N, C, I, base = [], [], [], [], 0
-                colr = FURNITURE_COLORS.get(f.function, DEFAULT_FURNITURE) + (255,)
-                for poly in f.polys:
-                    v, t, nrm_ = triangulate(to_local(frame, poly.exterior), [to_local(frame, h) for h in poly.interiors])
-                    if len(t) == 0:
-                        continue
-                    P.append(v)
-                    N.append(np.repeat(nrm_[None, :], len(v), axis=0))
-                    C.append(np.repeat(np.array([colr], dtype=np.uint8), len(v), axis=0))
-                    I.append(t.reshape(-1) + base)
-                    base += len(v)
-                if not P:
-                    continue
-                pos = np.vstack(P)
-                if len(pos) > CellWriter.MAX_VERTS:
-                    continue
-                # Snap the item's base onto our terrain (survey heights vs DEM can differ by decimetres).
-                ring = f.polys[0].exterior
-                la_c = sum(p[0] for p in ring) / len(ring)
-                lo_c = sum(p[1] for p in ring) / len(ring)
-                hh = dem.height(la_c, lo_c)
-                if not math.isnan(hh):
-                    pos[:, 2] += frame.to_local(la_c, lo_c, hh)[2] - pos[:, 2].min()
-                w.add_geometry(pos, np.vstack(N), np.vstack(C), np.concatenate(I))
-                n_frn += 1
-            print(f"  furniture: {n_frn} objects, {len(markings)} marking polygons", flush=True)
-
         # Terrain grid over the cell bounds (shared edges -> seamless neighbours).
         n = a.terrain_n
         lat0, lon0, lat1, lon1 = bounds
@@ -369,7 +339,31 @@ def main() -> int:
                 hh = dem.height(la, lo)
                 hz[i, jj] = frame.to_local(la, lo, anchor_h if math.isnan(hh) else hh)[2]
         w.set_terrain(hz, lat0, lon0, dlat, dlon)
-        w.ground_png = rasterize_ground(bounds, roads, blds, markings, openings)
+
+        # Street-level detail (RJDET): raised sidewalks + curbs, marking decals, street furniture with
+        # materials, street lights and traffic signals. Markings are also painted into the ground raster
+        # so they still read at distance.
+        terrain = TerrainSampler(hz, lat0, lon0, dlat, dlon, frame)
+        furniture = []
+        fpath = os.path.join(a.raw, "plateau", f"{mesh}_frn_6697_op.gml")
+        if os.path.exists(fpath):
+            furniture = list(iter_furniture(fpath))
+        markings, marking_codes = [], []
+        for f in furniture:
+            if f.function in MARKING_CODES:
+                markings.extend(f.polys)
+                marking_codes.extend([f.function] * len(f.polys))
+        geos, walk_tris, lights, signals, cross_tris = {}, [], [], [], []
+        raised = build_sidewalks(roads, [rec.footprint for rec in w.buildings], frame, to_local, terrain, geos, walk_tris)
+        build_markings(markings, frame, to_local, triangulate, terrain, raised, geos, cross_tris, marking_codes)
+        build_furniture(furniture, frame, to_local, triangulate, terrain, raised, geos, lights, signals)
+        group_signals(signals)
+        w.ground_png, ground_ao = rasterize_ground(bounds, roads, blds, markings, openings)
+        # Walkable tops are the sidewalk/island render chunks themselves; the client derives them.
+        det, dst = encode_detail(geos, [], lights, signals, cross_tris, ground_ao)
+        with open(os.path.join(out, "cells", f"{mesh}.rjdet"), "wb") as f:
+            f.write(det)
+        print(f"  street detail: {dst} -> {len(det) / 1e6:.2f} MB", flush=True)
 
         data = w.to_bytes()
         with open(os.path.join(out, "cells", f"{mesh}.rjcell"), "wb") as f:

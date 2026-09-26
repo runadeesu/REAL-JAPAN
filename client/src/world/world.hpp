@@ -55,6 +55,21 @@ struct LoadedCell {
   std::vector<float> zmin, zmax;
   std::vector<float> tx, ty, tz;  // terrain grid
   Vector2 ex{}, ey{}, p00{};      // affine approximation of the terrain grid
+  // Street detail in origin ENU.
+  std::vector<float> walk;                 // raised walkable triangles (9 floats each)
+  std::unordered_map<int64_t, std::vector<uint32_t>> walk_hash;  // 4 m buckets -> triangle index
+  std::vector<float> cross;                // crosswalk triangles
+  struct Light {
+    rj::geo::Vec3d pos;
+    float range;
+  };
+  std::vector<Light> lights;
+  struct Signal {
+    rj::geo::Vec3d pos;
+    float axis_yaw, facing_yaw, length;
+    int kind, group, phase;
+  };
+  std::vector<Signal> signals;
 };
 
 class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
@@ -74,6 +89,10 @@ class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
   void unloadAll();
 
   std::optional<double> terrainHeight(double x, double y) const;
+  // Walkable surface: raised sidewalks / traffic islands (real PLATEAU areas) where present, else terrain.
+  std::optional<double> surfaceHeight(double x, double y) const;
+  bool onCrosswalk(double x, double y) const;
+  bool pointInBuilding(double x, double y) const;  // inside any PLATEAU footprint
   void collide(rj::geo::Vec3d& p, double radius) const;
   struct Hit {
     const BuildingInfo* building = nullptr;

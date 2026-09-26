@@ -23,7 +23,13 @@ struct Player {
   float auto_forward_s = 0.0f;  // scripted forward walking (tests / demos)
   bool left_interior = false;   // set by update(): walked out of a stairwell onto the pavement
 
-  static constexpr float kEyeHeight = 1.60f;
+  static constexpr float kEyeHeight = 1.70f;  // adult eye level (feet -> eyes)
+  // Camera comfort: eye height smoothed over kerbs / stairs, optional head bob.
+  double cam_z = 0.0;
+  bool cam_z_init = false;
+  float bob_phase = 0.0f;
+  float bob_amount = 0.0f;  // 0..1 (walking speed based)
+  bool head_bob = true;
   static constexpr float kRadius = 0.35f;
 
   // inside: the verified interior the player is in; nearby (when outside): an interior whose
@@ -33,6 +39,7 @@ struct Player {
   void snapToGround(const World& world);
   Camera3D camera(float fov_deg, float third_person_dist = 4.5f) const;
   rj::geo::Vec3d eyeEnu() const { return {pos.x, pos.y, pos.z + kEyeHeight}; }
+  rj::geo::Vec3d cameraEyeEnu() const;  // smoothed + head movement (rendering only)
   rj::geo::Vec3d forwardEnu() const;
 };
 

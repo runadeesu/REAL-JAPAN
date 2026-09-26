@@ -1,6 +1,7 @@
 #include "app.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <ctime>
 #include <set>
@@ -250,6 +251,14 @@ void App::applyLaunchOverrides() {
     player_.fly = true;
     player_.pos.z += opt_.alt;
   }
+  if (!opt_.weather.empty()) {
+    WeatherKind k;
+    if (parseWeather(opt_.weather, k)) {
+      weather_.set(k, true);
+      weather_.setAuto(false);
+    }
+  }
+  if (opt_.dev) settings_.dev_overlay = true;
   rj::sim::CivilDate d;
   int hh, mm;
   if (!opt_.time_jst.empty() && parseJst(opt_.time_jst, d, hh, mm))
@@ -266,7 +275,13 @@ void App::update(float dt) {
 
   // Stream the world around the current viewpoint.
   rj::geo::Vec3d focus = (in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0});
-  if (world_.update(focus, settings_.view_distance_m) && in_session_) player_.pos = focus;
+  if (world_.update(focus, settings_.view_distance_m)) {
+    if (in_session_) player_.pos = focus;
+    facades_.clear();  // facade meshes live in origin coordinates
+  }
+  if (in_session_ && screen_ != Screen::Loading) facades_.update(world_, player_.pos, opt_.screenshot.empty() ? 6 : 60);
+  if (frame_ % 60 == 0) signals_.rebuild(world_);
+  signals_.update(GetTime());
 
   if (screen_ == Screen::Loading) {
     if (world_.residentCount() >= world_.knownCount() || (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > 600)) {
@@ -407,6 +422,10 @@ void App::update(float dt) {
           phone_app_ = PhoneApp::Home;
         }
         if (IsKeyPressed(KEY_F5)) saveSlot(1);
+        if (IsKeyPressed(KEY_F3)) {
+          settings_.dev_overlay = !settings_.dev_overlay;
+          saveSettings();
+        }
       } else {
         hover_.reset();
         hover_walker_ = nullptr;
@@ -436,8 +455,27 @@ void App::update(float dt) {
   (void)t;
   const auto g = world_.toGeodetic(in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0});
   const auto sun = rj::env::sunPosition(clock_.unixUtc(), g.lat_deg, g.lon_deg);
-  lighting_ = lightingForSun(static_cast<float>(sun.elevation_deg), static_cast<float>(sun.azimuth_deg),
-                             static_cast<float>(settings_.view_distance_m));
+  const int64_t now_unix = clock_.unixUtc();
+  const double game_dt = weather_prev_unix_ ? static_cast<double>(now_unix - weather_prev_unix_) : 0.0;
+  weather_prev_unix_ = now_unix;
+  render_time_ += dt;
+  weather_.update(game_dt, dt, static_cast<float>(sun.elevation_deg));
+  lighting_ = computeLighting(static_cast<float>(sun.elevation_deg), static_cast<float>(sun.azimuth_deg), weather_.now(),
+                              weather_.wetness(), weather_.lightning(), Vector2{weather_.cloudOffsetX(), weather_.cloudOffsetY()});
+  {
+    // Lit-window fractions by local time (office / residential / shop) — game-side assumption.
+    const auto jt = clock_.jst();
+    const float h = static_cast<float>(jt.hour) + static_cast<float>(jt.minute) / 60.0f;
+    const int wd = rj::sim::weekday(jt.date);
+    const bool weekend = wd == 0 || wd == 6 || rj::sim::isHoliday(jt.date);
+    auto band = [&](float a, float b) { return h >= a && h < b; };
+    const float office = band(8, 19) ? (weekend ? 0.3f : 0.85f) : band(19, 22) ? (weekend ? 0.12f : 0.45f) : 0.07f;
+    const float resid = band(6, 8) ? 0.35f : band(8, 17) ? 0.15f : band(17, 24) ? 0.6f : 0.06f;
+    const float shop = band(10, 21) ? 0.9f : band(21, 24) ? 0.4f : band(7, 10) ? 0.3f : 0.1f;
+    lighting_.occupancy = Vector3{office, resid, shop};
+  }
+  // Keep the end of the drawn world inside the haze.
+  lighting_.fog_density = std::max(lighting_.fog_density, 1.1f / (static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f));
   // Underground: blend to artificial light as the eye drops below the street surface, so stairwells
   // near an entrance still see daylight and the sky.
   underground_ = 0.0f;
@@ -563,28 +601,76 @@ Camera3D App::titleCamera() const {
   return c;
 }
 
+std::vector<PointLight> App::collectLights(const Camera3D& cam) const {
+  std::vector<PointLight> out;
+  if (lighting_.night < 0.03f || lighting_.indoor > 0.9f) return out;
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  struct Cand {
+    double d2;
+    PointLight l;
+  };
+  std::vector<Cand> cand;
+  const float k = lighting_.night;
+  for (const auto& [code, cell] : world_.cells())
+    for (const auto& l : cell->lights) {  // real street-light heads (PLATEAU frn 4200)
+      const double dx = l.pos.x - c.x, dy = l.pos.y - c.y;
+      const double d2 = dx * dx + dy * dy;
+      if (d2 > 180.0 * 180.0) continue;
+      cand.push_back({d2, {enuToRl(l.pos), l.range * 1.4f, Vector3Scale(Vector3{1.0f, 0.90f, 0.76f}, 26.0f * k)}});
+    }
+  std::vector<rj::geo::Vec3d> shops;
+  facades_.collectLights(c, 90.0, shops);  // lit shop fronts spill onto the sidewalk
+  for (const auto& p : shops) {
+    const double dx = p.x - c.x, dy = p.y - c.y;
+    cand.push_back({dx * dx + dy * dy + 400.0, {enuToRl(p), 9.0f, Vector3Scale(Vector3{1.0f, 0.93f, 0.82f}, 7.0f * std::max(k, 0.25f) * lighting_.occupancy.z)}});
+  }
+  std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
+  for (size_t i = 0; i < cand.size() && out.size() < 24; ++i) out.push_back(cand[i].l);
+  return out;
+}
+
 void App::drawWorldView(const Camera3D& cam) {
   const Interior* in = (screen_ != Screen::Title) ? insideInterior() : nullptr;
   const bool deep = in && underground_ > 0.98f;  // nothing of the outside is visible any more
-  const bool shadows = settings_.shadows && underground_ < 0.5f;
-  if (shadows) renderer_.renderShadowMap(cam, world_, lighting_);
+  RenderOptions ro;
+  static const bool no_shadows = std::getenv("RJ_NO_SHADOWS") != nullptr;  // debug isolation
+  ro.shadows = settings_.shadows && underground_ < 0.5f && !no_shadows;
+  ro.post = settings_.post_fx;
+  ro.ssao = settings_.post_fx;
+  ro.bloom = settings_.post_fx;
+  if (ro.shadows) {
+    std::vector<const Mesh*> casters;
+    facades_.forEachMesh([&](const Mesh& m, int lod) {
+      if (lod == 0) casters.push_back(&m);
+    });
+    renderer_.renderShadowMaps(cam, world_, lighting_, casters);
+  }
+  // Indoors walls can be 0.3 m from the eye: pull the near plane in so it never cuts through them.
+  Renderer::setClipPlanes(in ? 0.08f : 0.2f, static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
+  renderer_.beginScene(ro, lighting_, cam, render_time_);
   ClearBackground(deep ? Color{58, 58, 60, 255} : BLACK);
   const float aspect = static_cast<float>(GetScreenWidth()) / static_cast<float>(std::max(1, GetScreenHeight()));
   if (!deep) renderer_.drawSky(cam, lighting_, aspect);
-  // Indoors walls can be 0.3 m from the eye: pull the near plane in so it never cuts through them.
-  Renderer::setClipPlanes(in ? 0.08f : 0.3f, static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
+  renderer_.setLights(collectLights(cam));
   BeginMode3D(cam);
-  renderer_.drawWorld(cam, world_, lighting_, shadows, settings_.photo_textures, !in);
+  renderer_.drawWorld(cam, world_, settings_.photo_textures, !in);
+  static const bool no_facades = std::getenv("RJ_NO_FACADES") != nullptr;      // debug isolation
+  static const bool no_int_out = std::getenv("RJ_NO_INTERIOR_OUT") != nullptr;
+  if (!deep) {
+    if (!no_facades) renderer_.drawFacades(facades_);
+    renderer_.drawSignals(signals_, cam);
+  }
   if (in) {
-    renderer_.drawInterior(*in, cam, lighting_);
-  } else if (in_session_ && screen_ != Screen::Title) {
+    renderer_.drawInterior(*in);
+  } else if (in_session_ && screen_ != Screen::Title && !no_int_out) {
     // From the street the stairs are visible through the real openings cut into the pavement.
-    for (const auto& [id, interior] : world_.interiors()) renderer_.drawInterior(*interior, cam, lighting_);
+    for (const auto& [id, interior] : world_.interiors()) renderer_.drawInterior(*interior);
   }
   if (in_session_ && screen_ != Screen::Title && !deep) renderer_.drawPedestrians(peds_);
-  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title)
-    renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw, lighting_);
+  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title) renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
+  renderer_.drawRain(cam, lighting_, render_time_);
   EndMode3D();
+  renderer_.endScene(cam, lighting_, render_time_);
 }
 
 void App::draw() {
@@ -716,7 +802,7 @@ void App::drawSettings() {
   ui_.panel({x - 30, 20, w + 60, 1045});
   ui_.text(tr("settings.title"), x, 38, 44, theme::kText);
   float y = 105;
-  const float rh = 60, gap = 8;
+  const float rh = 52, gap = 6;
   auto onoff = [&](bool v) { return tr(v ? "settings.on" : "settings.off"); };
   bool changed = false;
 
@@ -810,6 +896,16 @@ void App::drawSettings() {
     settings_.photo_textures = !settings_.photo_textures;
     changed = true;
   }
+  y += rh + gap;
+  if (ui_.stepper({x, y, w, rh}, tr("settings.post_fx"), onoff(settings_.post_fx))) {
+    settings_.post_fx = !settings_.post_fx;
+    changed = true;
+  }
+  y += rh + gap;
+  if (ui_.stepper({x, y, w, rh}, tr("settings.head_bob"), onoff(settings_.head_bob))) {
+    settings_.head_bob = !settings_.head_bob;
+    changed = true;
+  }
   y += rh + gap + 6;
   if (changed) saveSettings();
   ui_.text(tr("settings.saved_note"), x, y + 18, 24, theme::kMuted);
@@ -879,7 +975,21 @@ void App::drawHud() {
   const float vw = ui_.vw();
   const auto g = world_.toGeodetic(player_.pos);
   const auto t = jst();
-  // Top-left: time, place, money.
+  const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
+  if (!settings_.dev_overlay) {
+    // Immersive view: no panels. A faint dot, context prompts and the first-minute controls hint only.
+    if (screen_ == Screen::Game && player_.camera_mode == 0) DrawCircle(cx, cy, 1.6f * ui_.scale(), Color{255, 255, 255, 150});
+    if (screen_ == Screen::Game && !prompt_.empty()) {
+      const float w = ui_.measure(prompt_, 28) + 50;
+      ui_.panel({(vw - w) / 2, 780, w, 54}, Color{0, 0, 0, 150});
+      ui_.textCentered(prompt_, vw / 2, 791, 28, theme::kText);
+    }
+    if (session_t_ < 20.0f && screen_ == Screen::Game)
+      ui_.textCentered(tr("hud.controls_short"), vw / 2, 1030, 22,
+                       Color{255, 255, 255, static_cast<unsigned char>(std::min(1.0f, (20.0f - session_t_) / 3.0f) * 190)});
+    return;
+  }
+  // Developer overlay (F3): time, place, coordinates, mesh, building data, performance.
   ui_.panel({20, 20, 640, 170});
   ui_.text(dateTimeString(), 40, 34, 40, theme::kText);
   if (auto hol = rj::sim::holidayName(t.date)) ui_.text(std::string(*hol), 470, 44, 26, theme::kWarn);
@@ -893,8 +1003,16 @@ void App::drawHud() {
   ui_.textRight(tr(player_.fly ? "hud.fly" : "hud.walk"), 640, 148, 24, player_.fly ? theme::kWarn : theme::kMuted);
   if (!world_.insideData(g.lat_deg, g.lon_deg)) ui_.text(tr("hud.out_of_data"), 40, 200, 24, theme::kWarn);
 
+  {
+    const std::string perf = i18n_.f("hud.perf", {{"fps", std::to_string(GetFPS())},
+                                                  {"dc", std::to_string(renderer_.drawCalls())},
+                                                  {"tri", fixed(static_cast<double>(renderer_.triangles()) / 1e6, 2)},
+                                                  {"exp", fixed(renderer_.exposure(), 2)}}) +
+                             "  ·  " + tr(std::string("weather.") + weatherKey(weather_.kind())) +
+                             (weather_.wetness() > 0.02f ? "  ·  " + i18n_.f("hud.wet", {{"n", std::to_string(static_cast<int>(weather_.wetness() * 100))}}) : "");
+    ui_.text(perf, 40, 196, 22, theme::kMuted);
+  }
   // Crosshair.
-  const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
   if (screen_ == Screen::Game && player_.camera_mode == 0) {
     DrawCircleLines(cx, cy, 6 * ui_.scale(), Color{255, 255, 255, 180});
     DrawPixel(cx, cy, WHITE);

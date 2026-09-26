@@ -133,7 +133,8 @@ bool parseCell(const std::vector<unsigned char>& file, CellCpu& c, std::string& 
     for (float& v : b.bmax) v = r.get<float>();
     b.fp_first = r.get<uint32_t>();
     b.fp_count = r.get<uint32_t>();
-    r.skip(12);  // chunk, first_index, index_count (whole chunks are drawn)
+    b.chunk = static_cast<int32_t>(r.get<uint32_t>());
+    r.skip(8);  // first_index, index_count (whole chunks are drawn)
   }
   c.footprints.resize(static_cast<size_t>(nfp) * 2);
   r.bytes(c.footprints.data(), c.footprints.size() * sizeof(float));
@@ -183,6 +184,8 @@ bool parseCell(const std::vector<unsigned char>& file, CellCpu& c, std::string& 
     err = "truncated body";
     return false;
   }
+  for (auto& b : c.buildings)
+    b.textured = b.chunk >= 0 && b.chunk < static_cast<int32_t>(c.chunks.size()) && c.chunks[static_cast<size_t>(b.chunk)].page >= 0;
   if (png_len) c.ground = LoadImageFromMemory(".png", png.data(), static_cast<int>(png_len));
   for (const auto& j : jpgs) c.pages.push_back(LoadImageFromMemory(".jpg", j.data(), static_cast<int>(j.size())));
   c.bytes = data.size();

@@ -184,7 +184,7 @@ void Pedestrians::update(TownSim& town, const World& world, const rj::sim::Civil
     w.dist += kWalkSpeed * real_dt;
     w.phase += real_dt * 7.5f;
     w.pos = rj::nav::GridNav::pointAt(w.path, w.dist, &w.dir);
-    if (auto h = world.terrainHeight(w.pos.x, w.pos.y)) w.z = static_cast<float>(*h);
+    if (auto h = world.surfaceHeight(w.pos.x, w.pos.y)) w.z = static_cast<float>(*h);
     const bool far = std::hypot(w.pos.x - me.x, w.pos.y - me.y) > kVisibleRadius * 1.3;
     if (w.dist >= w.length || far) it = walkers_.erase(it);
     else ++it;

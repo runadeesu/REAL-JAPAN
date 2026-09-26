@@ -2,228 +2,221 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "raymath.h"
+#include "render/shaders.hpp"
 #include "rlgl.h"
 #include "world/coords.hpp"
+#include "world/detail.hpp"
 
 namespace rjc {
 namespace {
 
-const char* kLitVs = R"(#version 330
-in vec3 vertexPosition;
-in vec2 vertexTexCoord;
-in vec3 vertexNormal;
-in vec4 vertexColor;
-uniform mat4 mvp;
-uniform mat4 matModel;
-uniform mat4 matNormal;
-out vec3 fragPos;
-out vec3 fragNormal;
-out vec4 fragColor;
-out vec2 fragUV;
-void main() {
-  fragPos = vec3(matModel * vec4(vertexPosition, 1.0));
-  fragNormal = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
-  fragColor = vertexColor;
-  fragUV = vertexTexCoord;
-  gl_Position = mvp * vec4(vertexPosition, 1.0);
-}
-)";
+// Texture units reserved for per-frame textures (slot 0 = material diffuse, 1-4 = rlgl batch).
+constexpr int kSlotAO = 5, kSlotNoise = 6, kSlotAsphalt = 7, kSlotAsphaltN = 8, kSlotPaving = 9, kSlotPavingN = 10,
+              kSlotShadow0 = 11, kSlotShadow1 = 12;
 
-const char* kLitFs = R"(#version 330
-in vec3 fragPos;
-in vec3 fragNormal;
-in vec4 fragColor;
-in vec2 fragUV;
-uniform sampler2D texture0;
-uniform vec4 colDiffuse;
-uniform int useTexture;
-uniform vec3 sunDir;
-uniform vec3 sunColor;
-uniform vec3 ambientSky;
-uniform vec3 ambientGround;
-uniform vec3 fogColor;
-uniform float fogDensity;
-uniform vec3 viewPos;
-uniform mat4 lightVP;
-uniform sampler2D shadowMap;
-uniform int shadowsOn;
-uniform float shadowTexel;
-out vec4 finalColor;
-
-vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
-vec3 aces(vec3 x) {
-  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
-float shadowFactor(vec3 n) {
-  vec4 ls = lightVP * vec4(fragPos + n * 0.15, 1.0);
-  vec3 p = ls.xyz / ls.w * 0.5 + 0.5;
-  if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
-  float bias = 0.0006;
-  float lit = 0.0;
-  for (int x = -1; x <= 1; x++)
-    for (int y = -1; y <= 1; y++) {
-      float d = texture(shadowMap, p.xy + vec2(x, y) * shadowTexel).r;
-      lit += (p.z - bias > d) ? 0.0 : 1.0;
-    }
-  return lit / 9.0;
-}
-void main() {
-  vec3 base = toLinear(fragColor.rgb * colDiffuse.rgb);
-  if (useTexture == 1) {
-    vec4 t = texture(texture0, fragUV);
-    if (t.a < 0.5) discard;  // ground raster alpha = real openings (stairwells) in the pavement
-    base *= toLinear(t.rgb);
-  }
-  vec3 n = normalize(fragNormal);
-  if (!gl_FrontFacing) n = -n;
-  float ndl = max(dot(n, sunDir), 0.0);
-  float sh = 1.0;
-  if (shadowsOn == 1 && ndl > 0.0) sh = shadowFactor(n);
-  float hemi = n.y * 0.5 + 0.5;
-  vec3 amb = mix(ambientGround, ambientSky, hemi);
-  vec3 col = base * (amb + sunColor * ndl * sh);
-  float d = length(viewPos - fragPos);
-  float f = 1.0 - exp(-d * fogDensity);
-  col = mix(col, toLinear(fogColor), clamp(f, 0.0, 1.0));
-  col = aces(col * 0.9);
-  finalColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
-}
-)";
-
-const char* kDepthVs = R"(#version 330
-in vec3 vertexPosition;
-uniform mat4 mvp;
-void main() { gl_Position = mvp * vec4(vertexPosition, 1.0); }
-)";
-const char* kDepthFs = R"(#version 330
-out vec4 finalColor;
-void main() { finalColor = vec4(1.0); }
-)";
-
-const char* kSkyVs = R"(#version 330
-in vec3 vertexPosition;
-in vec2 vertexTexCoord;
-uniform mat4 mvp;
-out vec2 uv;
-void main() { uv = vertexTexCoord; gl_Position = mvp * vec4(vertexPosition, 1.0); }
-)";
-const char* kSkyFs = R"(#version 330
-in vec2 uv;
-uniform vec2 resolution;
-uniform mat4 invViewProj;
-uniform vec3 camPos;
-uniform vec3 sunDir;
-uniform vec3 zenith;
-uniform vec3 horizon;
-uniform vec3 sunColor;
-uniform float sunElev;
-out vec4 finalColor;
-void main() {
-  vec2 ndc = gl_FragCoord.xy / resolution * 2.0 - 1.0;
-  vec4 w = invViewProj * vec4(ndc, 1.0, 1.0);
-  vec3 dir = normalize(w.xyz / w.w - camPos);
-  float h = dir.y;
-  vec3 col;
-  if (h >= 0.0) col = mix(horizon, zenith, pow(h, 0.45));
-  else col = mix(horizon, horizon * 0.55, clamp(-h * 4.0, 0.0, 1.0));
-  float sd = max(dot(dir, sunDir), 0.0);
-  float vis = smoothstep(-2.0, 2.0, sunElev);
-  col += sunColor * (pow(sd, 400.0) * 1.5 + pow(sd, 12.0) * 0.18) * vis;
-  if (sd > 0.99996 && h > -0.01) col = mix(col, vec3(1.0, 0.97, 0.9), vis);
-  finalColor = vec4(clamp(col, 0.0, 1.0), 1.0);
-}
-)";
+float g_near = 0.3f, g_far = 3000.0f;
 
 Vector3 lerp3(Vector3 a, Vector3 b, float t) { return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t}; }
+Vector3 mul3(Vector3 a, Vector3 b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
 float smooth(float e0, float e1, float x) {
   const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
   return t * t * (3 - 2 * t);
 }
 
+void setI(Shader& s, const char* n, int v) { SetShaderValue(s, GetShaderLocation(s, n), &v, SHADER_UNIFORM_INT); }
+void setF(Shader& s, const char* n, float v) { SetShaderValue(s, GetShaderLocation(s, n), &v, SHADER_UNIFORM_FLOAT); }
+void set2(Shader& s, const char* n, Vector2 v) { SetShaderValue(s, GetShaderLocation(s, n), &v, SHADER_UNIFORM_VEC2); }
+void set3(Shader& s, const char* n, Vector3 v) { SetShaderValue(s, GetShaderLocation(s, n), &v, SHADER_UNIFORM_VEC3); }
+
+RenderTexture2D makeTarget(int w, int h, bool depth_texture) {
+  RenderTexture2D t{};
+  t.id = rlLoadFramebuffer();
+  if (!t.id) return t;
+  rlEnableFramebuffer(t.id);
+  t.texture.id = rlLoadTexture(nullptr, w, h, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+  t.texture.width = w;
+  t.texture.height = h;
+  t.texture.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+  t.texture.mipmaps = 1;
+  if (depth_texture) {
+    t.depth.id = rlLoadTextureDepth(w, h, false);
+    t.depth.format = 19;
+  } else {
+    t.depth.id = rlLoadTextureDepth(w, h, true);  // renderbuffer
+    t.depth.format = 19;
+  }
+  t.depth.width = w;
+  t.depth.height = h;
+  t.depth.mipmaps = 1;
+  rlFramebufferAttach(t.id, t.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+  rlFramebufferAttach(t.id, t.depth.id, RL_ATTACHMENT_DEPTH, depth_texture ? RL_ATTACHMENT_TEXTURE2D : RL_ATTACHMENT_RENDERBUFFER, 0);
+  if (!rlFramebufferComplete(t.id)) TraceLog(LOG_WARNING, "RJ: framebuffer %dx%d incomplete", w, h);
+  rlDisableFramebuffer();
+  SetTextureFilter(t.texture, TEXTURE_FILTER_BILINEAR);
+  SetTextureWrap(t.texture, TEXTURE_WRAP_CLAMP);
+  return t;
+}
+
+void freeTarget(RenderTexture2D& t) {
+  if (!t.id) return;
+  UnloadRenderTexture(t);  // frees colour texture, depth (texture or renderbuffer) and the FBO
+  t = RenderTexture2D{};
+}
+
 }  // namespace
 
-Lighting lightingForSun(float el, float az, float view_distance_m) {
+// ---------------------------------------------------------------------------
+Lighting computeLighting(float el, float az, const WeatherParams& w, float wetness, float lightning, Vector2 cloud_offset) {
   Lighting L;
   const float e = el * DEG2RAD, a = az * DEG2RAD;
-  // ENU direction to the sun -> raylib (x=e, y=u, z=-n)
   const rj::geo::Vec3d enu{std::cos(e) * std::sin(a), std::cos(e) * std::cos(a), std::sin(e)};
   L.sun_dir = Vector3Normalize(enuToRl(enu));
   L.sun_elevation_deg = el;
-
-  const Vector3 day_zenith{0.22f, 0.45f, 0.85f}, day_horizon{0.68f, 0.80f, 0.93f};
-  const Vector3 dusk_zenith{0.20f, 0.25f, 0.50f}, dusk_horizon{0.95f, 0.55f, 0.35f};
-  const Vector3 night_zenith{0.01f, 0.015f, 0.04f}, night_horizon{0.06f, 0.07f, 0.12f};
-  const float day = smooth(2.0f, 18.0f, el);     // 0 at dusk, 1 at day
-  const float twi = smooth(-10.0f, 1.0f, el);    // 0 at night, 1 at sunset
-  L.sky_zenith = lerp3(lerp3(night_zenith, dusk_zenith, twi), day_zenith, day);
-  L.sky_horizon = lerp3(lerp3(night_horizon, dusk_horizon, twi), day_horizon, day);
-
-  const float direct = smooth(-1.0f, 6.0f, el);
-  const Vector3 warm{1.0f, 0.62f, 0.38f}, white{1.0f, 0.96f, 0.90f};
-  L.sun_color = Vector3Scale(lerp3(warm, white, smooth(3.0f, 25.0f, el)), 1.55f * direct);
-  // Ambient: sky light (linear space). Tokyo at night keeps some city glow.
-  const Vector3 amb_day{0.36f, 0.40f, 0.48f}, amb_dusk{0.24f, 0.21f, 0.26f}, amb_night{0.035f, 0.04f, 0.06f};
-  L.ambient_sky = lerp3(lerp3(amb_night, amb_dusk, twi), amb_day, day);
-  L.ambient_ground = Vector3Scale(L.ambient_sky, 0.45f);
-  L.fog_density = 0.9f / std::max(300.0f, view_distance_m);
+  const float cc = std::clamp(w.cloud_cover, 0.0f, 1.0f);
+  const float fog = std::clamp(w.fog, 0.0f, 1.0f);
+  // Direct sun: Kasten-Young air mass with a hazy mid-latitude urban extinction.
+  const float elc = std::max(el, 0.3f);
+  const float m = 1.0f / (std::sin(elc * DEG2RAD) + 0.50572f * std::pow(elc + 6.07995f, -1.6364f));
+  const Vector3 tau{0.050f + 0.05f * fog, 0.090f + 0.05f * fog, 0.190f + 0.05f * fog};
+  const Vector3 trans{std::exp(-tau.x * m), std::exp(-tau.y * m), std::exp(-tau.z * m)};
+  const float up = smooth(-1.2f, 3.0f, el);
+  const float direct = up * (1.0f - 0.9f * cc) * (1.0f - 0.95f * fog);
+  L.sun_color = Vector3Scale(mul3(Vector3{1.0f, 0.97f, 0.94f}, trans), 2.3f * direct);
+  // Sky radiance (zenith / horizon) through the day.
+  const float day = smooth(-4.0f, 20.0f, el);
+  const float twi = smooth(-14.0f, 2.0f, el);
+  const Vector3 zen_day{0.07f, 0.18f, 0.52f}, hor_day{0.50f, 0.58f, 0.68f};
+  const Vector3 zen_dusk{0.09f, 0.10f, 0.26f}, hor_dusk{0.80f, 0.46f, 0.30f};
+  const Vector3 zen_night{0.004f, 0.006f, 0.014f}, hor_night{0.050f, 0.043f, 0.046f};  // Tokyo sky glow
+  Vector3 zen = lerp3(lerp3(zen_night, zen_dusk, twi), zen_day, day);
+  Vector3 hor = lerp3(lerp3(hor_night, hor_dusk, twi), hor_day, day);
+  const float bright = 0.03f + 0.97f * day + 0.15f * twi * (1.0f - day);
+  const Vector3 grey = Vector3Scale(Vector3{0.44f, 0.455f, 0.48f}, bright);
+  zen = lerp3(zen, Vector3Scale(grey, 0.9f), cc);
+  hor = lerp3(hor, grey, cc);
+  hor = lerp3(hor, Vector3Scale(Vector3{0.62f, 0.63f, 0.64f}, bright), fog);
+  zen = lerp3(zen, Vector3Scale(Vector3{0.60f, 0.61f, 0.62f}, bright), fog * 0.8f);
+  L.sky_zenith = zen;
+  L.sky_horizon = hor;
+  L.haze = lerp3(hor, Vector3Scale(Vector3{0.58f, 0.60f, 0.62f}, bright), 0.4f);
+  // Ambient irradiance: clear-sky blue, overcast grey (brighter, softer), dusk, night + city glow.
+  const Vector3 amb_day{0.24f, 0.30f, 0.40f}, amb_ovc{0.36f, 0.37f, 0.39f}, amb_dusk{0.09f, 0.085f, 0.11f};
+  const Vector3 amb_night{0.022f, 0.021f, 0.026f};
+  L.ambient_sky = lerp3(lerp3(amb_night, amb_dusk, twi), lerp3(amb_day, amb_ovc, cc), day);
+  // Ground/building bounce: warm, driven by sunlight on the city.
+  const Vector3 bounce = Vector3Add(Vector3Scale(L.sun_color, 0.20f * std::max(0.0f, std::sin(e))), Vector3Scale(L.ambient_sky, 0.45f));
+  L.ambient_ground = mul3(bounce, Vector3{1.0f, 0.93f, 0.84f});
+  if (lightning > 0.0f) {
+    const Vector3 flash = Vector3Scale(Vector3{0.8f, 0.82f, 1.0f}, lightning * 1.6f);
+    L.ambient_sky = Vector3Add(L.ambient_sky, flash);
+    L.sky_zenith = Vector3Add(L.sky_zenith, Vector3Scale(flash, 0.6f));
+    L.sky_horizon = Vector3Add(L.sky_horizon, Vector3Scale(flash, 0.8f));
+  }
+  L.fog_density = 0.00032f + 0.00045f * cc + 0.00005f * std::min(w.rain_mm_h, 30.0f) + 0.009f * fog * fog;
+  L.cloud_cover = cc;
+  L.cloud_offset = cloud_offset;
+  L.wetness = wetness;
+  L.rain = std::clamp(w.rain_mm_h / 12.0f, 0.0f, 1.0f);
+  L.night = std::max(1.0f - smooth(-5.0f, 4.0f, el), 0.6f * cc * (1.0f - smooth(3.0f, 14.0f, el)));
+  L.stars = (1.0f - smooth(-16.0f, -7.0f, el)) * (1.0f - cc);
+  L.sun_visible = up * (1.0f - 0.97f * cc) * (1.0f - fog);
+  L.lightning = lightning;
+  // Grading: golden hour warm, overcast cool and flatter, night richer.
+  const float golden = up * (1.0f - smooth(4.0f, 18.0f, el));
+  L.white_balance = lerp3(lerp3(Vector3{1.0f, 1.0f, 1.0f}, Vector3{1.05f, 1.0f, 0.93f}, golden), Vector3{0.97f, 1.0f, 1.035f}, cc * day);
+  L.saturation = 1.06f - 0.12f * cc * day + 0.06f * L.night;
+  L.contrast = 1.05f - 0.05f * cc - 0.06f * fog;
   return L;
 }
 
 Lighting indoorLighting() {
-  // Artificial light for underground spaces: soft overhead key + bright even ambient.
+  // Artificial light for underground spaces: bright diffuse ceiling light, no sky.
   Lighting L;
-  L.sun_dir = {0.15f, 1.0f, 0.1f};
-  L.sun_dir = Vector3Normalize(L.sun_dir);
-  L.sun_elevation_deg = -90.0f;  // no sun disc
-  L.sun_color = {0.55f, 0.55f, 0.52f};
-  L.ambient_sky = {0.72f, 0.73f, 0.72f};
-  L.ambient_ground = {0.38f, 0.38f, 0.37f};
-  L.sky_zenith = L.sky_horizon = {0.30f, 0.30f, 0.31f};
-  L.fog_density = 0.0035f;
+  L.sun_dir = Vector3Normalize(Vector3{0.15f, 1.0f, 0.1f});
+  L.sun_elevation_deg = -90.0f;
+  L.sun_color = {0.45f, 0.45f, 0.43f};
+  L.ambient_sky = {0.62f, 0.62f, 0.60f};
+  L.ambient_ground = {0.34f, 0.33f, 0.31f};
+  L.sky_zenith = L.sky_horizon = L.haze = {0.30f, 0.30f, 0.31f};
+  L.fog_density = 0.0025f;
+  L.cloud_cover = 1.0f;
+  L.night = 1.0f;
+  L.sun_visible = 0.0f;
+  L.indoor = 1.0f;
+  L.white_balance = {1.0f, 0.99f, 0.96f};
   return L;
 }
 
 Lighting lerpLighting(const Lighting& a, const Lighting& b, float t) {
   if (t <= 0.0f) return a;
   if (t >= 1.0f) return b;
-  Lighting L;
+  Lighting L = t < 0.5f ? a : b;
   L.sun_dir = Vector3Normalize(Vector3Lerp(a.sun_dir, b.sun_dir, t));
-  L.sun_elevation_deg = t < 0.5f ? a.sun_elevation_deg : b.sun_elevation_deg;
   L.sun_color = Vector3Lerp(a.sun_color, b.sun_color, t);
   L.sky_zenith = Vector3Lerp(a.sky_zenith, b.sky_zenith, t);
   L.sky_horizon = Vector3Lerp(a.sky_horizon, b.sky_horizon, t);
+  L.haze = Vector3Lerp(a.haze, b.haze, t);
   L.ambient_sky = Vector3Lerp(a.ambient_sky, b.ambient_sky, t);
   L.ambient_ground = Vector3Lerp(a.ambient_ground, b.ambient_ground, t);
   L.fog_density = a.fog_density + (b.fog_density - a.fog_density) * t;
+  L.night = a.night + (b.night - a.night) * t;
+  L.indoor = a.indoor + (b.indoor - a.indoor) * t;
+  L.sun_visible = a.sun_visible + (b.sun_visible - a.sun_visible) * t;
+  L.white_balance = Vector3Lerp(a.white_balance, b.white_balance, t);
   return L;
 }
 
+// ---------------------------------------------------------------------------
 bool Renderer::init() {
-  lit_ = LoadShaderFromMemory(kLitVs, kLitFs);
-  depth_ = LoadShaderFromMemory(kDepthVs, kDepthFs);
-  sky_ = LoadShaderFromMemory(kSkyVs, kSkyFs);
-  if (!IsShaderValid(lit_) || !IsShaderValid(depth_) || !IsShaderValid(sky_)) return false;
+  lit_ = LoadShaderFromMemory(shaders::kLitVs, shaders::kLitFs);
+  depth_ = LoadShaderFromMemory(shaders::kDepthVs, shaders::kDepthFs);
+  sky_ = LoadShaderFromMemory(shaders::kSkyVs, shaders::kSkyFs);
+  ssao_ = LoadShaderFromMemory(nullptr, shaders::kSsaoFs);
+  blur_ = LoadShaderFromMemory(nullptr, shaders::kBlurFs);
+  bright_ = LoadShaderFromMemory(nullptr, shaders::kBrightFs);
+  composite_ = LoadShaderFromMemory(nullptr, shaders::kCompositeFs);
+  ssr_ = LoadShaderFromMemory(nullptr, shaders::kSsrFs);
+  for (Shader* s : {&lit_, &depth_, &sky_, &ssao_, &blur_, &bright_, &composite_, &ssr_})
+    if (!IsShaderValid(*s)) {
+      TraceLog(LOG_ERROR, "RJ: shader compilation failed");
+      return false;
+    }
   lit_.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(lit_, "matModel");
   lit_.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(lit_, "matNormal");
   lit_.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(lit_, "viewPos");
+  lit_.locs[SHADER_LOC_VERTEX_TEXCOORD02] = GetShaderLocationAttrib(lit_, "vertexTexCoord2");
   mat_ = LoadMaterialDefault();
   mat_.shader = lit_;
   mat_depth_ = LoadMaterialDefault();
   mat_depth_.shader = depth_;
+  // Fixed sampler units.
+  setI(lit_, "texAO", kSlotAO);
+  setI(lit_, "texNoise", kSlotNoise);
+  setI(lit_, "texAsphalt", kSlotAsphalt);
+  setI(lit_, "texAsphaltN", kSlotAsphaltN);
+  setI(lit_, "texPaving", kSlotPaving);
+  setI(lit_, "texPavingN", kSlotPavingN);
+  setI(lit_, "shadowMap0", kSlotShadow0);
+  setI(lit_, "shadowMap1", kSlotShadow1);
+  setI(lit_, "materialOverride", -1);
+  setI(sky_, "texNoise", kSlotNoise);
+  if (!tex_.generate(512)) return false;
 
-  shadow_.id = rlLoadFramebuffer();
-  shadow_.texture.width = shadow_.texture.height = shadow_res_;
-  if (shadow_.id > 0) {
-    rlEnableFramebuffer(shadow_.id);
-    shadow_.depth.id = rlLoadTextureDepth(shadow_res_, shadow_res_, false);
-    shadow_.depth.width = shadow_.depth.height = shadow_res_;
-    shadow_.depth.format = 19;
-    shadow_.depth.mipmaps = 1;
-    rlFramebufferAttach(shadow_.id, shadow_.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
-    if (!rlFramebufferComplete(shadow_.id)) TraceLog(LOG_WARNING, "RJ: shadow framebuffer incomplete");
+  for (int c = 0; c < 2; ++c) {
+    RenderTexture2D& s = shadow_[c];
+    s.id = rlLoadFramebuffer();
+    s.texture.width = s.texture.height = shadow_res_[c];
+    if (!s.id) continue;
+    rlEnableFramebuffer(s.id);
+    s.depth.id = rlLoadTextureDepth(shadow_res_[c], shadow_res_[c], false);
+    s.depth.width = s.depth.height = shadow_res_[c];
+    s.depth.format = 19;
+    s.depth.mipmaps = 1;
+    rlFramebufferAttach(s.id, s.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+    if (!rlFramebufferComplete(s.id)) TraceLog(LOG_WARNING, "RJ: shadow framebuffer incomplete");
     rlDisableFramebuffer();
   }
   plane_ = GenMeshPlane(12000.0f, 12000.0f, 1, 1);
@@ -231,126 +224,259 @@ bool Renderer::init() {
   legs_ = GenMeshCylinder(0.15f, 0.82f, 8);
   torso_ = GenMeshCylinder(0.21f, 0.64f, 10);
   head_ = GenMeshSphere(0.14f, 10, 12);
+  lens_ = GenMeshCylinder(0.125f, 0.03f, 16);     // 300 mm vehicle signal lens
+  pedlens_ = GenMeshCube(0.22f, 0.22f, 0.03f);     // pedestrian signal panel
   ready_ = true;
   return true;
 }
 
 void Renderer::shutdown() {
   if (!ready_) return;
-  UnloadMesh(plane_);
-  UnloadMesh(body_);
-  UnloadMesh(legs_);
-  UnloadMesh(torso_);
-  UnloadMesh(head_);
-  if (shadow_.id) {
-    rlUnloadFramebuffer(shadow_.id);
-    if (shadow_.depth.id) rlUnloadTexture(shadow_.depth.id);
-  }
+  releaseTargets();
+  for (Mesh* m : {&plane_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_}) UnloadMesh(*m);
+  for (auto& s : shadow_)
+    if (s.id) {
+      rlUnloadFramebuffer(s.id);
+      if (s.depth.id) rlUnloadTexture(s.depth.id);
+    }
+  tex_.unload();
   mat_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   mat_depth_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
-  UnloadShader(lit_);
-  UnloadShader(depth_);
-  UnloadShader(sky_);
+  for (Shader* s : {&lit_, &depth_, &sky_, &ssao_, &blur_, &bright_, &composite_, &ssr_}) UnloadShader(*s);
   ready_ = false;
 }
 
-void Renderer::setClipPlanes(float near_m, float far_m) { rlSetClipPlanes(near_m, far_m); }
+void Renderer::setClipPlanes(float near_m, float far_m) {
+  g_near = near_m;
+  g_far = far_m;
+  rlSetClipPlanes(near_m, far_m);
+}
 
-void Renderer::renderShadowMap(const Camera3D& cam, const World& world, const Lighting& L) {
+void Renderer::releaseTargets() {
+  for (RenderTexture2D* t : {&scene_, &ao_, &ao_blur_, &bright_rt_, &bloom_a_, &bloom_b_, &lum_, &ssr_rt_}) freeTarget(*t);
+  tw_ = th_ = 0;
+}
+
+void Renderer::ensureTargets() {
+  const int w = std::max(1, GetRenderWidth()), h = std::max(1, GetRenderHeight());
+  if (w == tw_ && h == th_ && scene_.id) return;
+  releaseTargets();
+  tw_ = w;
+  th_ = h;
+  scene_ = makeTarget(w, h, true);
+  ao_ = makeTarget(std::max(1, w / 2), std::max(1, h / 2), false);
+  ao_blur_ = makeTarget(std::max(1, w / 2), std::max(1, h / 2), false);
+  bright_rt_ = makeTarget(std::max(1, w / 4), std::max(1, h / 4), false);
+  bloom_a_ = makeTarget(std::max(1, w / 4), std::max(1, h / 4), false);
+  bloom_b_ = makeTarget(std::max(1, w / 4), std::max(1, h / 4), false);
+  lum_ = makeTarget(32, 18, false);
+  ssr_rt_ = makeTarget(std::max(1, w / 2), std::max(1, h / 2), false);
+}
+
+void Renderer::bindGlobalTextures() {
+  auto bind = [](int slot, unsigned int id) {
+    rlActiveTextureSlot(slot);
+    rlEnableTexture(id);
+  };
+  bind(kSlotNoise, tex_.noise.id);
+  bind(kSlotAsphalt, tex_.asphalt.id);
+  bind(kSlotAsphaltN, tex_.asphaltN.id);
+  bind(kSlotPaving, tex_.paving.id);
+  bind(kSlotPavingN, tex_.pavingN.id);
+  bind(kSlotAO, rlGetTextureIdDefault());
+  bind(kSlotShadow0, shadow_valid_ && shadow_[0].depth.id ? shadow_[0].depth.id : rlGetTextureIdDefault());
+  bind(kSlotShadow1, shadow_valid_ && shadow_[1].depth.id ? shadow_[1].depth.id : rlGetTextureIdDefault());
+  rlActiveTextureSlot(0);
+}
+
+// ---------------------------------------------------------------------------
+void Renderer::renderShadowMaps(const Camera3D& cam, const World& world, const Lighting& L,
+                                const std::vector<const Mesh*>& extra_casters) {
   shadow_valid_ = false;
-  if (!shadow_.id || L.sun_elevation_deg < 1.0f) return;
-  const float extent = 420.0f;
-  // Centre the shadow box ahead of the camera and snap to texels to reduce shimmer.
+  if (L.sun_elevation_deg < 1.0f || L.sun_visible < 0.05f || L.indoor > 0.5f) return;
+  // Do not sample the maps while rendering into them.
+  rlActiveTextureSlot(kSlotShadow0);
+  rlDisableTexture();
+  rlActiveTextureSlot(kSlotShadow1);
+  rlDisableTexture();
+  rlActiveTextureSlot(0);
   Vector3 fwd = Vector3Normalize(Vector3Subtract(cam.target, cam.position));
   fwd.y = 0;
   fwd = Vector3Length(fwd) > 1e-4f ? Vector3Normalize(fwd) : Vector3{0, 0, -1};
-  Vector3 center = Vector3Add(cam.position, Vector3Scale(fwd, extent * 0.3f));
-  const float snap = extent / static_cast<float>(shadow_res_) * 4.0f;
-  center.x = std::round(center.x / snap) * snap;
-  center.z = std::round(center.z / snap) * snap;
-  center.y = cam.position.y - 20.0f;
-
-  Camera3D lc{};
-  lc.position = Vector3Add(center, Vector3Scale(L.sun_dir, 1500.0f));
-  lc.target = center;
-  lc.up = std::abs(L.sun_dir.y) > 0.99f ? Vector3{0, 0, 1} : Vector3{0, 1, 0};
-  lc.projection = CAMERA_ORTHOGRAPHIC;
-  lc.fovy = extent;
-
-  BeginTextureMode(shadow_);
-  ClearBackground(WHITE);
-  rlSetClipPlanes(10.0, 3500.0);
-  BeginMode3D(lc);
-  const Matrix view = rlGetMatrixModelview();
-  const Matrix proj = rlGetMatrixProjection();
-  rlDisableBackfaceCulling();
-  for (const auto& [code, c] : world.cells())
-    for (const auto& m : c->gpu.chunks) DrawMesh(m, mat_depth_, c->model);
-  rlEnableBackfaceCulling();
-  EndMode3D();
-  EndTextureMode();
-  light_vp_ = MatrixMultiply(view, proj);
+  for (int c = 0; c < 2; ++c) {
+    if (!shadow_[c].id) continue;
+    const float extent = shadow_extent_[c];
+    Vector3 center = Vector3Add(cam.position, Vector3Scale(fwd, extent * 0.3f));
+    const float snap = extent / static_cast<float>(shadow_res_[c]) * 2.0f;
+    center.x = std::round(center.x / snap) * snap;
+    center.z = std::round(center.z / snap) * snap;
+    center.y = cam.position.y - (c == 0 ? 2.0f : 20.0f);
+    Camera3D lc{};
+    lc.position = Vector3Add(center, Vector3Scale(L.sun_dir, 1500.0f));
+    lc.target = center;
+    lc.up = std::abs(L.sun_dir.y) > 0.99f ? Vector3{0, 0, 1} : Vector3{0, 1, 0};
+    lc.projection = CAMERA_ORTHOGRAPHIC;
+    lc.fovy = extent;
+    BeginTextureMode(shadow_[c]);
+    ClearBackground(WHITE);
+    // Tight depth range around the receivers so depth biases stay centimetre-scale.
+    if (c == 0) rlSetClipPlanes(1150.0, 1600.0);
+    else rlSetClipPlanes(850.0, 1900.0);
+    BeginMode3D(lc);
+    const Matrix view = rlGetMatrixModelview();
+    const Matrix proj = rlGetMatrixProjection();
+    rlDisableBackfaceCulling();
+    const float r2 = (extent * 0.9f) * (extent * 0.9f);
+    for (const auto& [code, cell] : world.cells()) {
+      for (const auto& m : cell->gpu.chunks) DrawMesh(m, mat_depth_, cell->model);
+      for (size_t i = 0; i < cell->gpu.detail.meshes.size(); ++i) {
+        if (matIsFlat(cell->gpu.detail.mats[i])) continue;
+        if (c == 1 && cell->gpu.detail.mats[i] == kMatFence) continue;  // thin rails: near cascade only
+        DrawMesh(cell->gpu.detail.meshes[i], mat_depth_, cell->model);
+      }
+    }
+    for (const Mesh* m : extra_casters) DrawMesh(*m, mat_depth_, MatrixIdentity());
+    (void)r2;
+    rlEnableBackfaceCulling();
+    EndMode3D();
+    EndTextureMode();
+    light_vp_[c] = MatrixMultiply(view, proj);
+  }
+  rlSetClipPlanes(g_near, g_far);
   shadow_valid_ = true;
 }
 
-void Renderer::applyLightingUniforms(Shader& s, const Camera3D& cam, const Lighting& L, bool shadows) {
-  auto v3 = [&](const char* n, Vector3 v) { SetShaderValue(s, GetShaderLocation(s, n), &v, SHADER_UNIFORM_VEC3); };
-  v3("sunDir", L.sun_dir);
-  v3("sunColor", L.sun_color);
-  v3("ambientSky", L.ambient_sky);
-  v3("ambientGround", L.ambient_ground);
-  v3("fogColor", L.sky_horizon);
-  v3("viewPos", cam.position);
-  SetShaderValue(s, GetShaderLocation(s, "fogDensity"), &L.fog_density, SHADER_UNIFORM_FLOAT);
-  const int on = (shadows && shadow_valid_) ? 1 : 0;
-  SetShaderValue(s, GetShaderLocation(s, "shadowsOn"), &on, SHADER_UNIFORM_INT);
-  const float texel = 1.0f / static_cast<float>(shadow_res_);
-  SetShaderValue(s, GetShaderLocation(s, "shadowTexel"), &texel, SHADER_UNIFORM_FLOAT);
-  SetShaderValueMatrix(s, GetShaderLocation(s, "lightVP"), light_vp_);
+void Renderer::applyFrameUniforms(const Camera3D& cam, const Lighting& L, float time_s) {
+  const float expo = exposure_override_ > 0.0f ? exposure_override_ : exposure_;
+  for (Shader* s : {&lit_, &sky_}) {
+    set3(*s, "sunDir", L.sun_dir);
+    set3(*s, "sunColor", L.sun_color);
+    set3(*s, "skyZenith", L.sky_zenith);
+    set3(*s, "skyHorizon", L.sky_horizon);
+    set3(*s, "ambientSky", L.ambient_sky);
+    set3(*s, "ambientGround", L.ambient_ground);
+    set3(*s, "hazeColor", L.haze);
+    setF(*s, "exposure", expo);
+    setF(*s, "cloudCover", L.cloud_cover);
+    set2(*s, "cloudOffset", L.cloud_offset);
+  }
+  set3(lit_, "viewPos", cam.position);
+  setF(lit_, "fogDensity", L.fog_density);
+  setF(lit_, "wetness", L.wetness);
+  setF(lit_, "nightFactor", L.night);
+  setF(lit_, "timeSec", time_s);
+  setF(lit_, "indoor", L.indoor);
+  set3(lit_, "occupancy", L.occupancy);
+  const int on = shadow_valid_ && opt_.shadows ? 1 : 0;
+  setI(lit_, "shadowsOn", on);
+  setF(lit_, "shadowTexel0", 1.0f / static_cast<float>(shadow_res_[0]));
+  setF(lit_, "shadowTexel1", 1.0f / static_cast<float>(shadow_res_[1]));
+  SetShaderValueMatrix(lit_, GetShaderLocation(lit_, "lightVP0"), light_vp_[0]);
+  SetShaderValueMatrix(lit_, GetShaderLocation(lit_, "lightVP1"), light_vp_[1]);
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", -1);
+  set3(lit_, "emissiveTint", Vector3{0, 0, 0});
+}
+
+void Renderer::beginScene(const RenderOptions& o, const Lighting& L, const Camera3D& cam, float time_s) {
+  opt_ = o;
+  frame_L_ = L;
+  draw_calls_ = 0;
+  triangles_ = 0;
+  ++frame_;
+  post_active_ = o.post;
+  if (post_active_) {
+    ensureTargets();
+    BeginTextureMode(scene_);
+  }
+  applyFrameUniforms(cam, L, time_s);
+  bindGlobalTextures();
+}
+
+void Renderer::setLights(const std::vector<PointLight>& lights) {
+  const int n = static_cast<int>(std::min<size_t>(lights.size(), 24));
+  setI(lit_, "numLights", n);
+  for (int i = 0; i < n; ++i) {
+    const Vector4 pr{lights[i].pos.x, lights[i].pos.y, lights[i].pos.z, lights[i].range};
+    char name[32];
+    std::snprintf(name, sizeof name, "lightPosR[%d]", i);
+    SetShaderValue(lit_, GetShaderLocation(lit_, name), &pr, SHADER_UNIFORM_VEC4);
+    std::snprintf(name, sizeof name, "lightCol[%d]", i);
+    set3(lit_, name, lights[i].color);
+  }
+}
+
+void Renderer::beginTransparent() {
+  rlDrawRenderBatchActive();
+  rlEnableColorBlend();
 }
 
 void Renderer::drawSky(const Camera3D& cam, const Lighting& L, float aspect) {
   const Matrix view = GetCameraMatrix(cam);
   const Matrix proj = MatrixPerspective(cam.fovy * DEG2RAD, aspect, 0.3, 4000.0);
   const Matrix inv = MatrixInvert(MatrixMultiply(view, proj));
-  const Vector2 res{static_cast<float>(GetRenderWidth()), static_cast<float>(GetRenderHeight())};
-  SetShaderValue(sky_, GetShaderLocation(sky_, "resolution"), &res, SHADER_UNIFORM_VEC2);
+  const Vector2 res{static_cast<float>(post_active_ ? tw_ : GetRenderWidth()), static_cast<float>(post_active_ ? th_ : GetRenderHeight())};
+  set2(sky_, "resolution", res);
   SetShaderValueMatrix(sky_, GetShaderLocation(sky_, "invViewProj"), inv);
-  SetShaderValue(sky_, GetShaderLocation(sky_, "camPos"), &cam.position, SHADER_UNIFORM_VEC3);
-  SetShaderValue(sky_, GetShaderLocation(sky_, "sunDir"), &L.sun_dir, SHADER_UNIFORM_VEC3);
-  SetShaderValue(sky_, GetShaderLocation(sky_, "zenith"), &L.sky_zenith, SHADER_UNIFORM_VEC3);
-  SetShaderValue(sky_, GetShaderLocation(sky_, "horizon"), &L.sky_horizon, SHADER_UNIFORM_VEC3);
-  const Vector3 sc = Vector3Scale(L.sun_color, 0.4f);
-  SetShaderValue(sky_, GetShaderLocation(sky_, "sunColor"), &sc, SHADER_UNIFORM_VEC3);
-  SetShaderValue(sky_, GetShaderLocation(sky_, "sunElev"), &L.sun_elevation_deg, SHADER_UNIFORM_FLOAT);
+  set3(sky_, "camPos", cam.position);
+  setF(sky_, "sunVisible", L.sun_visible);
+  setF(sky_, "starBright", L.stars * 0.8f);
+  bindGlobalTextures();
+  rlDrawRenderBatchActive();
+  rlDisableColorBlend();  // the sky writes alpha 0 (no reflection) and must still be opaque
   BeginShaderMode(sky_);
   DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
   EndShaderMode();
+  // Opaque geometry follows: alpha carries the reflection amount for SSR, so no blending.
+  rlDrawRenderBatchActive();
+  rlDisableColorBlend();
 }
 
-void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows, bool photo_textures,
-                         bool neutral_floor) {
-  applyLightingUniforms(lit_, cam, L, shadows);
-  const int slot = 10;
-  rlEnableShader(lit_.id);
-  rlActiveTextureSlot(slot);
-  rlEnableTexture(shadow_valid_ ? shadow_.depth.id : rlGetTextureIdDefault());
-  rlSetUniform(GetShaderLocation(lit_, "shadowMap"), &slot, SHADER_UNIFORM_INT, 1);
-  rlActiveTextureSlot(0);
+void Renderer::drawMeshMat(const Mesh& m, const Matrix& model, int material, Color tint, Vector3 emissive) {
+  setI(lit_, "materialOverride", material);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "surfaceMode", 0);
+  set3(lit_, "emissiveTint", emissive);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = tint;
+  DrawMesh(m, mat_, model);
+  ++draw_calls_;
+  triangles_ += m.triangleCount;
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "materialOverride", -1);
+}
 
+void Renderer::drawWorld(const Camera3D& cam, const World& world, bool photo_textures, bool neutral_floor) {
+  (void)cam;
+  bindGlobalTextures();
+  const int loc_surface = GetShaderLocation(lit_, "surfaceMode");
+  const int loc_tex = GetShaderLocation(lit_, "useTexture");
+  auto mode = [&](int surface, int tex) {
+    SetShaderValue(lit_, loc_surface, &surface, SHADER_UNIFORM_INT);
+    SetShaderValue(lit_, loc_tex, &tex, SHADER_UNIFORM_INT);
+  };
   rlDisableBackfaceCulling();
-  int use_tex = 1;
+  // Terrain: ground raster classified into asphalt / paving / paint / greenery with detail maps.
+  mode(1, 1);
   for (const auto& [code, c] : world.cells()) {
     if (!c->gpu.terrain.vaoId) continue;
-    SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
+    rlActiveTextureSlot(kSlotAO);
+    rlEnableTexture(c->gpu.detail.ao.id ? c->gpu.detail.ao.id : rlGetTextureIdDefault());
+    rlActiveTextureSlot(0);
     mat_.maps[MATERIAL_MAP_DIFFUSE].texture = c->gpu.ground;
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     DrawMesh(c->gpu.terrain, mat_, c->model);
+    ++draw_calls_;
+    triangles_ += c->gpu.terrain.triangleCount;
   }
-  // Photo-textured building faces (PLATEAU appearance atlases). With photo textures
-  // disabled (they contain real signage / advertising) the same faces are drawn plain.
-  use_tex = photo_textures ? 1 : 0;
-  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
+  rlActiveTextureSlot(kSlotAO);
+  rlEnableTexture(rlGetTextureIdDefault());
+  rlActiveTextureSlot(0);
+  // Photo-textured building faces (PLATEAU appearance atlases). With photo textures disabled
+  // (they contain real signage / advertising) the same faces are drawn plain.
+  if (photo_textures) mode(2, 1);
+  else mode(0, 0);
   if (!photo_textures) mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{196, 194, 188, 255};
   for (const auto& [code, c] : world.cells())
     for (size_t i = 0; i < c->gpu.chunks.size(); ++i) {
@@ -359,67 +485,293 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting
       mat_.maps[MATERIAL_MAP_DIFFUSE].texture =
           photo_textures ? c->gpu.pages[static_cast<size_t>(page)] : Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
       DrawMesh(c->gpu.chunks[i], mat_, c->model);
+      ++draw_calls_;
+      triangles_ += c->gpu.chunks[i].triangleCount;
     }
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
-  use_tex = 0;
-  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mode(0, 0);
   if (auto mz = world.minTerrainZ(); mz && neutral_floor) {
     // Neutral floor outside the data coverage (no invented content), below all real terrain.
+    setI(lit_, "materialOverride", kMatConcrete);
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{92, 92, 90, 255};
     DrawMesh(plane_, mat_, MatrixTranslate(0.0f, static_cast<float>(*mz) - 1.5f, 0.0f));
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    setI(lit_, "materialOverride", -1);
   }
+  // Vertex-coloured buildings (LOD1 / untextured LOD2).
   for (const auto& [code, c] : world.cells())
     for (size_t i = 0; i < c->gpu.chunks.size(); ++i) {
       const int page = c->gpu.chunk_page[i];
       if (page >= 0 && page < static_cast<int>(c->gpu.pages.size()) && c->gpu.pages[static_cast<size_t>(page)].id) continue;
+      setI(lit_, "materialOverride", kMatWallPaint);
       DrawMesh(c->gpu.chunks[i], mat_, c->model);
+      ++draw_calls_;
+      triangles_ += c->gpu.chunks[i].triangleCount;
+    }
+  setI(lit_, "materialOverride", -1);
+  // Street detail: sidewalks, curbs, markings, furniture (materials per vertex).
+  for (const auto& [code, c] : world.cells())
+    for (const auto& m : c->gpu.detail.meshes) {
+      DrawMesh(m, mat_, c->model);
+      ++draw_calls_;
+      triangles_ += m.triangleCount;
     }
   rlEnableBackfaceCulling();
 }
 
-void Renderer::drawPlayerBody(const Vector3& feet, float yaw_rad, const Lighting& L) {
-  (void)L;
-  int use_tex = 0;
-  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
-  mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{40, 70, 140, 255};
+void Renderer::drawPlayerBody(const Vector3& feet, float yaw_rad) {
   const Matrix body = MatrixMultiply(MatrixRotateY(-yaw_rad), MatrixTranslate(feet.x, feet.y + 0.05f, feet.z));
-  DrawMesh(body_, mat_, body);
-  mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{230, 200, 170, 255};
-  DrawMesh(head_, mat_, MatrixTranslate(feet.x, feet.y + 1.58f, feet.z));
-  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  drawMeshMat(body_, body, kMatCloth, Color{40, 60, 110, 255});
+  drawMeshMat(head_, MatrixTranslate(feet.x, feet.y + 1.58f, feet.z), kMatSkin, Color{220, 188, 160, 255});
 }
 
-void Renderer::drawInterior(const Interior& in, const Camera3D& cam, const Lighting& L, bool shadows) {
-  applyLightingUniforms(lit_, cam, L, shadows);
-  int use_tex = 0;
-  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
+void Renderer::drawInterior(const Interior& in) {
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", 0);
   rlDisableBackfaceCulling();
-  for (const auto& m : in.meshes()) DrawMesh(m, mat_, in.model());
+  for (const auto& m : in.meshes()) {
+    DrawMesh(m, mat_, in.model());
+    ++draw_calls_;
+  }
+  rlEnableBackfaceCulling();
+  setI(lit_, "materialOverride", -1);
+}
+
+void Renderer::drawFacades(const FacadeDetail& f) {
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", -1);
+  rlDisableBackfaceCulling();
+  const Matrix id = MatrixIdentity();
+  f.forEachMesh([&](const Mesh& m, int) {
+    DrawMesh(m, mat_, id);
+    ++draw_calls_;
+    triangles_ += m.triangleCount;
+  });
   rlEnableBackfaceCulling();
 }
 
+void Renderer::drawSignals(const TrafficSignals& ts, const Camera3D& cam) {
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  const Vector3 kGreen{0.0f, 0.95f, 0.62f}, kYellow{1.0f, 0.62f, 0.0f}, kRed{1.0f, 0.07f, 0.03f};
+  auto lamp = [&](const Mesh& m, const rj::geo::Vec3d& p, float facing, bool on, Vector3 col, float intensity) {
+    // Mesh axis (+Y) -> facing direction (horizontal), see coords: ENU (sin f, cos f) -> raylib (sin f, 0, -cos f).
+    const Matrix r = MatrixMultiply(MatrixRotateX(PI / 2), MatrixRotateY(PI - facing));
+    const Vector3 rp = enuToRl(p);
+    const Vector3 e = on ? Vector3Scale(col, intensity) : Vector3Scale(col, 0.015f);
+    drawMeshMat(m, MatrixMultiply(r, MatrixTranslate(rp.x, rp.y, rp.z)), kMatSignalLamp, WHITE, e);
+  };
+  for (const auto& h : ts.heads()) {
+    if (std::hypot(h.pos.x - c.x, h.pos.y - c.y) > 220.0) continue;
+    const double fx = std::sin(h.facing), fy = std::cos(h.facing);
+    // Viewer looks along -facing; the viewer's right is (-cos f, sin f).
+    const double rx = -fy, ry = fx;
+    if (h.kind == 0) {
+      const VehLamp st = ts.vehicle(h.group, h.phase);
+      const double sp = std::clamp(h.length / 3.0, 0.3, 0.45);
+      const rj::geo::Vec3d base{h.pos.x + fx * 0.17, h.pos.y + fy * 0.17, h.pos.z};
+      lamp(lens_, {base.x - rx * sp, base.y - ry * sp, base.z}, h.facing, st == VehLamp::Green, kGreen, 9.0f);
+      lamp(lens_, base, h.facing, st == VehLamp::Yellow, kYellow, 9.0f);
+      lamp(lens_, {base.x + rx * sp, base.y + ry * sp, base.z}, h.facing, st == VehLamp::Red, kRed, 9.0f);
+    } else {
+      const PedLamp st = ts.pedestrian(h.group, h.phase);
+      const rj::geo::Vec3d base{h.pos.x + fx * 0.14, h.pos.y + fy * 0.14, h.pos.z};
+      const bool walk = st == PedLamp::Walk || (st == PedLamp::Flash && ts.flashOn());
+      lamp(pedlens_, {base.x, base.y, base.z + 0.16}, h.facing, st == PedLamp::Stop, kRed, 7.0f);
+      lamp(pedlens_, {base.x, base.y, base.z - 0.16}, h.facing, walk, kGreen, 7.0f);
+    }
+  }
+}
+
 void Renderer::drawPedestrians(const Pedestrians& peds) {
-  int use_tex = 0;
-  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
   for (const auto& [id, w] : peds.walkers()) {
     const float s = w.height_scale;
     const float bob = std::fabs(std::sin(w.phase)) * 0.035f * s;
     const Vector3 feet = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z)});
-    const float yaw = std::atan2(static_cast<float>(w.dir.x), static_cast<float>(w.dir.y));  // compass heading
+    const float yaw = std::atan2(static_cast<float>(w.dir.x), static_cast<float>(w.dir.y));
     const Matrix rot = MatrixRotateY(-yaw);
     auto at = [&](float y) { return MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), rot), MatrixTranslate(feet.x, feet.y + y, feet.z)); };
-    mat_.maps[MATERIAL_MAP_DIFFUSE].color = w.pants;
-    DrawMesh(legs_, mat_, at(bob));
-    mat_.maps[MATERIAL_MAP_DIFFUSE].color = w.shirt;
-    DrawMesh(torso_, mat_, at(0.80f * s + bob));
-    mat_.maps[MATERIAL_MAP_DIFFUSE].color = w.skin;
-    DrawMesh(head_, mat_, MatrixMultiply(MatrixScale(s, s, s), MatrixTranslate(feet.x, feet.y + 1.58f * s + bob, feet.z)));
+    drawMeshMat(legs_, at(bob), kMatCloth, w.pants);
+    drawMeshMat(torso_, at(0.80f * s + bob), kMatCloth, w.shirt);
+    drawMeshMat(head_, MatrixMultiply(MatrixScale(s, s, s), MatrixTranslate(feet.x, feet.y + 1.58f * s + bob, feet.z)), kMatSkin, w.skin);
   }
-  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+}
+
+void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s) {
+  if (L.rain <= 0.01f || L.indoor > 0.5f) return;
+  beginTransparent();
+  const int n = static_cast<int>(600 + 2600 * L.rain);
+  const float speed = 8.5f, len = 0.35f + 0.5f * L.rain;
+  const Color col{190, 198, 210, static_cast<unsigned char>(60 + 60 * L.rain)};
+  rlSetBlendMode(BLEND_ALPHA);
+  rlDisableDepthMask();
+  for (int i = 0; i < n; ++i) {
+    const uint32_t h = static_cast<uint32_t>(i) * 2654435761u;
+    const float rx = ((h & 1023u) / 1023.0f - 0.5f) * 36.0f;
+    const float rz = (((h >> 10) & 1023u) / 1023.0f - 0.5f) * 36.0f;
+    const float ph = ((h >> 20) & 1023u) / 1023.0f;
+    const float y = 14.0f - std::fmod(ph * 16.0f + time_s * speed, 16.0f);
+    // snap the rain volume to a 36 m grid so drops stay put while the camera moves
+    const float gx = std::floor(cam.position.x / 36.0f) * 36.0f, gz = std::floor(cam.position.z / 36.0f) * 36.0f;
+    float px = gx + rx, pz = gz + rz;
+    if (px < cam.position.x - 18.0f) px += 36.0f;
+    if (pz < cam.position.z - 18.0f) pz += 36.0f;
+    const Vector3 top{px, cam.position.y - 3.0f + y, pz};
+    DrawLine3D(top, Vector3{top.x + 0.06f, top.y - len, top.z + 0.03f}, col);
+  }
+  rlDrawRenderBatchActive();
+  rlEnableDepthMask();
+}
+
+void Renderer::fullscreen(Shader& sh, const Texture2D& src, RenderTexture2D& dst, bool flip_src) {
+  BeginTextureMode(dst);
+  ClearBackground(BLACK);
+  rlDisableColorBlend();
+  BeginShaderMode(sh);
+  const float sh_ = flip_src ? -static_cast<float>(src.height) : static_cast<float>(src.height);
+  DrawTexturePro(src, Rectangle{0, 0, static_cast<float>(src.width), sh_},
+                 Rectangle{0, 0, static_cast<float>(dst.texture.width), static_cast<float>(dst.texture.height)}, Vector2{0, 0}, 0.0f,
+                 WHITE);
+  EndShaderMode();
+  rlDrawRenderBatchActive();
+  rlEnableColorBlend();
+  EndTextureMode();
+}
+
+namespace {
+Vector3 toneMapCpu(Vector3 c, float e) {
+  auto f = [&](float x) {
+    x *= e;
+    const float y = std::clamp((x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f), 0.0f, 1.0f);
+    return std::pow(y, 1.0f / 2.2f);
+  };
+  return {f(c.x), f(c.y), f(c.z)};
+}
+}  // namespace
+
+void Renderer::endScene(const Camera3D& cam, const Lighting& L, float time_s) {
+  rlDrawRenderBatchActive();
+  rlEnableColorBlend();
+  if (!post_active_) return;
+  EndTextureMode();
+  const float aspect = static_cast<float>(tw_) / static_cast<float>(std::max(1, th_));
+  const float tan_half = std::tan(cam.fovy * DEG2RAD * 0.5f);
+  // SSAO (half resolution) from the scene depth.
+  if (opt_.ssao) {
+    Texture2D depth{scene_.depth.id, tw_, th_, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    set2(ssao_, "invRes", Vector2{1.0f / tw_, 1.0f / th_});
+    setF(ssao_, "nearZ", g_near);
+    setF(ssao_, "farZ", g_far);
+    set2(ssao_, "tanHalf", Vector2{tan_half * aspect, tan_half});
+    fullscreen(ssao_, depth, ao_, false);
+    set2(blur_, "dir", Vector2{1.0f / ao_.texture.width, 0.0f});
+    fullscreen(blur_, ao_.texture, ao_blur_, false);
+    set2(blur_, "dir", Vector2{0.0f, 1.0f / ao_.texture.height});
+    fullscreen(blur_, ao_blur_.texture, ao_, false);
+  } else {
+    BeginTextureMode(ao_);
+    ClearBackground(WHITE);
+    EndTextureMode();
+  }
+  // Screen-space reflections (half resolution) for glass, puddles and wet asphalt.
+  {
+    const float expo = exposure_override_ > 0.0f ? exposure_override_ : exposure_;
+    Texture2D depth{scene_.depth.id, tw_, th_, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    BeginTextureMode(ssr_rt_);
+    ClearBackground(BLANK);
+    rlDisableColorBlend();
+    BeginShaderMode(ssr_);
+    SetShaderValueTexture(ssr_, GetShaderLocation(ssr_, "texDepth"), depth);
+    set2(ssr_, "invRes", Vector2{1.0f / tw_, 1.0f / th_});
+    setF(ssr_, "nearZ", g_near);
+    setF(ssr_, "farZ", g_far);
+    set2(ssr_, "tanHalf", Vector2{tan_half * aspect, tan_half});
+    SetShaderValueMatrix(ssr_, GetShaderLocation(ssr_, "invView"), MatrixInvert(GetCameraMatrix(cam)));
+    set3(ssr_, "fbZenith", toneMapCpu(L.sky_zenith, expo));
+    set3(ssr_, "fbHorizon", toneMapCpu(L.sky_horizon, expo));
+    set3(ssr_, "fbCity", toneMapCpu(Vector3Add(Vector3Scale(L.ambient_ground, 0.75f), Vector3Scale(L.ambient_sky, 0.15f)), expo));
+    DrawTexturePro(scene_.texture, Rectangle{0, 0, static_cast<float>(tw_), static_cast<float>(th_)},
+                   Rectangle{0, 0, static_cast<float>(ssr_rt_.texture.width), static_cast<float>(ssr_rt_.texture.height)}, Vector2{0, 0}, 0.0f,
+                   WHITE);
+    EndShaderMode();
+    rlDrawRenderBatchActive();
+    rlEnableColorBlend();
+    EndTextureMode();
+  }
+  // Bloom (quarter resolution): bright pass + two separable blur iterations.
+  if (opt_.bloom) {
+    setF(bright_, "threshold", 0.82f);
+    fullscreen(bright_, scene_.texture, bright_rt_, false);
+    const Vector2 hx{1.0f / bloom_a_.texture.width, 0.0f}, vy{0.0f, 1.0f / bloom_a_.texture.height};
+    set2(blur_, "dir", hx);
+    fullscreen(blur_, bright_rt_.texture, bloom_a_, false);
+    set2(blur_, "dir", vy);
+    fullscreen(blur_, bloom_a_.texture, bloom_b_, false);
+    set2(blur_, "dir", Vector2Scale(hx, 2.0f));
+    fullscreen(blur_, bloom_b_.texture, bloom_a_, false);
+    set2(blur_, "dir", Vector2Scale(vy, 2.0f));
+    fullscreen(blur_, bloom_a_.texture, bloom_b_, false);
+  } else {
+    BeginTextureMode(bloom_b_);
+    ClearBackground(BLACK);
+    EndTextureMode();
+  }
+  // Auto exposure: average display luminance of a tiny downsample, corrected towards a
+  // time-of-day target (night stays dark; the eye adapts but not fully).
+  if (frame_ % 4 == 0 && exposure_override_ <= 0.0f) {
+    BeginTextureMode(lum_);
+    rlDisableColorBlend();
+    DrawTexturePro(scene_.texture, Rectangle{0, 0, static_cast<float>(tw_), static_cast<float>(th_)}, Rectangle{0, 0, 32, 18},
+                   Vector2{0, 0}, 0.0f, WHITE);
+    rlDrawRenderBatchActive();
+    rlEnableColorBlend();
+    EndTextureMode();
+    Image img = LoadImageFromTexture(lum_.texture);
+    if (img.data) {
+      const unsigned char* p = static_cast<const unsigned char*>(img.data);
+      double sum = 0;
+      const int n = img.width * img.height;
+      for (int i = 0; i < n; ++i) {
+        const double r = std::pow(p[i * 4] / 255.0, 2.2), g = std::pow(p[i * 4 + 1] / 255.0, 2.2), b = std::pow(p[i * 4 + 2] / 255.0, 2.2);
+        sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      }
+      UnloadImage(img);
+      const double mean = std::max(sum / std::max(1, n), 1e-4);
+      const double target = 0.155 - 0.085 * L.night * (1.0 - L.indoor);
+      const double k = std::pow(target / mean, 0.45);
+      exposure_ = static_cast<float>(std::clamp(exposure_ * std::clamp(k, 0.8, 1.25), 0.45, 4.5));
+    }
+  }
+  // Composite to the backbuffer (opaque: the scene alpha channel holds SSR data, not coverage).
+  rlDrawRenderBatchActive();
+  rlDisableColorBlend();
+  BeginShaderMode(composite_);
+  SetShaderValueTexture(composite_, GetShaderLocation(composite_, "texAO"), ao_.texture);
+  SetShaderValueTexture(composite_, GetShaderLocation(composite_, "texBloom"), bloom_b_.texture);
+  SetShaderValueTexture(composite_, GetShaderLocation(composite_, "texSsr"), ssr_rt_.texture);
+  setF(composite_, "aoStrength", opt_.ssao ? 0.85f : 0.0f);
+  setF(composite_, "bloomStrength", opt_.bloom ? 0.35f + 0.45f * L.night : 0.0f);
+  set3(composite_, "whiteBalance", L.white_balance);
+  setF(composite_, "saturation", L.saturation);
+  setF(composite_, "contrast", L.contrast);
+  setF(composite_, "vignette", 0.22f);
+  setF(composite_, "rainOverlay", L.rain * (1.0f - L.indoor));
+  setF(composite_, "timeSec", time_s);
+  set2(composite_, "invRes", Vector2{1.0f / tw_, 1.0f / th_});
+  static const int dbg = std::getenv("RJ_DEBUG_VIEW") ? std::atoi(std::getenv("RJ_DEBUG_VIEW")) : 0;
+  setI(composite_, "debugView", dbg);
+  DrawTexturePro(scene_.texture, Rectangle{0, 0, static_cast<float>(tw_), -static_cast<float>(th_)},
+                 Rectangle{0, 0, static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())}, Vector2{0, 0}, 0.0f,
+                 WHITE);
+  EndShaderMode();
+  rlDrawRenderBatchActive();
+  rlEnableColorBlend();
 }
 
 }  // namespace rjc

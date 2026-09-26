@@ -13,6 +13,8 @@
 #include "game/pedestrians.hpp"
 #include "game/player.hpp"
 #include "game/town_sim.hpp"
+#include "game/traffic_signals.hpp"
+#include "game/weather.hpp"
 #include "i18n/i18n.hpp"
 #include "render/renderer.hpp"
 #include "rj/econ/ledger.hpp"
@@ -39,6 +41,8 @@ struct LaunchOptions {
   float autowalk = 0.0f;  // test aid: walk forward for N seconds
   std::string walk;       // test aid: scripted legs "yaw_deg:seconds,yaw_deg:seconds,..."
   int entrance = -1;      // --state interior: which entrance to use (-1 = nearest to spawn)
+  std::string weather;    // force a weather state (clear, fair, thin_cloud, overcast, light_rain, rain, heavy_rain, thunder, fog, windy)
+  bool dev = false;       // start with the developer overlay
 };
 
 class App {
@@ -132,6 +136,12 @@ class App {
   bool quit_ = false;
   double map_half_extent_ = 350.0;
   Lighting lighting_;
+  WeatherSim weather_;
+  FacadeDetail facades_;
+  TrafficSignals signals_;
+  int64_t weather_prev_unix_ = 0;
+  float render_time_ = 0.0f;
+  std::vector<PointLight> collectLights(const Camera3D& cam) const;
 };
 
 }  // namespace rjc

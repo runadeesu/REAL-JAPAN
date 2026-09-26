@@ -44,10 +44,15 @@ set(RJ_SOURCES
   src/world/cell.cpp
   src/world/world.cpp
   src/world/interior.cpp
+  src/world/detail.cpp
+  src/world/facade.cpp
   src/render/renderer.cpp
+  src/render/textures.cpp
   src/game/player.cpp
   src/game/town_sim.cpp
   src/game/pedestrians.cpp
+  src/game/weather.cpp
+  src/game/traffic_signals.cpp
   src/ui/ui.cpp
 )
 if(WIN32)

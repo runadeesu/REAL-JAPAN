@@ -182,9 +182,10 @@ void World::requestLoad(const rj::stream::StreamKey& key) {
     return;
   }
   const std::filesystem::path path = dir_ / "cells" / (code + ".rjcell");
+  const std::filesystem::path dpath = dir_ / "cells" / (code + ".rjdet");
   Job j;
   j.key = key;
-  j.fut = std::async(std::launch::async, [path]() -> std::unique_ptr<CellCpu> {
+  j.fut = std::async(std::launch::async, [path, dpath]() -> std::unique_ptr<CellCpu> {
     auto data = readFile(path);
     if (!data) return nullptr;
     auto c = std::make_unique<CellCpu>();
@@ -194,6 +195,10 @@ void World::requestLoad(const rj::stream::StreamKey& key) {
       return nullptr;
     }
     prepareTerrain(*c);
+    if (auto det = readFile(dpath)) {
+      if (!parseDetail(*det, c->detail, err)) TraceLog(LOG_WARNING, "RJ: street detail parse failed: %s", err.c_str());
+      c->bytes += det->size();
+    }
     return c;
   });
   jobs_.push_back(std::move(j));
@@ -205,6 +210,7 @@ void World::requestUnload(const rj::stream::StreamKey& key) {
     if (j.key == key) j.cancelled = true;
   auto it = loaded_.find(code);
   if (it != loaded_.end()) {
+    unloadDetail(it->second->gpu.detail);
     unloadCell(it->second->gpu);
     loaded_.erase(it);
     rebuildHash();
@@ -215,7 +221,10 @@ void World::unloadAll() {
   for (auto& j : jobs_)
     if (j.fut.valid()) j.fut.wait();
   jobs_.clear();
-  for (auto& [k, c] : loaded_) unloadCell(c->gpu);
+  for (auto& [k, c] : loaded_) {
+    unloadDetail(c->gpu.detail);
+    unloadCell(c->gpu);
+  }
   loaded_.clear();
   hash_.clear();
   for (auto& [k, in] : interiors_) in->unload();
@@ -252,6 +261,41 @@ void World::placeCell(LoadedCell& c) {
     c.ty[k] = static_cast<float>(p.y);
     c.tz[k] = static_cast<float>(p.z);
   }
+  // Street detail -> origin ENU.
+  auto toO = [&](const float* v) { return c.to_origin.apply({v[0], v[1], v[2]}); };
+  const auto& det = cpu.detail;
+  c.walk.resize(det.walk.size());
+  c.walk_hash.clear();
+  for (size_t t = 0; t + 8 < det.walk.size(); t += 9) {
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (int k = 0; k < 3; ++k) {
+      const auto p = toO(&det.walk[t + k * 3]);
+      c.walk[t + k * 3] = static_cast<float>(p.x);
+      c.walk[t + k * 3 + 1] = static_cast<float>(p.y);
+      c.walk[t + k * 3 + 2] = static_cast<float>(p.z);
+      x0 = std::min(x0, static_cast<float>(p.x));
+      x1 = std::max(x1, static_cast<float>(p.x));
+      y0 = std::min(y0, static_cast<float>(p.y));
+      y1 = std::max(y1, static_cast<float>(p.y));
+    }
+    for (int bx = static_cast<int>(std::floor(x0 / 4.0)); bx <= static_cast<int>(std::floor(x1 / 4.0)); ++bx)
+      for (int by = static_cast<int>(std::floor(y0 / 4.0)); by <= static_cast<int>(std::floor(y1 / 4.0)); ++by)
+        c.walk_hash[bucketKey(bx, by)].push_back(static_cast<uint32_t>(t / 9));
+  }
+  c.cross.resize(det.cross.size());
+  for (size_t v = 0; v + 2 < det.cross.size(); v += 3) {
+    const auto p = toO(&det.cross[v]);
+    c.cross[v] = static_cast<float>(p.x);
+    c.cross[v + 1] = static_cast<float>(p.y);
+    c.cross[v + 2] = static_cast<float>(p.z);
+  }
+  c.lights.clear();
+  for (const auto& l : det.lights) c.lights.push_back({toO(l.pos), l.range});
+  c.signals.clear();
+  for (const auto& sg : det.signals)
+    c.signals.push_back({toO(sg.pos), sg.axis_yaw, sg.facing_yaw, sg.length, static_cast<int>(sg.kind), sg.group,
+                         static_cast<int>(sg.phase)});
+
   const int nx = cpu.tnx, ny = cpu.tny;
   if (nx >= 2 && ny >= 2) {
     c.p00 = {c.tx[0], c.ty[0]};
@@ -324,6 +368,7 @@ bool World::update(rj::geo::Vec3d& player, double view_distance_m) {
     lc->frame = rj::geo::LocalFrame({cpu->anchor[0], cpu->anchor[1], cpu->anchor[2]});
     const size_t bytes = cpu->bytes;
     uploadCell(*cpu, lc->gpu);
+    uploadDetail(cpu->detail, lc->gpu.detail);
     lc->cpu = std::move(cpu);
     placeCell(*lc);
     loaded_[lc->meta.mesh] = std::move(lc);
@@ -350,9 +395,53 @@ std::optional<double> World::terrainHeight(double x, double y) const {
     const int i = std::min(static_cast<int>(fi), ny - 2), j = std::min(static_cast<int>(fj), nx - 2);
     const double u = fi - i, w = fj - j;
     auto Z = [&](int a, int b) { return static_cast<double>(c->tz[static_cast<size_t>(a * nx + b)]); };
-    return (1 - u) * ((1 - w) * Z(i, j) + w * Z(i, j + 1)) + u * ((1 - w) * Z(i + 1, j) + w * Z(i + 1, j + 1));
+    // Exactly the rendered surface: quads are split along (i,j)-(i+1,j+1) (see prepareTerrain).
+    const double a = Z(i, j), b = Z(i, j + 1), d = Z(i + 1, j), e = Z(i + 1, j + 1);
+    return w >= u ? a + w * (b - a) + u * (e - b) : a + u * (d - a) + w * (e - d);
   }
   return std::nullopt;
+}
+
+namespace {
+// Barycentric z of (x, y) inside triangle t (9 floats), or nullopt.
+std::optional<double> triZ(const float* t, double x, double y) {
+  const double d = (t[4] - t[7]) * (t[0] - t[6]) + (t[6] - t[3]) * (t[1] - t[7]);
+  if (std::fabs(d) < 1e-12) return std::nullopt;
+  const double l1 = ((t[4] - t[7]) * (x - t[6]) + (t[6] - t[3]) * (y - t[7])) / d;
+  const double l2 = ((t[7] - t[1]) * (x - t[6]) + (t[0] - t[6]) * (y - t[7])) / d;
+  const double l3 = 1.0 - l1 - l2;
+  if (l1 < -1e-5 || l2 < -1e-5 || l3 < -1e-5) return std::nullopt;
+  return l1 * t[2] + l2 * t[5] + l3 * t[8];
+}
+}  // namespace
+
+std::optional<double> World::surfaceHeight(double x, double y) const {
+  const int64_t k = bucketKey(static_cast<int>(std::floor(x / 4.0)), static_cast<int>(std::floor(y / 4.0)));
+  for (const auto& [code, c] : loaded_) {
+    auto it = c->walk_hash.find(k);
+    if (it == c->walk_hash.end()) continue;
+    for (uint32_t t : it->second)
+      if (auto z = triZ(&c->walk[static_cast<size_t>(t) * 9], x, y)) return z;
+  }
+  return terrainHeight(x, y);
+}
+
+bool World::pointInBuilding(double x, double y) const {
+  auto it = hash_.find(bucketKey(static_cast<int>(std::floor(x / kBucket)), static_cast<int>(std::floor(y / kBucket))));
+  if (it == hash_.end()) return false;
+  const Vector2 q{static_cast<float>(x), static_cast<float>(y)};
+  for (const auto& [cell, b] : it->second) {
+    const auto& poly = cell->fp[static_cast<size_t>(b)];
+    if (poly.size() >= 3 && CheckCollisionPointPoly(q, poly.data(), static_cast<int>(poly.size()))) return true;
+  }
+  return false;
+}
+
+bool World::onCrosswalk(double x, double y) const {
+  for (const auto& [code, c] : loaded_)
+    for (size_t t = 0; t + 8 < c->cross.size(); t += 9)
+      if (triZ(&c->cross[t], x, y)) return true;
+  return false;
 }
 
 void World::collide(rj::geo::Vec3d& p, double radius) const {

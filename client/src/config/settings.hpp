@@ -24,6 +24,9 @@ struct Settings {
   bool real_time_start = true;
   bool show_fps = false;
   bool photo_textures = true;  // PLATEAU photo textures (contain real signage / ads)
+  bool post_fx = true;         // SSAO + bloom + auto exposure + FXAA
+  bool head_bob = true;        // natural head movement while walking (can be turned off)
+  bool dev_overlay = false;    // developer HUD (coordinates, mesh, building data, perf); F3 toggles
 
   static const std::vector<std::pair<int, int>>& resolutions();
   static const std::vector<int>& timeScales();

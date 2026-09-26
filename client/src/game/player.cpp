@@ -16,7 +16,7 @@ rj::geo::Vec3d Player::forwardEnu() const {
 }
 
 void Player::snapToGround(const World& world) {
-  if (auto h = world.terrainHeight(pos.x, pos.y)) {
+  if (auto h = world.surfaceHeight(pos.x, pos.y)) {
     pos.z = *h;
     vel_z = 0;
     grounded = true;
@@ -84,7 +84,7 @@ void Player::update(float dt, const World& world, const Settings& s, bool input,
       ground = inside->floorBelow(pos.x, pos.y, pos.z + 0.55, grounded ? 2.5 : 12.0);
       if (!ground) {
         // Top of a stairwell: the next step is the pavement.
-        if (auto th = world.terrainHeight(pos.x, pos.y); th && *th <= pos.z + 0.55 && *th >= pos.z - 1.0) {
+        if (auto th = world.surfaceHeight(pos.x, pos.y); th && *th <= pos.z + 0.55 && *th >= pos.z - 1.0) {
           ground = th;
           left_interior = true;
         }
@@ -92,7 +92,7 @@ void Player::update(float dt, const World& world, const Settings& s, bool input,
     } else {
       world.collide(pos, kRadius);
       if (nearby) nearby->collide(pos, kRadius);  // stairwell parapets that stand above the pavement
-      ground = world.terrainHeight(pos.x, pos.y);
+      ground = world.surfaceHeight(pos.x, pos.y);  // raised sidewalks / islands where the data has them
     }
     if (!ground) {
       // Outside the loaded data: stay on the edge.
@@ -114,12 +114,37 @@ void Player::update(float dt, const World& world, const Settings& s, bool input,
       grounded = false;
     }
   }
-  distance_walked += std::hypot(pos.x - before.x, pos.y - before.y);
+  const double moved = std::hypot(pos.x - before.x, pos.y - before.y);
+  distance_walked += moved;
+  // Eye height follows steps (kerbs 15 cm, stair treads) with a short critically-damped lag.
+  if (!cam_z_init || std::fabs(pos.z - cam_z) > 1.2 || fly) {
+    cam_z = pos.z;
+    cam_z_init = true;
+  } else {
+    cam_z += (pos.z - cam_z) * (1.0 - std::exp(-static_cast<double>(dt) * 14.0));
+  }
+  head_bob = s.head_bob;
+  const float spd = static_cast<float>(moved / std::max(dt, 1e-4f));
+  const float target = (!fly && grounded) ? std::clamp(spd / 1.45f, 0.0f, 1.6f) : 0.0f;
+  bob_amount += (target - bob_amount) * std::min(1.0f, dt * 8.0f);
+  bob_phase += static_cast<float>(moved) * 3.3f;  // ~one step per 0.95 m (two bobs per stride)
+}
+
+rj::geo::Vec3d Player::cameraEyeEnu() const {
+  rj::geo::Vec3d e{pos.x, pos.y, (cam_z_init ? cam_z : pos.z) + kEyeHeight};
+  if (head_bob && bob_amount > 0.01f) {
+    const double v = std::sin(bob_phase * 2.0) * 0.022 * bob_amount;   // vertical: twice per stride
+    const double l = std::sin(bob_phase) * 0.012 * bob_amount;         // lateral sway
+    e.z += v;
+    e.x += std::cos(yaw) * l;
+    e.y -= std::sin(yaw) * l;
+  }
+  return e;
 }
 
 Camera3D Player::camera(float fov_deg, float third_person_dist) const {
   Camera3D c{};
-  const rj::geo::Vec3d eye = eyeEnu();
+  const rj::geo::Vec3d eye = cameraEyeEnu();
   const rj::geo::Vec3d f = forwardEnu();
   if (camera_mode == 1) {
     const double k = third_person_dist / 4.5;
