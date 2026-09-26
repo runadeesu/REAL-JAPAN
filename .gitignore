@@ -1,0 +1,13 @@
+# Raw downloaded source data (re-fetch with pipeline scripts; licences apply)
+data/raw/
+# Build outputs
+build/
+build-*/
+core/build/
+client/build*/
+dist/
+*.o
+*.obj
+__pycache__/
+*.pyc
+.pytest_cache/
