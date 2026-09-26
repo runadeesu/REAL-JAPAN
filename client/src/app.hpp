@@ -8,6 +8,7 @@
 #include <string>
 
 #include "config/settings.hpp"
+#include "game/pedestrians.hpp"
 #include "game/player.hpp"
 #include "game/town_sim.hpp"
 #include "i18n/i18n.hpp"
@@ -31,6 +32,8 @@ struct LaunchOptions {
   bool fly = false;
   double alt = 0;
   int camera_mode = -1;
+  int time_scale = 0;  // override (0 = use settings)
+  bool selftest = false;  // run automated checks against the real game systems, then quit
 };
 
 class App {
@@ -56,6 +59,7 @@ class App {
   void drawCredits();
   void drawHud();
   void drawBuildingInfo();
+  void drawWalkerInfo();
   void drawPause();
   void drawPhone();
   void drawMap(Rectangle r, double half_extent_m, bool labels);
@@ -72,6 +76,8 @@ class App {
   void toast(const std::string& msg);
   void takeUserScreenshot();
   void applyLaunchOverrides();
+  void runSelfTest();
+  int exit_code_ = 0;
 
   rj::sim::CivilDateTime jst() const { return clock_.jst(); }
   std::string dateTimeString() const;
@@ -89,6 +95,8 @@ class App {
   std::unique_ptr<rj::econ::Ledger> ledger_;
   rj::econ::AccountId player_account_ = 0;
   TownSim town_;
+  Pedestrians peds_;
+  const Walker* hover_walker_ = nullptr;
   std::filesystem::path slice_dir_;
 
   Screen screen_ = Screen::Boot;

@@ -19,6 +19,7 @@ NS = {
     "gen": "http://www.opengis.net/citygml/generics/2.0",
     "uro": "https://www.geospatial.jp/iur/uro/3.2",
     "app": "http://www.opengis.net/citygml/appearance/2.0",
+    "frn": "http://www.opengis.net/citygml/cityfurniture/2.0",
 }
 
 
@@ -35,6 +36,8 @@ class Polygon:
     exterior: Ring
     interiors: list[Ring] = field(default_factory=list)
     kind: str = "wall"  # roof | wall | ground | installation | lod1 | road | sidewalk | median
+    ext_id: str = ""  # gml:id of the exterior LinearRing (texture lookup key)
+    int_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -69,18 +72,52 @@ def _parse_poslist(text: str | None) -> Ring:
 
 
 def _polygon(el: ET.Element, kind: str) -> Polygon | None:
-    ext = el.find("gml:exterior/gml:LinearRing/gml:posList", NS)
+    lr = el.find("gml:exterior/gml:LinearRing", NS)
+    ext = lr.find("gml:posList", NS) if lr is not None else None
     if ext is None:
         return None
     ring = _parse_poslist(ext.text)
     if len(ring) < 3:
         return None
-    holes = []
-    for it in el.findall("gml:interior/gml:LinearRing/gml:posList", NS):
-        h = _parse_poslist(it.text)
+    holes, hole_ids = [], []
+    for it in el.findall("gml:interior/gml:LinearRing", NS):
+        pl = it.find("gml:posList", NS)
+        h = _parse_poslist(pl.text if pl is not None else None)
         if len(h) >= 3:
             holes.append(h)
-    return Polygon(ring, holes, kind)
+            hole_ids.append(it.get(q("gml:id"), ""))
+    return Polygon(ring, holes, kind, lr.get(q("gml:id"), ""), hole_ids)
+
+
+@dataclass
+class Appearance:
+    images: list[str] = field(default_factory=list)  # imageURI relative to the gml file
+    ring_uv: dict[str, tuple[int, list[tuple[float, float]]]] = field(default_factory=dict)
+
+
+def parse_appearance(path: str) -> Appearance:
+    """Collect ParameterizedTexture targets: LinearRing gml:id -> (image index, texture coordinates)."""
+    app = Appearance()
+    index: dict[str, int] = {}
+    for ev, el in ET.iterparse(path, events=("end",)):
+        if el.tag != q("app:ParameterizedTexture"):
+            continue
+        uri = _text(el, "app:imageURI")
+        if uri:
+            if uri not in index:
+                index[uri] = len(app.images)
+                app.images.append(uri)
+            ii = index[uri]
+            for tc in el.findall("app:target/app:TexCoordList/app:textureCoordinates", NS):
+                ring = (tc.get("ring") or "").lstrip("#")
+                v = (tc.text or "").split()
+                uv = [(float(v[k]), float(v[k + 1])) for k in range(0, len(v) - 1, 2)]
+                if len(uv) > 1 and uv[0] == uv[-1]:
+                    uv.pop()
+                if ring:
+                    app.ring_uv[ring] = (ii, uv)
+        el.clear()
+    return app
 
 
 _SURFACE_KIND = {
@@ -197,4 +234,31 @@ def iter_roads(path: str) -> Iterator[Road]:
                 if p:
                     r.detail.append(p)
         yield r
+        el.clear()
+
+
+@dataclass
+class Furniture:
+    gml_id: str
+    function: int = 0
+    lod: int = 0
+    polys: list[Polygon] = field(default_factory=list)
+
+
+def iter_furniture(path: str) -> Iterator[Furniture]:
+    """frn:CityFurniture (signals, lights, poles, fences, road markings ...). Highest LOD available."""
+    for ev, el in ET.iterparse(path, events=("end",)):
+        if el.tag != q("frn:CityFurniture"):
+            continue
+        f = Furniture(gml_id=el.get(q("gml:id"), ""))
+        try:
+            f.function = int(_text(el, "frn:function") or 0)
+        except ValueError:
+            pass
+        for lod in (3, 2, 1):
+            polys = [p for p in (_polygon(x, "furniture") for x in el.findall(f"frn:lod{lod}Geometry//gml:Polygon", NS)) if p]
+            if polys:
+                f.lod, f.polys = lod, polys
+                break
+        yield f
         el.clear()

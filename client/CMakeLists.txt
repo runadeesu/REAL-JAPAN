@@ -26,6 +26,7 @@ if(NOT EXISTS "${RJ_ROOT}/third_party/raylib/CMakeLists.txt")
   message(FATAL_ERROR "raylib not found. Run tools/fetch_deps.sh first.")
 endif()
 add_subdirectory("${RJ_ROOT}/third_party/raylib" raylib EXCLUDE_FROM_ALL)
+target_compile_definitions(raylib PRIVATE SUPPORT_FILEFORMAT_JPG=1)  # PLATEAU photo atlases
 
 # --- rjcore -------------------------------------------------------------------
 set(RJCORE_BUILD_TESTS ON CACHE BOOL "")
@@ -45,6 +46,7 @@ set(RJ_SOURCES
   src/render/renderer.cpp
   src/game/player.cpp
   src/game/town_sim.cpp
+  src/game/pedestrians.cpp
   src/ui/ui.cpp
 )
 if(WIN32)

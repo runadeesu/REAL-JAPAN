@@ -8,6 +8,7 @@
 // is NOT implemented here; see docs/ARCHITECTURE.md (Rendering).
 
 #include "raylib.h"
+#include "game/pedestrians.hpp"
 #include "world/world.hpp"
 
 namespace rjc {
@@ -32,8 +33,9 @@ class Renderer {
 
   void renderShadowMap(const Camera3D& cam, const World& world, const Lighting& L);
   void drawSky(const Camera3D& cam, const Lighting& L, float aspect);
-  void drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows);
+  void drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows, bool photo_textures);
   void drawPlayerBody(const Vector3& feet, float yaw_rad, const Lighting& L);
+  void drawPedestrians(const Pedestrians& peds);
 
   static void setClipPlanes(float near_m, float far_m);
 
@@ -47,6 +49,8 @@ class Renderer {
   Material mat_{};
   Material mat_depth_{};
   Mesh plane_{};
+  Mesh legs_{};
+  Mesh torso_{};
   Mesh body_{};
   Mesh head_{};
   bool ready_ = false;

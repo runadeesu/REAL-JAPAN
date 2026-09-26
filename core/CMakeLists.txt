@@ -37,6 +37,7 @@ add_library(rjcore
   src/econ/ledger.cpp
   src/verify/provenance.cpp
   src/env/solar.cpp
+  src/nav/grid_nav.cpp
 )
 target_include_directories(rjcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -55,6 +56,7 @@ add_executable(rjcore_tests
   tests/test_ledger.cpp
   tests/test_verify.cpp
   tests/test_solar.cpp
+  tests/test_nav.cpp
 )
 target_link_libraries(rjcore_tests PRIVATE rjcore)
 

@@ -27,6 +27,7 @@ bool TownSim::load(const std::filesystem::path& csv) {
       spec.home = {f[2], {std::stod(f[3]), std::stod(f[4])}};
       if (f.size() >= 8 && !f[5].empty()) spec.work = {f[5], {std::stod(f[6]), std::stod(f[7])}};
       npcs_.push_back(rj::sim::generateResident(spec));
+      if (f.size() >= 9 && f[8] == "commuter") ++commuters_;
     } catch (...) {
     }
   }
@@ -52,6 +53,33 @@ std::array<int, static_cast<size_t>(rj::sim::ActivityType::kCount)> TownSim::his
   for (const auto& p : plans_)
     if (const auto* a = p.at(minute)) ++h[static_cast<size_t>(a->type)];
   return h;
+}
+
+}  // namespace rjc
+
+namespace rjc {
+
+std::vector<WalkTrip> TownSim::walkingTrips(const rj::sim::CivilDate& d, int minute) {
+  ensurePlans(d);
+  std::vector<WalkTrip> out;
+  for (size_t i = 0; i < plans_.size(); ++i) {
+    const auto& acts = plans_[i].activities;
+    for (size_t k = 0; k < acts.size(); ++k) {
+      const auto& a = acts[k];
+      if (minute < a.start_min || minute >= a.end_min) continue;
+      if (a.type != rj::sim::ActivityType::Commute || a.mode != rj::sim::TravelMode::Walk || k == 0) break;
+      WalkTrip t;
+      t.npc = i;
+      t.start_min = a.start_min;
+      t.end_min = a.end_min;
+      t.from = acts[k - 1].place;
+      t.to = a.place;
+      if (k + 1 < acts.size()) t.next = acts[k + 1].type;
+      if (t.from.valid() && t.to.valid()) out.push_back(t);
+      break;
+    }
+  }
+  return out;
 }
 
 }  // namespace rjc

@@ -50,13 +50,14 @@ int App::run() {
     }
   }
   shutdown();
-  return fatal_.empty() ? 0 : 1;
+  return !fatal_.empty() ? 1 : exit_code_;
 }
 
 bool App::boot() {
   const auto data = dataDir();
   settings_.load(data / "config" / "default.ini", userDir() / "settings.ini");
   if (!opt_.lang.empty()) settings_.language = opt_.lang;
+  if (opt_.time_scale > 0) settings_.time_scale = opt_.time_scale;
   if (!i18n_.load(data / "lang", settings_.language)) {
     fatal_ = "Missing language files in " + pathToUtf8(data / "lang");
     return false;
@@ -67,13 +68,16 @@ bool App::boot() {
     fatal_ = "World data error: " + err;
     return false;
   }
-  // Glyphs: every language file + real building names + ASCII.
+  town_.load(slice_dir_ / "residents.csv");
+  // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
+  for (size_t i = 0; i < town_.size(); ++i) collectCodepoints(town_.npc(i).fullName(), cps);
+  for (const auto& o : rj::sim::allOccupations()) collectCodepoints(std::string(o.name_ja), cps);
   for (int c = 32; c < 127; ++c) cps.insert(c);
   i18n_.collectAllCodepoints(data / "lang", cps);
   for (const auto& p : world_.meta().pois) collectCodepoints(p.name, cps);
   for (const auto& s : world_.meta().sources) collectCodepoints(s.attribution, cps);
-  collectCodepoints(world_.meta().name_ja + "°×・…→←↑↓〜「」（）、。！？：年月日時分秒円¥", cps);
+  collectCodepoints(world_.meta().name_ja + "°×・…→←↑↓〜「」（）、。！？：年月日時分秒円¥•–—", cps);
   if (!ui_.loadFont(data / "fonts" / "BIZUDPGothic-Regular.ttf", cps, 44)) {
     fatal_ = "Font load failed: data/fonts/BIZUDPGothic-Regular.ttf";
     return false;
@@ -82,7 +86,6 @@ bool App::boot() {
     fatal_ = "Shader compilation failed (OpenGL 3.3 required)";
     return false;
   }
-  town_.load(slice_dir_ / "residents.csv");
   if (auto icon = readFile(data / "icon.png")) {
     Image img = LoadImageFromMemory(".png", icon->data(), static_cast<int>(icon->size()));
     if (img.data) {
@@ -262,7 +265,12 @@ void App::update(float dt) {
   if (screen_ == Screen::Loading) {
     if (world_.residentCount() >= world_.knownCount() || (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > 600)) {
       player_.snapToGround(world_);
+      peds_.buildNav(world_);
       screen_ = Screen::Title;
+      if (opt_.selftest) {
+        runSelfTest();
+        return;
+      }
       applyLaunchOverrides();
       if (!opt_.state.empty()) {
         const std::string st = opt_.state;
@@ -315,8 +323,10 @@ void App::update(float dt) {
         saveSlot(kAutosaveSlot);
       }
       player_.update(dt, world_, settings_, screen_ == Screen::Game);
+      peds_.update(town_, world_, clock_.jst(), player_.pos, dt);
       if (screen_ == Screen::Game) {
         hover_ = world_.pick(player_.eyeEnu(), player_.forwardEnu(), 300.0);
+        hover_walker_ = peds_.pick(player_.eyeEnu(), player_.forwardEnu(), hover_ ? std::min(40.0, hover_->distance) : 40.0);
         if (IsKeyPressed(KEY_ESCAPE)) screen_ = Screen::Pause;
         if (IsKeyPressed(KEY_TAB)) {
           screen_ = Screen::Phone;
@@ -325,6 +335,7 @@ void App::update(float dt) {
         if (IsKeyPressed(KEY_F5)) saveSlot(1);
       } else {
         hover_.reset();
+        hover_walker_ = nullptr;
         if (IsKeyPressed(KEY_TAB) || IsKeyPressed(KEY_ESCAPE)) screen_ = Screen::Game;
         const float wheel = GetMouseWheelMove();
         if (phone_app_ == PhoneApp::Map && wheel != 0.0f)
@@ -355,6 +366,52 @@ void App::update(float dt) {
                              static_cast<float>(settings_.view_distance_m));
 }
 
+void App::runSelfTest() {
+  int fails = 0;
+  auto check = [&](bool ok, const char* what) {
+    TraceLog(ok ? LOG_INFO : LOG_ERROR, "RJ: SELFTEST %s %s", ok ? "PASS" : "FAIL", what);
+    if (!ok) ++fails;
+  };
+  check(world_.residentCount() == world_.knownCount(), "all world cells loaded");
+  check(world_.buildingCount() > 9000, "buildings present (PLATEAU)");
+  check(town_.size() > 0, "residents loaded");
+  check(peds_.navReady(), "pedestrian navigation grid built");
+  newGame();
+  check(in_session_, "new game started");
+  check(world_.terrainHeight(player_.pos.x, player_.pos.y).has_value(), "player spawned on terrain");
+  const auto g0 = world_.toGeodetic(player_.pos);
+  check(std::fabs(g0.lat_deg - world_.meta().spawn_lat) < 1e-6 && std::fabs(g0.lon_deg - world_.meta().spawn_lon) < 1e-6,
+        "spawn at configured coordinates");
+  const auto spawn = player_.pos;
+  check(saveSlot(3), "save to slot 3");
+  const auto s = readSave(3);
+  check(s.has_value() && std::fabs(s->lat - g0.lat_deg) < 1e-7, "save file readable with same position");
+  player_.pos.x += 250.0;
+  player_.pos.y -= 120.0;
+  check(loadSlot(3), "load slot 3");
+  check(std::hypot(player_.pos.x - spawn.x, player_.pos.y - spawn.y) < 0.05, "position restored after load");
+  check(ledger_ && ledger_->balance(player_account_) == kStartMoney, "money restored after load");
+  const std::string lang0 = settings_.language;
+  setLanguage("en");
+  const std::string en = tr("menu.new_game");
+  setLanguage("ja");
+  const std::string ja = tr("menu.new_game");
+  check(en == "New Game" && ja != en && ja != "menu.new_game", "Japanese and English strings");
+  Settings reread;
+  reread.load(dataDir() / "config" / "default.ini", userDir() / "settings.ini");
+  check(reread.language == "ja", "settings.ini written and re-read");
+  setLanguage(lang0);
+  const auto hist = town_.histogram(clock_.jst().date, clock_.jst().minuteOfDay());
+  int total = 0;
+  for (int h : hist) total += h;
+  check(total == static_cast<int>(town_.size()), "every resident has an activity now");
+  std::error_code ec;
+  std::filesystem::remove(savePath(3), ec);
+  TraceLog(fails ? LOG_ERROR : LOG_INFO, "RJ: SELFTEST %s (%d failed)", fails ? "FAILED" : "OK", fails);
+  exit_code_ = fails ? 3 : 0;
+  quit_ = true;
+}
+
 Camera3D App::titleCamera() const {
   const float a = title_t_ * 0.035f + 0.6f;
   const double r = 420.0;
@@ -376,7 +433,8 @@ void App::drawWorldView(const Camera3D& cam) {
   renderer_.drawSky(cam, lighting_, aspect);
   Renderer::setClipPlanes(0.3f, static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
   BeginMode3D(cam);
-  renderer_.drawWorld(cam, world_, lighting_, settings_.shadows);
+  renderer_.drawWorld(cam, world_, lighting_, settings_.shadows, settings_.photo_textures);
+  if (in_session_ && screen_ != Screen::Title) renderer_.drawPedestrians(peds_);
   if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title)
     renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw, lighting_);
   EndMode3D();
@@ -498,10 +556,10 @@ void App::drawSettings() {
   DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Color{0, 0, 0, 150});
   const float vw = ui_.vw();
   const float w = 1100, x = (vw - w) / 2;
-  ui_.panel({x - 30, 60, w + 60, 980});
-  ui_.text(tr("settings.title"), x, 85, 48, theme::kText);
-  float y = 165;
-  const float rh = 62, gap = 10;
+  ui_.panel({x - 30, 20, w + 60, 1045});
+  ui_.text(tr("settings.title"), x, 38, 44, theme::kText);
+  float y = 105;
+  const float rh = 60, gap = 8;
   auto onoff = [&](bool v) { return tr(v ? "settings.on" : "settings.off"); };
   bool changed = false;
 
@@ -590,6 +648,11 @@ void App::drawSettings() {
     settings_.show_fps = !settings_.show_fps;
     changed = true;
   }
+  y += rh + gap;
+  if (ui_.stepper({x, y, w, rh}, tr("settings.photo_textures"), onoff(settings_.photo_textures))) {
+    settings_.photo_textures = !settings_.photo_textures;
+    changed = true;
+  }
   y += rh + gap + 6;
   if (changed) saveSettings();
   ui_.text(tr("settings.saved_note"), x, y + 18, 24, theme::kMuted);
@@ -641,7 +704,8 @@ void App::drawCredits() {
   for (const auto& s : world_.meta().sources) {
     y += ui_.textWrapped("• " + s.attribution + "  [" + s.license + "]", x + 10, y, w - 20, 24, theme::kText) + 4;
   }
-  y += ui_.textWrapped(tr("credits.notice"), x + 10, y, w - 20, 22, theme::kMuted) + 18;
+  y += ui_.textWrapped(tr("credits.notice"), x + 10, y, w - 20, 22, theme::kMuted) + 4;
+  y += ui_.textWrapped(tr("credits.pending"), x + 10, y, w - 20, 22, theme::kWarn) + 18;
   ui_.text(tr("credits.software"), x, y, 30, theme::kAccent);
   y += 44;
   y += ui_.textWrapped("• " + tr("credits.raylib"), x + 10, y, w - 20, 24, theme::kText);
@@ -680,7 +744,10 @@ void App::drawHud() {
   }
   // Minimap bottom-right.
   if (screen_ != Screen::Phone) drawMap({vw - 360, 700, 330, 330}, 220.0, false);
-  if (screen_ == Screen::Game) drawBuildingInfo();
+  if (screen_ == Screen::Game) {
+    if (hover_walker_) drawWalkerInfo();
+    else drawBuildingInfo();
+  }
   if (session_t_ < 25.0f && screen_ == Screen::Game)
     ui_.textCentered(tr("hud.controls"), vw / 2, 1030, 24, Color{255, 255, 255, static_cast<unsigned char>(std::min(1.0f, (25.0f - session_t_) / 3.0f) * 220)});
 }
@@ -712,9 +779,33 @@ void App::drawBuildingInfo() {
            b.geometry_status == 0 ? theme::kGood : theme::kWarn);
   yy += 34;
   yy += ui_.textWrapped(tr("verify.interior.unknown"), x + 22, yy, w - 44, 22, theme::kWarn);
-  const auto& src = world_.meta().sources;
-  if (b.source_index < src.size()) yy += ui_.textWrapped(src[b.source_index].attribution, x + 22, yy + 4, w - 44, 18, theme::kMuted);
-  ui_.text(tr("info.id") + " " + b.id, x + 22, y + 420 - 30, 16, theme::kMuted);
+  yy += 4;
+  yy += ui_.textWrapped(tr("info.source") + "  " + tr("info.source_short." + std::to_string(b.source_index)), x + 22, yy,
+                        w - 44, 18, theme::kMuted);
+  ui_.text(tr("info.id") + " " + b.id, x + 22, yy, 18, theme::kMuted);
+}
+
+void App::drawWalkerInfo() {
+  const Walker& w = *hover_walker_;
+  const auto& n = town_.npc(w.npc);
+  const auto* occ = rj::sim::occupationById(n.occupation_id);
+  const float w_ = 560, x = ui_.vw() - w_ - 30, y = 20;
+  ui_.panel({x, y, w_, 300});
+  float yy = y + 18;
+  ui_.text(tr("npc.title"), x + 22, yy, 22, theme::kMuted);
+  yy += 34;
+  ui_.text(n.fullName() + "  " + i18n_.f("npc.age", {{"n", std::to_string(n.age)}}), x + 22, yy, 34, theme::kText);
+  yy += 50;
+  ui_.text(occ ? std::string(i18n_.code() == "ja" ? occ->name_ja : occ->name_en) : n.occupation_id, x + 22, yy, 26, theme::kText);
+  yy += 40;
+  ui_.text(i18n_.f("npc.walking_to", {{"next", tr("activity." + std::to_string(static_cast<int>(w.trip.next)))}}), x + 22, yy, 24, theme::kGood);
+  yy += 36;
+  const auto two2 = [](int v) { return (v < 10 ? "0" : "") + std::to_string(v); };
+  ui_.text(i18n_.f("npc.schedule", {{"a", two2(w.trip.start_min / 60) + ":" + two2(w.trip.start_min % 60)},
+                                    {"b", two2(w.trip.end_min / 60) + ":" + two2(w.trip.end_min % 60)}}),
+           x + 22, yy, 22, theme::kMuted);
+  yy += 40;
+  ui_.textWrapped(tr("npc.fictional"), x + 22, yy, w_ - 44, 20, theme::kWarn);
 }
 
 void App::drawPause() {
@@ -893,7 +984,8 @@ void App::drawPhone() {
     case PhoneApp::Town: {
       ui_.text(tr("phone.town"), cx, yy, 32, theme::kText);
       yy += 50;
-      ui_.text(i18n_.f("phone.town_title", {{"n", std::to_string(town_.size())}}), cx, yy, 24, theme::kMuted);
+      ui_.text(i18n_.f("phone.town_title", {{"n", std::to_string(town_.size() - town_.commuters())},
+                                             {"c", std::to_string(town_.commuters())}}), cx, yy, 22, theme::kMuted);
       yy += 40;
       const auto hist = town_.histogram(t.date, t.minuteOfDay());
       const int total = std::max<int>(1, static_cast<int>(town_.size()));

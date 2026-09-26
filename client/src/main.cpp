@@ -26,6 +26,8 @@ rjc::LaunchOptions parseArgs(int argc, char** argv) {
     else if (a == "--fly") o.fly = true;
     else if (a == "--alt") o.alt = std::atof(next().c_str());
     else if (a == "--third-person") o.camera_mode = 1;
+    else if (a == "--timescale") o.time_scale = std::atoi(next().c_str());
+    else if (a == "--selftest") o.selftest = true;
     else if (a == "--pos") {
       const std::string v = next();
       if (std::sscanf(v.c_str(), "%lf,%lf", &o.lat, &o.lon) == 2) o.has_pos = true;
@@ -44,7 +46,7 @@ int main(int argc, char** argv) {
   unsigned int flags = FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT;
   if (s.vsync) flags |= FLAG_VSYNC_HINT;
   SetConfigFlags(flags);
-  SetTraceLogLevel(opt.screenshot.empty() ? LOG_WARNING : LOG_INFO);
+  SetTraceLogLevel(opt.screenshot.empty() && !opt.selftest ? LOG_WARNING : (std::getenv("RJ_DEBUG") ? LOG_DEBUG : LOG_INFO));
   InitWindow(s.width, s.height, "PROJECT: REAL JAPAN");
   if (!IsWindowReady()) return 2;
   if (s.fullscreen) ToggleBorderlessWindowed();

@@ -65,8 +65,8 @@ bool parseCell(const std::vector<unsigned char>& data, CellCpu& c, std::string& 
   Reader r(data);
   char magic[8];
   r.bytes(magic, 8);
-  if (!r.ok() || std::memcmp(magic, "RJCELL01", 8) != 0) {
-    err = "bad magic";
+  if (!r.ok() || std::memcmp(magic, "RJCELL02", 8) != 0) {
+    err = "bad magic (expected RJCELL02; re-cook the world data)";
     return false;
   }
   char mesh[16];
@@ -120,6 +120,7 @@ bool parseCell(const std::vector<unsigned char>& data, CellCpu& c, std::string& 
   c.chunks.resize(nc);
   for (auto& ch : c.chunks) {
     const uint32_t nv = r.get<uint32_t>(), ni = r.get<uint32_t>();
+    ch.page = r.get<int32_t>();
     if (!r.ok() || nv > 65535) {
       err = "bad chunk";
       return false;
@@ -127,10 +128,12 @@ bool parseCell(const std::vector<unsigned char>& data, CellCpu& c, std::string& 
     ch.pos.resize(nv * 3);
     ch.nrm.resize(nv * 3);
     ch.col.resize(nv * 4);
+    ch.uv.resize(nv * 2);
     ch.idx.resize(ni);
     r.bytes(ch.pos.data(), ch.pos.size() * 4);
     r.bytes(ch.nrm.data(), ch.nrm.size() * 4);
     r.bytes(ch.col.data(), ch.col.size());
+    r.bytes(ch.uv.data(), ch.uv.size() * 4);
     r.bytes(ch.idx.data(), ch.idx.size() * 2);
     r.skip((4 - (ni * 2) % 4) % 4);
   }
@@ -138,11 +141,20 @@ bool parseCell(const std::vector<unsigned char>& data, CellCpu& c, std::string& 
   r.bytes(c.theight.data(), c.theight.size() * 4);
   std::vector<unsigned char> png(png_len);
   r.bytes(png.data(), png_len);
+  const uint32_t npages = r.get<uint32_t>();
+  std::vector<std::vector<unsigned char>> jpgs(npages);
+  for (auto& j : jpgs) {
+    const uint32_t len = r.get<uint32_t>();
+    if (!r.ok() || len > data.size()) break;
+    j.resize(len);
+    r.bytes(j.data(), len);
+  }
   if (!r.ok()) {
     err = "truncated body";
     return false;
   }
   if (png_len) c.ground = LoadImageFromMemory(".png", png.data(), static_cast<int>(png_len));
+  for (const auto& j : jpgs) c.pages.push_back(LoadImageFromMemory(".jpg", j.data(), static_cast<int>(j.size())));
   c.bytes = data.size();
   return true;
 }
@@ -196,10 +208,12 @@ void uploadCell(CellCpu& cpu, CellGpu& gpu) {
     m.vertices = rlCopy(ch.pos);
     m.normals = rlCopy(ch.nrm);
     m.colors = rlCopy(ch.col);
+    if (ch.page >= 0) m.texcoords = rlCopy(ch.uv);
     m.indices = rlCopy(ch.idx);
     UploadMesh(&m, false);
     releaseVertexCopies(m);
     gpu.chunks.push_back(m);
+    gpu.chunk_page.push_back(ch.page);
     ch = {};
   }
   cpu.chunks.clear();
@@ -215,6 +229,18 @@ void uploadCell(CellCpu& cpu, CellGpu& gpu) {
     releaseVertexCopies(t);
     gpu.terrain = t;
   }
+  for (auto& img : cpu.pages) {
+    Texture2D t{};
+    if (img.data) {
+      t = LoadTextureFromImage(img);
+      GenTextureMipmaps(&t);
+      SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+      SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
+      UnloadImage(img);
+    }
+    gpu.pages.push_back(t);
+  }
+  cpu.pages.clear();
   if (cpu.ground.data) {
     gpu.ground = LoadTextureFromImage(cpu.ground);
     GenTextureMipmaps(&gpu.ground);
@@ -229,6 +255,10 @@ void uploadCell(CellCpu& cpu, CellGpu& gpu) {
 void unloadCell(CellGpu& gpu) {
   for (auto& m : gpu.chunks) UnloadMesh(m);
   gpu.chunks.clear();
+  gpu.chunk_page.clear();
+  for (auto& t : gpu.pages)
+    if (t.id) UnloadTexture(t);
+  gpu.pages.clear();
   if (gpu.terrain.vaoId) UnloadMesh(gpu.terrain);
   gpu.terrain = Mesh{};
   if (gpu.ground.id) UnloadTexture(gpu.ground);

@@ -27,5 +27,10 @@ PROJECT: REAL JAPAN — data sources and terms / データ出典と利用条件
                application under the Survey Act is required has NOT been confirmed. Development/test build
                only until confirmed. Alternative: PLATEAU terrain model (dem) under the PLATEAU terms.
 
+3. PLATEAU appearance textures (aerial / street photographs of facades and roofs)
+   Included in dataset 1 under the same terms. The photographs show real shop signs, logos and
+   advertisements. Their treatment as third-party trademarks / copyrighted works when redistributed in a
+   game has NOT been confirmed yet. Players can disable photo textures in Settings.
+
 Not used as asset sources: Google Maps / Google Earth / Street View (reference only under
 their terms, never extracted), company logos, brand designs, copyrighted photographs.

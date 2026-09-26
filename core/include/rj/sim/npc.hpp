@@ -42,6 +42,7 @@ enum class WorkplaceKind : uint8_t {
 struct OccupationDef {
   std::string_view id;
   std::string_view name_ja;
+  std::string_view name_en;
   ShiftPattern shift;
   uint8_t workdays;
   bool works_on_holidays;  // 祝日も勤務 (shops, transport, hospitals ...)

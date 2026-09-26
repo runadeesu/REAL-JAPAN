@@ -23,6 +23,7 @@ struct Settings {
   int time_scale = 30;  // game seconds per real second
   bool real_time_start = true;
   bool show_fps = false;
+  bool photo_textures = true;  // PLATEAU photo textures (contain real signage / ads)
 
   static const std::vector<std::pair<int, int>>& resolutions();
   static const std::vector<int>& timeScales();

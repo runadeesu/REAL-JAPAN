@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("slice")
-    ap.add_argument("--types", default="bldg,tran,ubld")
+    ap.add_argument("--types", default="bldg,tran,frn,ubld")
     ap.add_argument("--out", default=os.path.join(ROOT, "data", "raw", "plateau"))
     a = ap.parse_args()
     cfg = json.load(open(a.slice, encoding="utf-8"))

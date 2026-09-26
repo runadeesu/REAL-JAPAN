@@ -195,6 +195,8 @@ bool Renderer::init() {
   }
   plane_ = GenMeshPlane(12000.0f, 12000.0f, 1, 1);
   body_ = GenMeshCylinder(0.25f, 1.35f, 12);
+  legs_ = GenMeshCylinder(0.15f, 0.82f, 8);
+  torso_ = GenMeshCylinder(0.21f, 0.64f, 10);
   head_ = GenMeshSphere(0.14f, 10, 12);
   ready_ = true;
   return true;
@@ -204,6 +206,8 @@ void Renderer::shutdown() {
   if (!ready_) return;
   UnloadMesh(plane_);
   UnloadMesh(body_);
+  UnloadMesh(legs_);
+  UnloadMesh(torso_);
   UnloadMesh(head_);
   if (shadow_.id) {
     rlUnloadFramebuffer(shadow_.id);
@@ -291,7 +295,7 @@ void Renderer::drawSky(const Camera3D& cam, const Lighting& L, float aspect) {
   EndShaderMode();
 }
 
-void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows) {
+void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting& L, bool shadows, bool photo_textures) {
   applyLightingUniforms(lit_, cam, L, shadows);
   const int slot = 10;
   rlEnableShader(lit_.id);
@@ -309,6 +313,20 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     DrawMesh(c->gpu.terrain, mat_, c->model);
   }
+  // Photo-textured building faces (PLATEAU appearance atlases). With photo textures
+  // disabled (they contain real signage / advertising) the same faces are drawn plain.
+  use_tex = photo_textures ? 1 : 0;
+  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
+  if (!photo_textures) mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{196, 194, 188, 255};
+  for (const auto& [code, c] : world.cells())
+    for (size_t i = 0; i < c->gpu.chunks.size(); ++i) {
+      const int page = c->gpu.chunk_page[i];
+      if (page < 0 || page >= static_cast<int>(c->gpu.pages.size()) || !c->gpu.pages[static_cast<size_t>(page)].id) continue;
+      mat_.maps[MATERIAL_MAP_DIFFUSE].texture =
+          photo_textures ? c->gpu.pages[static_cast<size_t>(page)] : Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+      DrawMesh(c->gpu.chunks[i], mat_, c->model);
+    }
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
   use_tex = 0;
   SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
@@ -319,7 +337,11 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, const Lighting
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
   }
   for (const auto& [code, c] : world.cells())
-    for (const auto& m : c->gpu.chunks) DrawMesh(m, mat_, c->model);
+    for (size_t i = 0; i < c->gpu.chunks.size(); ++i) {
+      const int page = c->gpu.chunk_page[i];
+      if (page >= 0 && page < static_cast<int>(c->gpu.pages.size()) && c->gpu.pages[static_cast<size_t>(page)].id) continue;
+      DrawMesh(c->gpu.chunks[i], mat_, c->model);
+    }
   rlEnableBackfaceCulling();
 }
 
@@ -332,6 +354,26 @@ void Renderer::drawPlayerBody(const Vector3& feet, float yaw_rad, const Lighting
   DrawMesh(body_, mat_, body);
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = Color{230, 200, 170, 255};
   DrawMesh(head_, mat_, MatrixTranslate(feet.x, feet.y + 1.58f, feet.z));
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+}
+
+void Renderer::drawPedestrians(const Pedestrians& peds) {
+  int use_tex = 0;
+  SetShaderValue(lit_, GetShaderLocation(lit_, "useTexture"), &use_tex, SHADER_UNIFORM_INT);
+  for (const auto& [id, w] : peds.walkers()) {
+    const float s = w.height_scale;
+    const float bob = std::fabs(std::sin(w.phase)) * 0.035f * s;
+    const Vector3 feet = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z)});
+    const float yaw = std::atan2(static_cast<float>(w.dir.x), static_cast<float>(w.dir.y));  // compass heading
+    const Matrix rot = MatrixRotateY(-yaw);
+    auto at = [&](float y) { return MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), rot), MatrixTranslate(feet.x, feet.y + y, feet.z)); };
+    mat_.maps[MATERIAL_MAP_DIFFUSE].color = w.pants;
+    DrawMesh(legs_, mat_, at(bob));
+    mat_.maps[MATERIAL_MAP_DIFFUSE].color = w.shirt;
+    DrawMesh(torso_, mat_, at(0.80f * s + bob));
+    mat_.maps[MATERIAL_MAP_DIFFUSE].color = w.skin;
+    DrawMesh(head_, mat_, MatrixMultiply(MatrixScale(s, s, s), MatrixTranslate(feet.x, feet.y + 1.58f * s + bob, feet.z)));
+  }
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
 }
 

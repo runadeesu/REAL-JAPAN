@@ -36,7 +36,8 @@ struct CellCpu {
   std::vector<BuildingInfo> buildings;
   std::vector<float> footprints;  // x,y pairs (cell ENU)
   struct Chunk {
-    std::vector<float> pos, nrm;
+    int page = -1;  // atlas page index, -1 = vertex colour only
+    std::vector<float> pos, nrm, uv;
     std::vector<unsigned char> col;
     std::vector<unsigned short> idx;
   };
@@ -48,6 +49,7 @@ struct CellCpu {
   std::vector<float> tpos, tnrm, tuv;
   std::vector<unsigned short> tidx;
   Image ground{};  // decoded ground texture (CPU)
+  std::vector<Image> pages;  // decoded photo atlases (CPU), uploaded then freed
   size_t bytes = 0;
 };
 
@@ -56,6 +58,8 @@ void prepareTerrain(CellCpu& c);  // builds tpos/tnrm/tuv/tidx from the height g
 
 struct CellGpu {
   std::vector<Mesh> chunks;
+  std::vector<int> chunk_page;
+  std::vector<Texture2D> pages;
   Mesh terrain{};
   Texture2D ground{};
   bool uploaded = false;
