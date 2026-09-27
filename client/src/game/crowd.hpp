@@ -34,16 +34,15 @@ struct CrowdPerson {
 
 class Crowd {
  public:
-  // cam: camera position; ride_train / ride_car: the car the player sits in (-1: none); eye: the
-  // player's eye there (their own seat stays free); hour: local time; weekend: fewer commuters
-  void update(double now, const Trains& trains, const rj::geo::Vec3d& cam, int ride_train, int ride_car, const rj::geo::Vec3d& eye, int hour,
-              bool weekend);
+  // cam: camera position; ride_train / ride_car: the car the player sits in (-1: none; their own
+  // seat stays free); hour: local time; weekend: fewer commuters
+  void update(double now, const Trains& trains, const rj::geo::Vec3d& cam, int ride_train, int ride_car, int hour, bool weekend);
   const std::vector<CrowdPerson>& people() const { return people_; }
   // passengers in the airliner the player flies in (call after update): most seats taken, not the player's
   void jetCabin(const struct Airliner& a);
 
  private:
-  void carPassengers(const Trains& trains, int train_index, int k, bool ridden, const rj::geo::Vec3d& eye, float busy);
+  void carPassengers(const Trains& trains, int train_index, int k, bool ridden, float busy);
   void platformQueues(double now, const Trains& trains, int station, const rj::geo::Vec3d& cam, float busy);
   std::vector<CrowdPerson> people_;
   std::map<int, int> trip_;            // train id -> stops made (the passengers change at each)

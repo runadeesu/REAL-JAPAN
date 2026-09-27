@@ -560,8 +560,7 @@ void App::update(float dt) {
         const auto jt = jst();
         const int wd = rj::sim::weekday(jt.date);
         const rj::geo::Vec3d cam = rlToEnu(listen_cam_.position);
-        crowd_.update(render_time_, trains_, cam, drive_train_ >= 0 ? -1 : ride_train_, ride_car_, cam, jt.hour,
-                      wd == 0 || wd == 6 || rj::sim::isHoliday(jt.date));
+        crowd_.update(render_time_, trains_, cam, drive_train_ >= 0 ? -1 : ride_train_, ride_car_, jt.hour, wd == 0 || wd == 6 || rj::sim::isHoliday(jt.date));
         if (const Airliner* a = ride_jet_ >= 0 ? aviation_.airliner(ride_jet_) : nullptr; a && a->phase != Airliner::Phase::Offmap) crowd_.jetCabin(*a);
         if ((boards_t_ -= dt) <= 0.0f && ui_.hasFont()) {
           boards_t_ = 1.0f;
@@ -939,16 +938,12 @@ Camera3D App::rideCamera() const {
   // seated: Shinkansen window seat (left, facing forward), commuter long bench seat (left, facing across)
   const double fx = std::sin(yaw), fy = std::cos(yaw), rx = fy, ry = -fx;
   double sx, sy, sz;
-  if (trains_.lines()[static_cast<size_t>(t->line)].kind == LineKind::Shinkansen) {
-    const float row = kShinkansenSeatRow0 + std::round(-kShinkansenSeatRow0 / kShinkansenSeatPitch) * kShinkansenSeatPitch;
-    sx = -1.28;
-    sy = row - 0.12;
-    sz = kShinkansenFloorZ + 1.12;
-  } else {
-    sx = -1.0;
-    sy = 0.0;
-    sz = kCommuterFloorZ + 1.1;
-  }
+  const bool shink = trains_.lines()[static_cast<size_t>(t->line)].kind == LineKind::Shinkansen;
+  float ex, ey;
+  rideEye(shink, ex, ey);
+  sx = ex;
+  sy = ey;
+  sz = shink ? kShinkansenFloorZ + 1.12 : kCommuterFloorZ + 1.1;
   const rj::geo::Vec3d eye{p.x + rx * sx + fx * sy, p.y + ry * sx + fy * sy, p.z + sz + std::tan(pitch) * sy};
   const float y = yaw + ride_look_yaw_, pt = pitch + ride_look_pitch_;
   const rj::geo::Vec3d f{std::sin(y) * std::cos(pt), std::cos(y) * std::cos(pt), std::sin(pt)};
@@ -1623,7 +1618,8 @@ void App::drawWorldView(const Camera3D& cam) {
     renderer_.drawStationSigns(trains_, cam);
     renderer_.drawDepartureBoards(trains_, cam, render_time_);
     if (ride_train_ >= 0 && drive_train_ < 0) renderer_.drawCarDisplay(trains_, ride_train_, ride_car_);
-    if (in_session_ && screen_ != Screen::Title) renderer_.drawCrowd(crowd_.people());
+    static const bool no_crowd = std::getenv("RJ_NO_CROWD") != nullptr;  // debug isolation
+    if (in_session_ && screen_ != Screen::Title && !no_crowd) renderer_.drawCrowd(crowd_.people());
     renderer_.drawShips(ferries_, cam, lighting_);
     Renderer::FlightView fv;
     if (flying_) {

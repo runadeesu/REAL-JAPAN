@@ -7,6 +7,7 @@
 #include "game/trains.hpp"
 #include "raymath.h"
 #include "render/aircraft.hpp"
+#include "render/trains.hpp"
 #include "world/coords.hpp"
 
 namespace rjc {
@@ -79,16 +80,19 @@ Frame carFrame(const Trains& trains, const Train& t, int k) {
 
 }  // namespace
 
-void Crowd::carPassengers(const Trains& trains, int ti, int k, bool ridden, const V3& eye, float busy) {
+void Crowd::carPassengers(const Trains& trains, int ti, int k, bool ridden, float busy) {
   const Train& t = trains.trains()[static_cast<size_t>(ti)];
   const bool shink = trains.lines()[static_cast<size_t>(t.line)].kind == LineKind::Shinkansen;
   const Frame F = carFrame(trains, t, k);
   const bool end = k == 0 || k == t.cars - 1;
   const uint64_t base = mix(static_cast<uint64_t>(t.id) * 131 + static_cast<uint64_t>(k) * 7919 + static_cast<uint64_t>(trip_[t.id]) * 104729);
   const double floor_z = 1.15;  // car floor above the rail (as modelled)
+  float ex = 0, ey = 0;
+  rideEye(shink, ex, ey);  // the player's seat in this car (kept free), in the car's own frame
   auto add = [&](double x, double y, double facing_model, int pose, uint64_t seed) {
+    if (ridden && std::hypot(x - ex, y - ey) < 0.5) return;
     const V3 w = F.at(x, y, floor_z);
-    if (ridden && std::hypot(w.x - eye.x, w.y - eye.y) < 0.5) return;  // the player's own seat
+
     CrowdPerson p;
     p.pos = w;
     p.yaw = F.yaw + static_cast<float>(facing_model);
@@ -247,7 +251,7 @@ void Crowd::jetCabin(const Airliner& a) {
     }
 }
 
-void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_train, int ride_car, const V3& eye, int hour, bool weekend) {
+void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_train, int ride_car, int hour, bool weekend) {
   people_.clear();
   if (!trains.loaded()) return;
   const float busy = busyAt(hour, weekend);
@@ -274,7 +278,7 @@ void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_tra
         trains.carPose(t, k, p, yaw, pitch);
         if (std::hypot(p.x - cam.x, p.y - cam.y) > 45.0) continue;
       }
-      carPassengers(trains, static_cast<int>(i), k, ridden, eye, busy);
+      carPassengers(trains, static_cast<int>(i), k, ridden, busy);
     }
   }
   const auto& sts = trains.stations();

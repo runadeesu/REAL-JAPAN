@@ -15,6 +15,17 @@ constexpr float kTrainFloorAbove = 0.05f;  // interior floor above the side sill
 constexpr float kCommuterFloorZ = 1.1f + kTrainFloorAbove;
 constexpr float kShinkansenFloorZ = 1.1f + kTrainFloorAbove;
 constexpr float kShinkansenSeatRow0 = -12.5f + 1.5f, kShinkansenSeatPitch = 1.04f;
+// The player's eye when riding (car model x right, y forward): Shinkansen left window seat of the
+// row nearest the car centre; commuter long bench on the left, mid-car.
+inline void rideEye(bool shinkansen, float& x, float& y) {
+  if (shinkansen) {
+    x = -1.28f;
+    y = kShinkansenSeatRow0 + static_cast<float>(static_cast<int>(-kShinkansenSeatRow0 / kShinkansenSeatPitch + 0.5f)) * kShinkansenSeatPitch - 0.12f;
+  } else {
+    x = -1.0f;
+    y = 0.0f;
+  }
+}
 
 struct TrainCarModel {
   Mesh shell{};
