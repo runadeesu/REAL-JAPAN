@@ -168,9 +168,21 @@ void shopFront(Ctx& c, V3 a, V3 u, V3 w, double L, double gh, std::vector<V3>& l
     c.B.box(at((x0 + x1) / 2, z_glass0 / 2, 0.05), u, up, w, (x1 - x0) / 2, z_glass0 / 2, 0.05, Color{120, 118, 114, 255}, kMatConcrete, 0);
     // Pillar between units (wall-coloured cladding).
     c.B.box(at(k * uw, (z_sign + 0.4) / 2, 0.06), u, up, w, 0.3, (z_sign + 0.4) / 2, 0.06, Color{150, 146, 140, 255}, kMatConcrete, 0);
-    // Sign band: blank (shop names are not in the data), colour per tenant.
-    const Color sc = kSignPalette[static_cast<int>(rnd(us, 901) * 8.99f)];
-    c.B.box(at((x0 + x1) / 2, z_sign, 0.1), u, up, w, (x1 - x0) / 2 + 0.25, 0.36, 0.1, sc, kMatSignBand, lit);
+    // Sign band, colour per tenant. Shop names are not in the data: the shader letters it with generic
+    // glyph blocks (no real text). uv = band centre (height, position along the wall), alpha = half width.
+    Color sc = kSignPalette[static_cast<int>(rnd(us, 901) * 8.99f)];
+    const double band_hw = (x1 - x0) / 2 + 0.25;
+    sc.a = static_cast<unsigned char>(std::min(255.0, band_hw * 10.0));
+    {
+      const float keep_floor = c.B.uv_floor, keep_ceil = c.B.uv_ceil;  // interior mapping of the glass
+      const Vector3 rc = enuToRl(at((x0 + x1) / 2, z_sign, 0.1)), rw = enuToRl(w);
+      const float hl = std::max(1e-6f, std::hypot(rw.x, rw.z));
+      c.B.uv_floor = rc.y;
+      c.B.uv_ceil = rc.x * (-rw.z / hl) + rc.z * (rw.x / hl);
+      c.B.box(at((x0 + x1) / 2, z_sign, 0.1), u, up, w, band_hw, 0.36, 0.1, sc, kMatSignBand, lit);
+      c.B.uv_floor = keep_floor;
+      c.B.uv_ceil = keep_ceil;
+    }
     if (c.lod == 0) {
       const int nm = std::max(1, static_cast<int>((x1 - x0) / 1.6));
       for (int i = 0; i <= nm; ++i) {

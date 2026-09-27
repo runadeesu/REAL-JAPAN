@@ -19,10 +19,13 @@ class HumanModels {
   bool ready() const { return ready_; }
   // phase in radians (walk cycle); idle = standing still
   const Mesh& frame(BodyVariant v, float phase, bool idle) const;
+  // Umbrella held in the right hand above the head (canopy material 31 = tinted per draw, shaft 29).
+  const Mesh& umbrella() const { return umbrella_; }
 
  private:
   Mesh walk_[static_cast<int>(BodyVariant::Count)][kFrames]{};
   Mesh idle_[static_cast<int>(BodyVariant::Count)]{};
+  Mesh umbrella_{};
   bool ready_ = false;
 };
 

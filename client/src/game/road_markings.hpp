@@ -13,11 +13,15 @@
 //    Major junctions (two or more arms >= 7.5 m wide) without surveyed heads get signals placed the
 //    Japanese way (far-side vehicle heads over the departure lanes, pedestrian heads at each end of
 //    each crossing), with generated poles and housings.
+//  * ESTIMATED street furniture: road lights (8 m poles, ~30 m apart) on carriageways >= 5.5 m where
+//    no surveyed street light is near; concrete utility poles (電柱) with overhead lines and a small
+//    LED street lamp (防犯灯) along narrow streets.
 
 #include <cstddef>
 #include <vector>
 
 #include "raylib.h"
+#include "rj/geo/local_frame.hpp"
 #include "rj/nav/grid_nav.hpp"
 
 namespace rjc {
@@ -32,6 +36,12 @@ struct Crossing {
   double heading = 0;         // walking direction across the road (compass radians, either sense)
   int group = -1, phase = 0;  // controlling signal (group -1: unsignalised)
   bool estimated = false;
+};
+
+struct EstimatedLight {
+  rj::geo::Vec3d pos;  // origin ENU, lamp
+  float range;
+  float intensity;     // relative to a PLATEAU road light head
 };
 
 class RoadMarkings {
@@ -49,12 +59,14 @@ class RoadMarkings {
   size_t estimatedCrossings() const { return n_est_crossings_; }
   size_t estimatedSignalHeads() const { return n_est_signals_; }
   size_t triangles() const { return tris_; }
+  const std::vector<EstimatedLight>& lights() const { return lights_; }
 
  private:
   std::vector<Mesh> meshes_;
   std::vector<Crossing> crossings_;
   size_t n_est_crossings_ = 0;
   size_t n_est_signals_ = 0;
+  std::vector<EstimatedLight> lights_;
   size_t tris_ = 0;
 };
 

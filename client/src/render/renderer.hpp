@@ -73,6 +73,7 @@ struct RenderOptions {
 
 class Renderer {
  public:
+  static constexpr size_t kMaxLights = 32;  // must match the lit shader arrays
   bool init();
   void shutdown();
 
@@ -89,7 +90,7 @@ class Renderer {
   void drawWorld(const Camera3D& cam, const World& world, bool photo_textures, bool neutral_floor = true);
   void drawMeshMat(const Mesh& m, const Matrix& model, int material, Color tint, Vector3 emissive = {0, 0, 0});
   void drawPlayerBody(const Vector3& feet, float yaw_rad);
-  void drawPedestrians(const Pedestrians& peds);
+  void drawPedestrians(const Pedestrians& peds, float rain = 0.0f);
   void drawInterior(const Interior& in);
   void drawFacades(const FacadeDetail& f);
   void drawMarkings(const RoadMarkings& m);

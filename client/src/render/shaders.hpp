@@ -116,8 +116,8 @@ uniform float nightFactor;    // 0 day .. 1 night (artificial lights on)
 uniform float timeSec;
 uniform float indoor;         // 1 = underground interior (no sky reflection)
 uniform int numLights;
-uniform vec4 lightPosR[24];   // xyz, range
-uniform vec3 lightCol[24];
+uniform vec4 lightPosR[32];   // xyz, range (Renderer::kMaxLights)
+uniform vec3 lightCol[32];
 uniform vec3 emissiveTint;    // per-draw emission (signal lamps)
 uniform vec3 occupancy;       // fraction of lit windows: office, residential, shop (by time of day)
 uniform vec3 partTop;         // per-person colours (sRGB 0..1): clothing top / bottom, skin, hair
@@ -255,12 +255,12 @@ Surf material(int id, vec3 ng, vec2 wuv) {
     float lit = id == 11 ? 0.0 : litFrom(fragMat.y);
     if (id == 20) {
       // By day interiors are much darker than the street; lit rooms glow at night.
-      float b = mix(0.10, 0.9, nightFactor);
+      float b = mix(0.08, 0.6, nightFactor) * (0.45 + 0.9 * fract(fragMat.y * 7.13));  // rooms differ
       vec3 tint = fragMat.y < 1.0 ? vec3(0.88, 0.94, 1.0) : vec3(1.0, 0.84, 0.62);  // office LED vs home
       s.transmit = interiorBehind(ng, false, lit) * tint * b;
     }
     if (id == 21) {
-      float b = mix(0.28, 1.25, nightFactor);
+      float b = mix(0.28, 0.8, nightFactor);
       s.transmit = interiorBehind(ng, true, lit) * b;
     }
   } else if (id == 12) { s.albedo *= 0.85 + 0.3 * nz.b; s.rough = 0.9; s.porosity = 0.6; }
@@ -268,7 +268,37 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   else if (id == 14) { s.albedo = vec3(0.30, 0.20, 0.11); s.metal = 1.0; s.rough = 0.38; s.porosity = 0.0; }
   else if (id == 22) { s.rough = 0.32; s.metal = 0.85; s.porosity = 0.0; }             // aluminium frames
   else if (id == 23) { s.rough = 0.9; s.porosity = 0.3; }                               // awning fabric
-  else if (id == 24) { s.rough = 0.4; s.emit = vc * 2.2 * nightFactor * litFrom(fragMat.y); }  // back-lit sign band
+  else if (id == 24) {  // back-lit sign band, lettered with generic glyph blocks (no real names)
+    s.rough = 0.4;
+    float ink = 0.0;
+    if (abs(ng.y) < 0.3) {
+      vec3 hn = normalize(vec3(ng.x, 0.0, ng.z));
+      float lx = dot(fragPos, vec3(-hn.z, 0.0, hn.x)) - fragUV.y;  // m from the band centre, along
+      float ly = fragPos.y - fragUV.x;                               // m from the band centre, up
+      float halfw = fragColor.a * 25.5;
+      float seed = hash12(vec2(floor(fragUV.y * 3.1), floor(fragUV.x * 7.3)));
+      float cw = 0.46, chh = 0.44;
+      float n = floor(mix(2.0, max(2.0, min(8.0, (halfw * 2.0 - 1.2) / cw)), seed));
+      float x0 = -n * cw * 0.5 + (fract(seed * 5.7) - 0.5) * max(0.0, halfw - n * cw * 0.5 - 0.7);
+      float cx = (lx - x0) / cw;
+      if (cx >= 0.0 && cx < n && abs(ly) < chh * 0.5) {
+        float ci = floor(cx);
+        vec2 g = vec2(fract(cx), ly / chh + 0.5);
+        vec2 q = floor(g * 3.0), r = fract(g * 3.0);
+        float hs = step(0.45, hash12(vec2(ci, q.y) + seed * 13.0)) * step(abs(r.y - 0.5), 0.2);
+        float vs = step(0.55, hash12(vec2(ci + 7.0, q.x) + seed * 29.0)) * step(abs(r.x - 0.5), 0.2);
+        ink = max(hs, vs) * step(0.1, g.x) * step(g.x, 0.9) * step(0.06, g.y) * step(g.y, 0.94);
+      }
+      // round logo mark before the lettering
+      float lm = length(vec2(lx - (x0 - 0.42), ly));
+      ink = max(ink, step(lm, 0.25) * step(0.5, fract(seed * 11.3)));
+    }
+    vec3 base = fragColor.rgb * colDiffuse.rgb;
+    vec3 inkCol = dot(base, vec3(0.3, 0.59, 0.11)) > 0.5 ? vec3(0.1) : vec3(0.96);
+    vec3 face = mix(base, inkCol, ink);
+    s.albedo = pow(face, vec3(2.2));
+    s.emit = pow(face, vec3(2.2)) * 1.7 * nightFactor * litFrom(fragMat.y);
+  }
   else if (id == 25) { s.rough = 0.55; s.metal = 0.2; s.porosity = 0.0; }             // AC outdoor unit
   else if (id == 26) { s.rough = 0.6; s.metal = 0.4; s.porosity = 0.0; }              // balcony rail
   else if (id == 27) { s.albedo *= 0.9 + 0.2 * nz.b; s.rough = 0.85; }                // wall paint
@@ -337,11 +367,32 @@ void main() {
       if (t.a < 0.5) discard;
       s.albedo *= pow(t.rgb, vec3(2.2));
       if (surfaceMode == 2) {
-        s.rough = 0.7; s.porosity = 0.4;
+        // Glass in the facade photos (cool, fairly dark, unsaturated texels on vertical faces) is glossy
+        // so curtain walls pick up sky and street reflections; the rest stays matte.
+        float mxg = max(t.r, max(t.g, t.b)), mng = min(t.r, min(t.g, t.b));
+        float cool = smoothstep(0.0, 0.06, t.b - t.r);
+        float glassM = cool * (1.0 - smoothstep(0.35, 0.6, mxg)) * (1.0 - smoothstep(0.25, 0.45, mxg - mng)) * step(abs(ng.y), 0.3);
+        s.rough = mix(0.7, 0.12, glassM); s.porosity = mix(0.4, 0.0, glassM);
         // Signage in the real facade photos (bright, saturated texels) is lit at night.
         float mx = max(t.r, max(t.g, t.b)), mn = min(t.r, min(t.g, t.b));
         float sgn = smoothstep(0.30, 0.55, mx - mn) * smoothstep(0.40, 0.75, mx);
         s.emit += pow(t.rgb, vec3(2.2)) * sgn * nightFactor * 4.0;
+        // Lit windows at night (procedural, not in the photo): storey (3.5 m) x bay (2.6 m) cells on
+        // vertical faces, lit with the time-of-day office occupancy, only where the photo texel is
+        // glass-like (darker / cooler than the wall).
+        if (nightFactor > 0.01 && abs(ng.y) < 0.3) {
+          vec3 hn = normalize(vec3(ng.x, 0.0, ng.z));
+          float along = dot(fragPos, vec3(-hn.z, 0.0, hn.x));
+          vec2 g = vec2(along / 1.8, fragPos.y / 3.5);
+          vec2 cid = floor(g), f = fract(g);
+          float h = hash12(cid + floor(hn.xz * 8.0) * 31.0);
+          float lit = step(h, occupancy.x);
+          float inWin = step(0.08, f.x) * step(f.x, 0.92) * step(0.2, f.y) * step(f.y, 0.86);
+          float lum = dot(t.rgb, vec3(0.3, 0.59, 0.11));
+          float glassy = mix(0.3, 1.0, 1.0 - smoothstep(0.2, 0.5, lum)) * (0.7 + 0.3 * step(t.r, t.b + 0.02));
+          vec3 wc = fract(h * 7.31) < 0.6 ? vec3(0.9, 0.95, 1.0) : vec3(1.0, 0.82, 0.6);  // LED office / warm
+          s.emit += wc * lit * inWin * glassy * nightFactor * (0.35 + 0.75 * fract(h * 3.7));
+        }
       }
     }
   }
@@ -470,6 +521,7 @@ uniform mat4 invViewProj;
 uniform vec3 camPos;
 uniform float sunVisible;
 uniform float starBright;
+uniform vec3 cityGlow;  // light of the city on the cloud bases at night
 out vec4 finalColor;
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
@@ -481,7 +533,7 @@ void main() {
   // Stars (night, clear sky only).
   if (d.y > 0.0 && starBright > 0.0) {
     vec2 sp = floor(d.xz / (d.y + 0.35) * 420.0);
-    float st = step(0.9975, hash12(sp));
+    float st = step(0.9993, hash12(sp));  // Tokyo: only the brightest stars show through the sky glow
     col += vec3(st) * starBright * (1.0 - cloudCover) * smoothstep(0.0, 0.3, d.y);
   }
   // Sun disc with limb darkening (0.27 deg radius), dimmed by clouds.
@@ -497,7 +549,7 @@ void main() {
     vec3 lit = sunColor * (0.55 + 0.45 * pow(max(mu, 0.0), 4.0)) + ambientSky * 1.6;
     vec3 shade = ambientSky * 0.9 + skyHorizon * 0.25;
     float thick = texture(texNoise, (p + cloudOffset) * 0.00031 + 0.2).g;
-    vec3 cc = mix(lit, shade, clamp(thick * 1.2 * (0.4 + cloudCover), 0.0, 1.0));
+    vec3 cc = mix(lit, shade, clamp(thick * 1.2 * (0.4 + cloudCover), 0.0, 1.0)) + cityGlow * (0.8 + 0.6 * thick);
     cc = mix(cc, skyRadiance(normalize(vec3(d.x, 0.02, d.z))), 1.0 - fade);
     col = mix(col, cc, dens * fade);
     cloudAtSun = dens * fade;

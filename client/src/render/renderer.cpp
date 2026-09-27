@@ -91,7 +91,7 @@ Lighting computeLighting(float el, float az, const WeatherParams& w, float wetne
   const float twi = smooth(-14.0f, 2.0f, el);
   const Vector3 zen_day{0.07f, 0.18f, 0.52f}, hor_day{0.50f, 0.58f, 0.68f};
   const Vector3 zen_dusk{0.09f, 0.10f, 0.26f}, hor_dusk{0.80f, 0.46f, 0.30f};
-  const Vector3 zen_night{0.004f, 0.006f, 0.014f}, hor_night{0.050f, 0.043f, 0.046f};  // Tokyo sky glow
+  const Vector3 zen_night{0.009f, 0.009f, 0.013f}, hor_night{0.070f, 0.056f, 0.050f};  // Tokyo sky glow (warm, light-polluted)
   Vector3 zen = lerp3(lerp3(zen_night, zen_dusk, twi), zen_day, day);
   Vector3 hor = lerp3(lerp3(hor_night, hor_dusk, twi), hor_day, day);
   const float bright = 0.03f + 0.97f * day + 0.15f * twi * (1.0f - day);
@@ -105,7 +105,7 @@ Lighting computeLighting(float el, float az, const WeatherParams& w, float wetne
   L.haze = lerp3(hor, Vector3Scale(Vector3{0.58f, 0.60f, 0.62f}, bright), 0.4f);
   // Ambient irradiance: clear-sky blue, overcast grey (brighter, softer), dusk, night + city glow.
   const Vector3 amb_day{0.24f, 0.30f, 0.40f}, amb_ovc{0.36f, 0.37f, 0.39f}, amb_dusk{0.09f, 0.085f, 0.11f};
-  const Vector3 amb_night{0.022f, 0.021f, 0.026f};
+  const Vector3 amb_night{0.032f, 0.029f, 0.030f};  // sky glow + light scattered from lit streets
   L.ambient_sky = lerp3(lerp3(amb_night, amb_dusk, twi), lerp3(amb_day, amb_ovc, cc), day);
   // Ground/building bounce: warm, driven by sunlight on the city.
   const Vector3 bounce = Vector3Add(Vector3Scale(L.sun_color, 0.20f * std::max(0.0f, std::sin(e))), Vector3Scale(L.ambient_sky, 0.45f));
@@ -414,7 +414,7 @@ void Renderer::beginScene(const RenderOptions& o, const Lighting& L, const Camer
 }
 
 void Renderer::setLights(const std::vector<PointLight>& lights) {
-  const int n = static_cast<int>(std::min<size_t>(lights.size(), 24));
+  const int n = static_cast<int>(std::min<size_t>(lights.size(), kMaxLights));
   setI(lit_, "numLights", n);
   for (int i = 0; i < n; ++i) {
     const Vector4 pr{lights[i].pos.x, lights[i].pos.y, lights[i].pos.z, lights[i].range};
@@ -440,7 +440,8 @@ void Renderer::drawSky(const Camera3D& cam, const Lighting& L, float aspect) {
   SetShaderValueMatrix(sky_, GetShaderLocation(sky_, "invViewProj"), inv);
   set3(sky_, "camPos", cam.position);
   setF(sky_, "sunVisible", L.sun_visible);
-  setF(sky_, "starBright", L.stars * 0.8f);
+  setF(sky_, "starBright", L.stars * 0.35f);
+  set3(sky_, "cityGlow", Vector3Scale(Vector3{0.060f, 0.046f, 0.036f}, L.night * (1.0f - L.indoor)));
   bindGlobalTextures();
   rlDrawRenderBatchActive();
   rlDisableColorBlend();  // the sky writes alpha 0 (no reflection) and must still be opaque
@@ -714,7 +715,7 @@ void Renderer::drawHuman(const Mesh& m, const Matrix& model, Color top, Color bo
   triangles_ += m.triangleCount;
 }
 
-void Renderer::drawPedestrians(const Pedestrians& peds) {
+void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
   setI(lit_, "materialOverride", -1);
   setI(lit_, "useTexture", 0);
   setI(lit_, "surfaceMode", 0);
@@ -727,6 +728,16 @@ void Renderer::drawPedestrians(const Pedestrians& peds) {
     const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), MatrixRotateY(-w.yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
     const Mesh& m = humans_.frame(static_cast<BodyVariant>(w.variant % static_cast<int>(BodyVariant::Count)), w.phase, w.waiting);
     drawHuman(m, M, w.shirt, w.pants, w.skin, w.hair);
+    // In the rain most people carry umbrellas; clear vinyl ones are the most common in Tokyo.
+    const uint32_t h = static_cast<uint32_t>(id * 2654435761u);
+    if (rain > 0.12f && (h & 1023u) < static_cast<uint32_t>(std::min(1.0f, 0.55f + rain) * 1023.0f)) {
+      static const Color kUmbrella[] = {{226, 230, 234, 255}, {226, 230, 234, 255}, {226, 230, 234, 255}, {24, 24, 28, 255},
+                                        {30, 38, 66, 255},    {176, 156, 128, 255}, {120, 30, 34, 255},   {60, 90, 70, 255}};
+      const Color uc = kUmbrella[(h >> 10) % 8];
+      set3(lit_, "partTop", Vector3{uc.r / 255.0f, uc.g / 255.0f, uc.b / 255.0f});
+      DrawMesh(humans_.umbrella(), mat_, M);
+      ++draw_calls_;
+    }
   }
   rlEnableBackfaceCulling();
 }

@@ -328,6 +328,7 @@ void RoadMarkings::unload() {
   crossings_.clear();
   n_est_crossings_ = 0;
   n_est_signals_ = 0;
+  lights_.clear();
   tris_ = 0;
 }
 
@@ -646,9 +647,94 @@ void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World&
       mb.line(e, -oo, u0, u1, kLineW);
     }
   }
+  // --- estimated street lights (roads >= 5.5 m) and utility poles with overhead lines (narrow streets) ---
+  {
+    std::vector<Vec2> surveyed_lights;
+    for (const auto& [code, c] : world.cells())
+      for (const auto& l : c->lights) surveyed_lights.push_back({l.pos.x, l.pos.y});
+    auto nearSurveyedLight = [&](const Vec2& p, double r) {
+      for (const auto& q : surveyed_lights)
+        if (std::hypot(q.x - p.x, q.y - p.y) < r) return true;
+      return false;
+    };
+    auto nearJunction = [&](const Traffic::Edge& e, double u) { return u < trim[&e - edges.data()][0] + 3.0 || u > e.length - trim[&e - edges.data()][1] - 3.0; };
+    const Color kLightPole{164, 166, 164, 255}, kConcrete{150, 150, 145, 255}, kWire{20, 20, 20, 255}, kLampBody{200, 200, 196, 255};
+    for (size_t i = 0; i < edges.size(); ++i) {
+      const Traffic::Edge& e = edges[i];
+      if (internal[i] || e.pts.size() < 2 || e.length < 15.0 || e.width < 3.0f) continue;
+      if (e.width >= 5.5f) {
+        // Road lighting: 8 m poles about every 30 m, alternating sides (staggered) on wide roads.
+        const bool both = e.width >= 12.0f;
+        int k = 0;
+        for (double u = 12.0; u < e.length - 6.0; u += both ? 18.0 : 30.0, ++k) {
+          if (nearJunction(e, u)) continue;
+          const int side = (k % 2) ? 1 : -1;
+          const Vec2 t = tangentOn(e, u), nl = leftOf(t), c = pointOn(e, u);
+          const Vec2 pp = add(c, nl, side * (e.width * 0.5 + 0.5));
+          if (world.pointInBuilding(pp.x, pp.y) || nearSurveyedLight(pp, 20.0)) continue;
+          const double g = groundAt(pp);
+          mb.pole(pp.x, pp.y, g - 0.3, g + 8.0, 0.1, kMatMetal, kLightPole);
+          const Vec2 inward{-nl.x * side, -nl.y * side};
+          const Vec2 hp = add(pp, inward, 1.6);
+          mb.box((pp.x + hp.x) * 0.5, (pp.y + hp.y) * 0.5, g + 7.95, inward, 0.04, 0.8, 0.04, kMatMetal, kLightPole);
+          mb.box(hp.x, hp.y, g + 7.9, inward, 0.16, 0.32, 0.06, kMatMetal, kLampBody);
+          mb.box(hp.x, hp.y, g + 7.83, inward, 0.13, 0.26, 0.012, kMatLamp, kLampBody);
+          lights_.push_back({{hp.x, hp.y, g + 7.8}, 24.0f, 1.0f});
+        }
+      } else {
+        // Narrow street: concrete utility poles (電柱) on one side with lines, a crime-prevention
+        // LED lamp (防犯灯) on each, and a pole transformer on every third.
+        struct P { Vec2 p; Vec2 across; double g; };
+        std::vector<P> poles;
+        int k = 0;
+        for (double u = 8.0; u < e.length - 4.0; u += 30.0, ++k) {
+          if (nearJunction(e, u) && e.length > 40.0) continue;
+          const Vec2 t = tangentOn(e, u), nl = leftOf(t), c = pointOn(e, u);
+          const Vec2 pp = add(c, nl, e.width * 0.5 - 0.35);  // inside the carriageway edge (no sidewalk)
+          if (world.pointInBuilding(pp.x, pp.y)) continue;
+          const double g = groundAt(pp);
+          mb.pole(pp.x, pp.y, g - 0.3, g + 11.5, 0.15, kMatConcrete, kConcrete);
+          mb.box(pp.x, pp.y, g + 10.4, nl, 0.05, 0.8, 0.05, kMatMetal, kLightPole);  // crossarm across the street
+          if (k % 3 == 1) mb.box(pp.x + nl.x * 0.35, pp.y + nl.y * 0.35, g + 8.7, t, 0.22, 0.22, 0.45, kMatMetal, kLampBody);
+          const Vec2 lp = add(pp, nl, -0.6);  // lamp arm towards the street centre
+          mb.box((pp.x + lp.x) * 0.5, (pp.y + lp.y) * 0.5, g + 4.6, Vec2{-nl.x, -nl.y}, 0.025, 0.3, 0.025, kMatMetal, kLightPole);
+          mb.box(lp.x, lp.y, g + 4.55, Vec2{-nl.x, -nl.y}, 0.08, 0.16, 0.035, kMatLamp, kLampBody);
+          lights_.push_back({{lp.x, lp.y, g + 4.5}, 13.0f, 0.35f});
+          poles.push_back({pp, nl, g});
+        }
+        // Lines between consecutive poles: power on the crossarm, telecom lower down; with sag.
+        for (size_t q = 1; q < poles.size(); ++q) {
+          const P& A = poles[q - 1];
+          const P& B = poles[q];
+          const double span = std::hypot(B.p.x - A.p.x, B.p.y - A.p.y);
+          if (span > 45.0) continue;
+          const double attach[4][2] = {{-0.7, 10.45}, {0.0, 10.45}, {0.7, 10.45}, {0.0, 7.4}};
+          for (const auto& at : attach) {
+            const Vec2 a = add(A.p, A.across, at[0]), b = add(B.p, B.across, at[0]);
+            const double za = A.g + at[1], zb = B.g + at[1], sag = 0.012 * span * (at[1] < 8 ? 1.4 : 1.0);
+            Vec2 prev = a;
+            double pz = za;
+            for (int s = 1; s <= 8; ++s) {
+              const double tt = s / 8.0;
+              const Vec2 cur{a.x + (b.x - a.x) * tt, a.y + (b.y - a.y) * tt};
+              const double cz = za + (zb - za) * tt - 4.0 * sag * tt * (1.0 - tt);
+              const double sl = std::hypot(cur.x - prev.x, cur.y - prev.y);
+              if (sl > 1e-3) {
+                const Vec2 dir{(cur.x - prev.x) / sl, (cur.y - prev.y) / sl};
+                mb.box((prev.x + cur.x) * 0.5, (prev.y + cur.y) * 0.5, (pz + cz) * 0.5, dir, at[1] < 8 ? 0.018 : 0.011, sl * 0.5 + 0.01,
+                       at[1] < 8 ? 0.018 : 0.011, kMatTyre, kWire);
+              }
+              prev = cur;
+              pz = cz;
+            }
+          }
+        }
+      }
+    }
+  }
   mb.flush();
-  TraceLog(LOG_INFO, "RJ: road markings: %zu crossings (%zu estimated), %d estimated signal groups (%zu heads), %zu tris",
-           crossings_.size(), n_est_crossings_, signals.estimatedGroups(), n_est_signals_, tris_);
+  TraceLog(LOG_INFO, "RJ: road markings: %zu crossings (%zu estimated), %d estimated signal groups (%zu heads), %zu lights, %zu tris",
+           crossings_.size(), n_est_crossings_, signals.estimatedGroups(), n_est_signals_, lights_.size(), tris_);
 }
 
 }  // namespace rjc

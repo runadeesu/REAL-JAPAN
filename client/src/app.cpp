@@ -664,6 +664,12 @@ std::vector<PointLight> App::collectLights(const Camera3D& cam) const {
       if (d2 > 180.0 * 180.0) continue;
       cand.push_back({d2, {enuToRl(l.pos), l.range * 1.4f, Vector3Scale(Vector3{1.0f, 0.90f, 0.76f}, 26.0f * k)}});
     }
+  for (const auto& l : markings_.lights()) {  // estimated road lights / street lamps
+    const double dx = l.pos.x - c.x, dy = l.pos.y - c.y;
+    const double d2 = dx * dx + dy * dy;
+    if (d2 > 180.0 * 180.0) continue;
+    cand.push_back({d2, {enuToRl(l.pos), l.range * 1.4f, Vector3Scale(Vector3{1.0f, 0.93f, 0.84f}, 26.0f * k * l.intensity)}});
+  }
   std::vector<rj::geo::Vec3d> shops;
   facades_.collectLights(c, 90.0, shops);  // lit shop fronts spill onto the sidewalk
   for (const auto& p : shops) {
@@ -671,7 +677,7 @@ std::vector<PointLight> App::collectLights(const Camera3D& cam) const {
     cand.push_back({dx * dx + dy * dy + 400.0, {enuToRl(p), 9.0f, Vector3Scale(Vector3{1.0f, 0.93f, 0.82f}, 7.0f * std::max(k, 0.25f) * lighting_.occupancy.z)}});
   }
   std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
-  for (size_t i = 0; i < cand.size() && out.size() < 24; ++i) out.push_back(cand[i].l);
+  for (size_t i = 0; i < cand.size() && out.size() < Renderer::kMaxLights; ++i) out.push_back(cand[i].l);
   return out;
 }
 
@@ -715,7 +721,7 @@ void App::drawWorldView(const Camera3D& cam) {
     // From the street the stairs are visible through the real openings cut into the pavement.
     for (const auto& [id, interior] : world_.interiors()) renderer_.drawInterior(*interior);
   }
-  if (in_session_ && screen_ != Screen::Title && !deep) renderer_.drawPedestrians(peds_);
+  if (in_session_ && screen_ != Screen::Title && !deep) renderer_.drawPedestrians(peds_, lighting_.rain);
   if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title) renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
   renderer_.drawRain(cam, lighting_, render_time_);
   EndMode3D();

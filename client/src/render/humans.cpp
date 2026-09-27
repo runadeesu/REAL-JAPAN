@@ -195,6 +195,28 @@ Mesh buildPose(BodyVariant var, float phase, bool walk) {
   return g.upload();
 }
 
+Mesh buildUmbrella() {
+  Geo g;
+  // Canopy: 8 panels, 0.95 m across, slightly domed, centre 2.05 m above the feet, tilted forward.
+  const Vector3 top{0.06f, 0.08f, 2.12f};
+  const int n = 8;
+  const float r = 0.48f;
+  for (int i = 0; i < n; ++i) {
+    const float a0 = 2 * PI * i / n, a1 = 2 * PI * (i + 1) / n;
+    const Vector3 p0{top.x + r * std::cos(a0), top.y + r * std::sin(a0) + 0.03f, top.z - 0.26f};
+    const Vector3 p1{top.x + r * std::cos(a1), top.y + r * std::sin(a1) + 0.03f, top.z - 0.26f};
+    const Vector3 nrm = Vector3Normalize(Vector3CrossProduct(Vector3Subtract(p0, top), Vector3Subtract(p1, top)));
+    const auto b = g.v();
+    g.vert(top, nrm.z < 0 ? Vector3Negate(nrm) : nrm, 31, 1.0f);
+    g.vert(p0, nrm.z < 0 ? Vector3Negate(nrm) : nrm, 31, 0.92f);
+    g.vert(p1, nrm.z < 0 ? Vector3Negate(nrm) : nrm, 31, 0.92f);
+    g.idx.insert(g.idx.end(), {b, static_cast<unsigned short>(b + 1), static_cast<unsigned short>(b + 2)});
+  }
+  // Shaft from the hand to the canopy.
+  loftBone(g, {0.2f, 0.12f, 1.02f}, top, Vector3{1, 0, 0}, {{0.0f, 0.012f, 0.012f}, {1.0f, 0.009f, 0.009f}}, 29, 6);
+  return g.upload();
+}
+
 }  // namespace
 
 void HumanModels::build() {
@@ -203,6 +225,7 @@ void HumanModels::build() {
     for (int f = 0; f < kFrames; ++f) walk_[v][f] = buildPose(static_cast<BodyVariant>(v), 2 * PI * f / kFrames, true);
     idle_[v] = buildPose(static_cast<BodyVariant>(v), 0.0f, false);
   }
+  umbrella_ = buildUmbrella();
   ready_ = true;
 }
 
@@ -212,6 +235,7 @@ void HumanModels::unload() {
     for (auto& m : walk_[v]) UnloadMesh(m);
     UnloadMesh(idle_[v]);
   }
+  UnloadMesh(umbrella_);
   ready_ = false;
 }
 
