@@ -26,27 +26,7 @@ from realjapan_pipeline.streetdetail import Geo as DGeo
 RAIL_DECK = 9.0  # rail level above the ground (elevated loop line)
 
 
-def chaikin(pts, it=3, closed=False):
-    P = np.asarray(pts, float)
-    for _ in range(it):
-        Q = []
-        n = len(P)
-        rng = range(n) if closed else range(n - 1)
-        if not closed:
-            Q.append(P[0])
-        for i in rng:
-            a, b = P[i], P[(i + 1) % n]
-            Q += [0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b]
-        if not closed:
-            Q.append(P[-1])
-        P = np.array(Q)
-    return P
-
-
-def resample(P, step):
-    line = LineString(P)
-    n = max(2, int(line.length / step) + 1)
-    return np.array([line.interpolate(t, normalized=True).coords[0] for t in np.linspace(0, 1, n)])
+from .railgeom import PLATFORM_LEN, chaikin, resample, stations_aligned, track_piece  # noqa: E402,F401
 
 
 def beam(g: Geo, p0, p1, t, style, rgb, ground):
@@ -342,8 +322,6 @@ def _ferry_terminal(terrain):
 
 def build_all(isl, terrain, rng) -> Spec:
     spec = Spec()
-    for k, (name, x, y, hd) in enumerate(L.STATIONS):
-        spec.buildings.extend(_station(name, x, y, hd, terrain, big=(k == 0)))
     t = L.LANDMARKS
     spec.buildings += _temple(t["temple"][0], t["temple"][1], t["temple"][2], terrain)
     spec.buildings += _shrine(t["shrine"][0], t["shrine"][1], t["shrine"][2], terrain)
@@ -378,14 +356,14 @@ def build_all(isl, terrain, rng) -> Spec:
             z = gaussian_filter1d(gz, 25, mode="wrap" if closed else "nearest") + deck
         spec.rails.append(np.column_stack([P, z]))
         spec.rail_kinds.append(kind)
-    for name, x, y, hd in L.SHINKANSEN_STATIONS:
-        spec.buildings.extend(_station(name, x, y, hd, terrain, big=False, deck=None))
-    # platform decks (walkable) for every station: level with the rail line passing through
-    for (name, x, y, hd), kind_i in [(s_, 0) for s_ in L.STATIONS[:4]] + [(s_, 1) for s_ in L.STATIONS[4:]] + \
-            [(s_, 2) for s_ in L.SHINKANSEN_STATIONS]:
-        R = spec.rails[kind_i]
-        k = int(np.argmin(np.hypot(R[:, 0] - x, R[:, 1] - y)))
-        spec.platforms.append((x, y, hd, 200.0 if kind_i < 2 else 320.0, 5.0, float(R[k, 2]) + 1.1, kind_i))
+    # stations snapped onto the smoothed lines: concourse (and the main station's tower) under the
+    # viaduct, walkable platform decks level with the line and following its curve
+    for si, (name, x, y, hd, li, k) in enumerate(stations_aligned([R[:, :2] for R in spec.rails])):
+        R = spec.rails[li]
+        spec.buildings.extend(_station(name, x, y, hd, terrain, big=(si == 0), deck=None if li == 2 else RAIL_DECK))
+        length = PLATFORM_LEN[li]
+        path = track_piece(R, k, length / 2, closed=(li == 0))
+        spec.platforms.append((x, y, hd, length, 5.0, float(R[k, 2]) + 1.1, li, name, path))
     for x, y, hd in L.FERRY_PIERS:
         spec.piers.append((x, y, hd, 120.0))
     # bridges: roads crossing the river (flat decks) and the bay bridge (arched)
@@ -551,7 +529,7 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
     carr_p = isl.net.carriage.intersection(clip.buffer(50))
     shapely.prepare(carr_p)
     # --- station platforms (walkable) with canopies ---
-    for x, y, hd, length, width, ztop, kind_i in spec.platforms:
+    for x, y, hd, length, width, ztop, kind_i, _name, path in spec.platforms:
         if not clip.buffer(length).contains(Point(x, y)):
             continue
         th = math.radians(hd)
@@ -559,34 +537,78 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
         side = np.array([math.cos(th), -math.sin(th)])
         # platform edge 1.6 m (commuter) / 1.76 m (Shinkansen) from the track centre (tracks at 2.5 / 3.15 m)
         off = 6.6 if kind_i < 2 else 7.4
+        # the centre line under the platform, with the right-hand normal at each point (curved platforms follow it)
+        C = np.asarray(path, float)
+        T = np.gradient(C, axis=0)
+        T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-9)
+        if float(T[len(T) // 2] @ fwd) < 0:  # orient along the station heading
+            C, T = C[::-1], -T[::-1]
+        Nr = np.column_stack([T[:, 1], -T[:, 0]])  # right of the heading
+        cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(C, axis=0).T))])
+        u = cum - cum[len(cum) // 2]  # distance along the platform from the station centre
+
+        def strip(o0, o1, z, mat, lo=-1e9, hi=1e9, walk=False, col=None):
+            """A band from offset o0 to o1 (right of the centre line) between u = lo and hi."""
+            for a in range(len(C) - 1):
+                if u[a + 1] <= lo or u[a] >= hi:
+                    continue
+                pa, pb = C[a], C[a + 1]
+                q = [pa + Nr[a] * o0, pb + Nr[a + 1] * o0, pb + Nr[a + 1] * o1, pa + Nr[a] * o1]
+                V = xf.p([[p[0], p[1], z] for p in q])
+                if col is None:
+                    _dquad(geos, mat, V if o1 > o0 else V[::-1])
+                else:
+                    _dquad(geos, mat, V if o1 > o0 else V[::-1], col)
+                if walk:
+                    ex.decks.append(np.array([[V[0], V[1], V[2]], [V[0], V[2], V[3]]]))
         for sg in (-1, 1):
-            c = np.array([x, y]) + side * off * sg
-            q = [c - fwd * length / 2 - side * width / 2, c + fwd * length / 2 - side * width / 2,
-                 c + fwd * length / 2 + side * width / 2, c - fwd * length / 2 + side * width / 2]
-            V = xf.p([[p[0], p[1], ztop] for p in q])
-            _dquad(geos, "sidewalk", V)
-            ex.decks.append(np.array([[V[0], V[1], V[2]], [V[0], V[2], V[3]]]))
-            for k0, k1 in ((0, 1), (1, 2), (2, 3), (3, 0)):
-                A, B = V[k0], V[k1]
-                _dquad(geos, "concrete", [A - [0, 0, 1.1], B - [0, 0, 1.1], B, A])
+            o_in, o_out = sg * (off - width / 2), sg * (off + width / 2)
+            strip(min(o_in, o_out), max(o_in, o_out), ztop, "sidewalk", walk=True)
+            # platform faces (1.1 m down to the track bed) along both edges and across the ends, facing out
+            for o in (o_in, o_out):
+                out = 1.0 if o > (o_in + o_out) / 2 else -1.0  # +: the face looks to the right of the heading
+                for a in range(len(C) - 1):
+                    A = xf.p([[*(C[a] + Nr[a] * o), ztop]])[0]
+                    B = xf.p([[*(C[a + 1] + Nr[a + 1] * o), ztop]])[0]
+                    Q = [A - [0, 0, 1.1], B - [0, 0, 1.1], B, A]
+                    _dquad(geos, "concrete", Q if out > 0 else [Q[1], Q[0], Q[3], Q[2]])
+            for e, out in ((0, -1.0), (len(C) - 1, 1.0)):
+                A = xf.p([[*(C[e] + Nr[e] * min(o_in, o_out)), ztop]])[0]
+                B = xf.p([[*(C[e] + Nr[e] * max(o_in, o_out)), ztop]])[0]
+                Q = [A - [0, 0, 1.1], B - [0, 0, 1.1], B, A]  # (faces back along the heading)
+                _dquad(geos, "concrete", Q if out < 0 else [Q[1], Q[0], Q[3], Q[2]])
+            # tactile strip along the track edge
+            e0 = sg * (off - width / 2 + 0.9)
+            strip(min(e0 - 0.3, e0 + 0.3), max(e0 - 0.3, e0 + 0.3), ztop + 0.01, "tactile")
+            # canopy over the middle 80 % on columns
+            c0, c1 = sg * (off - width / 2 - 0.6), sg * (off + width / 2 + 0.6)
+            strip(min(c0, c1), max(c0, c1), ztop + 3.4, "metal", -length * 0.4, length * 0.4)
+            strip(max(c0, c1), min(c0, c1), ztop + 3.4, "metal_dark", -length * 0.4, length * 0.4)
+            for s_ in np.linspace(-0.38, 0.38, 7):
+                a = int(np.argmin(np.abs(u - length * s_)))
+                pc = C[a] + Nr[a] * sg * off
+                P0 = xf.p([[pc[0], pc[1], ztop]])[0]
+                _box_d(geos, "metal", P0 + [0, 0, 1.7], (0.12, 0.12, 1.7))
             if kind_i == 2:
                 # platform screen doors (typical of Shinkansen stations): 1.3 m fence 0.5 m back from the
                 # edge with openings at the car doors of an 8 x 25 m train stopped at the centre
-                # (one door at the rear of each car; the reversed rear cab has it at the front end)
+                # (one door at the rear of each car; the reversed rear cab has it at the front end).
+                # Shinkansen stations are on straight track: the fence runs along the heading.
+                c = np.array([x, y]) + side * off * sg
                 fdir = 1.0 if sg < 0 else -1.0  # trains on the left platform run along the heading
                 opens = []
                 for k in range(8):
-                    u = (3.5 - k) * 25.0 + (11.4 if k == 7 else -11.4)
-                    opens.append(u * fdir)
+                    uu = (3.5 - k) * 25.0 + (11.4 if k == 7 else -11.4)
+                    opens.append(uu * fdir)
                 opens.sort()
                 edge = c - side * sg * (width / 2 - 0.5)
-                u = -length / 2 + 2.0
+                uu = -length / 2 + 2.0
                 cuts = []
                 for o in opens:
-                    if o - 1.15 > u:
-                        cuts.append((u, o - 1.15))
-                    u = o + 1.15
-                cuts.append((u, length / 2 - 2.0))
+                    if o - 1.15 > uu:
+                        cuts.append((uu, o - 1.15))
+                    uu = o + 1.15
+                cuts.append((uu, length / 2 - 2.0))
                 for ua, ub in cuts:
                     if ub - ua < 0.3:
                         continue
@@ -595,23 +617,9 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
                     Vp = xf.p([[p_[0], p_[1], ztop] for p_ in q2] + [[p_[0], p_[1], ztop + 1.3] for p_ in q2[::-1]])
                     _dquad(geos, "metal", [Vp[0], Vp[1], Vp[2], Vp[3]], (214, 216, 220, 255))
                     _dquad(geos, "metal", [Vp[1], Vp[0], Vp[3], Vp[2]], (214, 216, 220, 255))
-                    for uu in (ua, ub):  # door pockets / posts
-                        P0 = xf.p([[*(edge + fwd * uu), ztop]])[0]
+                    for ue in (ua, ub):  # door pockets / posts
+                        P0 = xf.p([[*(edge + fwd * ue), ztop]])[0]
                         _box_d(geos, "metal_dark", P0 + [0, 0, 0.67], (0.12, 0.12, 0.67))
-            # tactile strip along the track edge + canopy
-            e0 = c - side * sg * (width / 2 - 0.9)
-            t = [e0 - fwd * length / 2 - side * 0.3, e0 + fwd * length / 2 - side * 0.3, e0 + fwd * length / 2 + side * 0.3,
-                 e0 - fwd * length / 2 + side * 0.3]
-            _dquad(geos, "tactile", xf.p([[p[0], p[1], ztop + 0.01] for p in t]))
-            cq = [c - fwd * length * 0.4 - side * (width / 2 + 0.6), c + fwd * length * 0.4 - side * (width / 2 + 0.6),
-                  c + fwd * length * 0.4 + side * (width / 2 + 0.6), c - fwd * length * 0.4 + side * (width / 2 + 0.6)]
-            Vc = xf.p([[p[0], p[1], ztop + 3.4] for p in cq])
-            _dquad(geos, "metal_dark", Vc[::-1])
-            _dquad(geos, "metal", Vc)
-            for s_ in np.linspace(-0.38, 0.38, 7):
-                pc = c + fwd * length * s_
-                P0 = xf.p([[pc[0], pc[1], ztop]])[0]
-                _box_d(geos, "metal", P0 + [0, 0, 1.7], (0.12, 0.12, 1.7))
     # --- ferry piers (deck on piles) ---
     for x, y, hd, length in spec.piers:
         if not clip.buffer(length).contains(Point(x, y)):
@@ -630,7 +638,7 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
                 P0 = xf.p([[pp[0], pp[1], -2.0]])[0]
                 _box_d(geos, "concrete", P0, (0.4, 0.4, 4.4))
     # --- elevated rail: deck, barriers, rails, piers (tunnel tubes where the ground is above) ---
-    stations_xy = np.array([(x, y) for _, x, y, _ in list(L.STATIONS) + list(L.SHINKANSEN_STATIONS)], float)
+    stations_xy = np.array([(p[0], p[1]) for p in spec.platforms], float)
     for ri, R in enumerate(spec.rails):
         shink = spec.rail_kinds[ri] == "shinkansen" if spec.rail_kinds else False
         for i in range(len(R) - 1):
@@ -774,14 +782,16 @@ def _catenary(geos, xf, a, b, d, nrm, i, hw, shink, stations_xy):
         _wire(geos, xf.p([[pa[0], pa[1], a[2] + FEEDER_H]])[0], xf.p([[pb[0], pb[1], b[2] + FEEDER_H]])[0], 0.016)
     if i % MAST_EVERY != 0:
         return
-    if len(stations_xy) and np.min(np.hypot(stations_xy[:, 0] - a[0], stations_xy[:, 1] - a[1])) < 125.0:
-        return
+    # in a station the portal spans the platforms: columns stand at the back of each platform
+    in_station = len(stations_xy) and np.min(np.hypot(stations_xy[:, 0] - a[0], stations_xy[:, 1] - a[1])) < (170.0 if shink else 110.0)
+    col_off, col_z0 = ((7.4 if shink else 6.6) + 2.3, 1.1) if in_station else (hw - 0.35, 0.0)
     steel = (150, 154, 158, 255)
     cols = []
     for sg in (-1.0, 1.0):
-        pc = a[:2] + nrm * sg * (hw - 0.35)
+        pc = a[:2] + nrm * sg * col_off
         P = xf.p([[pc[0], pc[1], a[2]]])[0]
-        _box_d(geos, "metal", P + [0, 0, (FEEDER_H + 0.3) / 2], (0.13, 0.13, (FEEDER_H + 0.3) / 2))
+        h = FEEDER_H + 0.3 - col_z0
+        _box_d(geos, "metal", P + [0, 0, col_z0 + h / 2], (0.13, 0.13, h / 2))
         cols.append(P)
     beam_z = MESSENGER_H + 0.55
     mid = (cols[0] + cols[1]) / 2 + [0, 0, beam_z]
@@ -834,10 +844,9 @@ def write_extra(spec: Spec, out: str, fi) -> None:
             for x, y, z in R:
                 la, lo = fi.to_geodetic(x, y)
                 f.write(f"{la:.8f} {lo:.8f} {z:.2f}\n")
-        for x, y, hd, length, width, ztop, kind_i in spec.platforms:
+        for x, y, hd, length, width, ztop, kind_i, name, _path in spec.platforms:
             la, lo = fi.to_geodetic(x, y)
-            names = [n for n, sx, sy, _ in list(L.STATIONS) + list(L.SHINKANSEN_STATIONS) if abs(sx - x) < 1 and abs(sy - y) < 1]
-            f.write(f"station {kind_i} {la:.8f} {lo:.8f} {hd} {ztop:.2f} {names[0] if names else '?'}\n")
+            f.write(f"station {kind_i} {la:.8f} {lo:.8f} {hd} {ztop:.2f} {name}\n")
     with open(os.path.join(out, "transport.txt"), "w", encoding="utf-8") as f:
         (ax, ay), (bx, by), w = L.RUNWAY
         la0, lo0 = fi.to_geodetic(ax, ay)

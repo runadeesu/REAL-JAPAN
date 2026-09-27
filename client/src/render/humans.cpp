@@ -122,20 +122,23 @@ void ellipsoid(Geo& g, Vector3 c, Vector3 r, int mat, int seg = 12, int rings = 
 Vector3 rotX(Vector3 v, float a) { return {v.x, v.y * std::cos(a) - v.z * std::sin(a), v.y * std::sin(a) + v.z * std::cos(a)}; }
 Vector3 rotZ(Vector3 v, float a) { return {v.x * std::cos(a) - v.y * std::sin(a), v.x * std::sin(a) + v.y * std::cos(a), v.z}; }
 
-// One pose. phase: walk cycle; walk=false -> idle stance.
-Mesh buildPose(BodyVariant var, float phase, bool walk) {
+// One pose. phase: walk cycle; walk=false -> idle stance; pose 1 = seated (hips 0.6 m above the
+// floor, thighs forward, shins down, hands on the thighs), pose 2 = standing holding a strap overhead.
+Mesh buildPose(BodyVariant var, float phase, bool walk, int pose = 0) {
   Geo g;
+  const bool sit = pose == 1, strap = pose == 2;
   const float s = walk ? std::sin(phase) : 0.0f;
   const float bob = walk ? 0.018f * std::cos(2 * phase) : 0.0f;
   const float pelvis_yaw = walk ? 0.07f * s : 0.0f;
-  const Vector3 pelvis{0, 0, 0.97f + bob};
+  const Vector3 pelvis{0, 0, sit ? 0.60f : 0.97f + bob};
   const bool skirt = var == BodyVariant::Skirt;
   const bool long_hair = var != BodyVariant::Trousers;
   // ---- legs: hip -> knee -> ankle -> toe, pitch about x (forward swing = positive y) ----
   for (int side = -1; side <= 1; side += 2) {
     const float leg_ph = side < 0 ? phase : phase + PI;
-    const float swing = walk ? 0.40f * std::sin(leg_ph) : 0.0f;                          // thigh angle
-    const float knee = walk ? 0.12f + 0.55f * std::pow(std::max(0.0f, std::sin(leg_ph + 1.1f)), 2.0f) : 0.04f;  // knee flex
+    float swing = walk ? 0.40f * std::sin(leg_ph) : 0.0f;                          // thigh angle
+    float knee = walk ? 0.12f + 0.55f * std::pow(std::max(0.0f, std::sin(leg_ph + 1.1f)), 2.0f) : 0.04f;  // knee flex
+    if (sit) swing = knee = 1.45f + 0.04f * side;
     Vector3 hip = Vector3Add(pelvis, rotZ(Vector3{0.095f * side, 0, -0.05f}, pelvis_yaw));
     const Vector3 thigh = rotX(Vector3{0, 0, -0.44f}, swing);
     const Vector3 kneeP = Vector3Add(hip, thigh);
@@ -154,7 +157,11 @@ Mesh buildPose(BodyVariant var, float phase, bool walk) {
   // ---- torso (lofted along z), slight counter-rotation ----
   const float chest_yaw = -pelvis_yaw * 1.2f;
   auto tor = [&](float z, float yaw) { return Vector3Add(pelvis, rotZ(Vector3{0, 0, z}, yaw)); };
-  if (skirt) {
+  if (skirt && sit) {
+    // seated: the skirt lies over the thighs
+    loftBone(g, tor(0.08f, 0), Vector3Add(pelvis, Vector3{0, 0.4f, -0.04f}), Vector3{1, 0, 0},
+             {{0.0f, 0.15f, 0.12f}, {0.4f, 0.19f, 0.12f}, {1.0f, 0.21f, 0.08f}}, kMatBottom, 14, true, true);
+  } else if (skirt) {
     // skirt: cone from the waist to the knee line
     loftBone(g, tor(0.08f, 0), tor(-0.42f, 0), Vector3{1, 0, 0},
              {{0.0f, 0.15f, 0.12f}, {0.4f, 0.19f, 0.16f}, {1.0f, 0.24f, 0.21f}}, kMatBottom, 14, true, true);
@@ -179,8 +186,10 @@ Mesh buildPose(BodyVariant var, float phase, bool walk) {
   // ---- arms: shoulder -> elbow -> wrist (swing opposite to the legs) ----
   for (int side = -1; side <= 1; side += 2) {
     const float arm_ph = side < 0 ? phase + PI : phase;
-    const float swing = walk ? 0.32f * std::sin(arm_ph) : 0.0f;
-    const float elbow = walk ? 0.25f + 0.2f * (0.5f + 0.5f * std::sin(arm_ph)) : 0.12f;
+    float swing = walk ? 0.32f * std::sin(arm_ph) : 0.0f;
+    float elbow = walk ? 0.25f + 0.2f * (0.5f + 0.5f * std::sin(arm_ph)) : 0.12f;
+    if (sit) swing = 0.3f, elbow = 1.05f;              // hands resting on the thighs
+    if (strap && side > 0) swing = 2.3f, elbow = 0.05f;   // right arm raised forward to a strap (hand ~1.8 m up, 0.4 m ahead)
     const Vector3 sh = tor(0.45f, chest_yaw);
     const Vector3 shoulder = Vector3Add(sh, rotZ(Vector3{0.19f * side, 0, 0}, chest_yaw));
     const Vector3 upper = rotX(Vector3{0.02f * side, 0, -0.29f}, swing);
@@ -224,6 +233,7 @@ void HumanModels::build() {
   for (int v = 0; v < static_cast<int>(BodyVariant::Count); ++v) {
     for (int f = 0; f < kFrames; ++f) walk_[v][f] = buildPose(static_cast<BodyVariant>(v), 2 * PI * f / kFrames, true);
     idle_[v] = buildPose(static_cast<BodyVariant>(v), 0.0f, false);
+    for (int p = 0; p < static_cast<int>(StillPose::Count); ++p) still_[v][p] = buildPose(static_cast<BodyVariant>(v), 0.0f, false, p + 1);
   }
   umbrella_ = buildUmbrella();
   ready_ = true;
@@ -234,6 +244,7 @@ void HumanModels::unload() {
   for (int v = 0; v < static_cast<int>(BodyVariant::Count); ++v) {
     for (auto& m : walk_[v]) UnloadMesh(m);
     UnloadMesh(idle_[v]);
+    for (auto& m : still_[v]) UnloadMesh(m);
   }
   UnloadMesh(umbrella_);
   ready_ = false;

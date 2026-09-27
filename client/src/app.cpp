@@ -550,6 +550,13 @@ void App::update(float dt) {
         if (ferries_.loaded()) ferries_.update(std::min(dt, 0.1f), render_time_ + k * 0.1f, lighting_.wind);
         if (aviation_.loaded()) aviation_.update(std::min(dt, 0.1f), world_);
       }
+      if (trains_.loaded()) {
+        const auto jt = jst();
+        const int wd = rj::sim::weekday(jt.date);
+        const rj::geo::Vec3d cam = rlToEnu(listen_cam_.position);
+        crowd_.update(render_time_, trains_, cam, drive_train_ >= 0 ? -1 : ride_train_, ride_car_, cam, jt.hour,
+                      wd == 0 || wd == 6 || rj::sim::isHoliday(jt.date));
+      }
       if (ride_place_pending_ && traffic_placed_) {
         ride_place_pending_ = false;
         placeRideTest();
@@ -959,6 +966,12 @@ void App::placeRideTest() {
       player_.pos = {p.x + fx * ahead + lx * lat, p.y + fy * ahead + ly * lat, sn.pos.z + 0.05};
       player_.yaw = static_cast<float>(yaw + PI - 0.28);
       player_.pitch = -0.06f;
+      if (const char* e = std::getenv("RJ_PLATFORM_LOOK")) {  // test aid: "turn_deg,back_m,out_m" (back along the train, out across the platform)
+        double turn = 0, back = 0, out = 0;
+        std::sscanf(e, "%lf,%lf,%lf", &turn, &back, &out);
+        player_.yaw += static_cast<float>(turn * DEG2RAD);
+        player_.pos = {player_.pos.x - fx * back + lx * out, player_.pos.y - fy * back + ly * out, player_.pos.z};
+      }
       break;
     }
   }
@@ -1263,15 +1276,15 @@ void App::updateTransportActions() {
   const double sx = std::cos(hd), sy = -std::sin(hd);  // platform side axis (right of the heading)
   const bool on_platform = std::fabs(player_.pos.z - st.pos.z) < 2.2;
   if (on_platform) {
-    // the stopped train on this platform's side
-    const double side = (player_.pos.x - st.pos.x) * sx + (player_.pos.y - st.pos.y) * sy;
+    // the stopped train on this platform's side (measured across the curve of the track)
+    const double side = trains_.lateral(st, player_.pos);
     int tid = -1;
     for (const auto& t : trains_.trains()) {
       if (t.at_station != si || t.dwell < 3.0) continue;
       rj::geo::Vec3d p;
       float yaw, pitch;
       trains_.carPose(t, t.cars / 2, p, yaw, pitch);
-      const double ts = (p.x - st.pos.x) * sx + (p.y - st.pos.y) * sy;
+      const double ts = trains_.lateral(st, p);
       if (ts * side > 0) tid = t.id;
     }
     if (tid >= 0) {
@@ -1561,6 +1574,7 @@ void App::drawWorldView(const Camera3D& cam) {
     }
     renderer_.drawVehicles(traffic_, cam, lighting_, driving_.hasCar() ? &driving_.car() : nullptr, cockpit ? &cv : nullptr);
     renderer_.drawTrains(trains_, cam, ride_train_, ride_car_);
+    if (in_session_ && screen_ != Screen::Title) renderer_.drawCrowd(crowd_.people());
     renderer_.drawShips(ferries_, cam, lighting_);
     Renderer::FlightView fv;
     if (flying_) {

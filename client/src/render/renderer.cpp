@@ -1042,6 +1042,30 @@ void Renderer::drawHuman(const Mesh& m, const Matrix& model, Color top, Color bo
   triangles_ += m.triangleCount;
 }
 
+void Renderer::drawCrowd(const std::vector<CrowdPerson>& people) {
+  if (people.empty()) return;
+  setI(lit_, "materialOverride", -1);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "surfaceMode", 0);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  rlDisableBackfaceCulling();
+  bool lit_inside = false;
+  for (const auto& p : people) {
+    if (p.inside != lit_inside) {  // people in a car are lit by its lights, like the interior
+      lit_inside = p.inside;
+      set3(lit_, "selfLight", lit_inside ? kCabinLight : Vector3{0, 0, 0});
+    }
+    const BodyVariant v = static_cast<BodyVariant>(p.variant % static_cast<int>(BodyVariant::Count));
+    const Mesh& m = p.pose == 2 ? humans_.still(v, StillPose::Sit) : p.pose == 3 ? humans_.still(v, StillPose::Strap) : humans_.frame(v, p.phase, p.pose == 0);
+    const Vector3 feet = enuToRl(p.pos);
+    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(p.scale, p.scale, p.scale), MatrixRotateY(-p.yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
+    drawHuman(m, M, p.top, p.bottom, p.skin, p.hair);
+  }
+  if (lit_inside) set3(lit_, "selfLight", Vector3{0, 0, 0});
+  rlEnableBackfaceCulling();
+}
+
 void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
   setI(lit_, "materialOverride", -1);
   setI(lit_, "useTexture", 0);

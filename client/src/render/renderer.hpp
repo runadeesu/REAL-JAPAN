@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "game/aircraft.hpp"
+#include "game/crowd.hpp"
 #include "game/ferries.hpp"
 #include "game/pedestrians.hpp"
 #include "game/road_markings.hpp"
@@ -109,6 +110,7 @@ class Renderer {
   void drawOcean(const Camera3D& cam, float sea_y);
   // ride_train / ride_car: the car the player sits in (drawn without glass, with its interior)
   void drawTrains(const Trains& trains, const Camera3D& cam, int ride_train, int ride_car);
+  void drawCrowd(const std::vector<CrowdPerson>& people);
   void drawShips(const Ferries& ferries, const Camera3D& cam, const Lighting& L);
   // Aircraft: scheduled jets (ride_jet: drawn from the cabin) and the light aircraft (cockpit
   // instruments when flown from the seat).

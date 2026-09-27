@@ -63,6 +63,7 @@ set(RJ_SOURCES
   src/render/ships.cpp
   src/game/aircraft.cpp
   src/game/jobs.cpp
+  src/game/crowd.cpp
   src/app_activities.cpp
   src/app_sound.cpp
   src/render/aircraft.cpp

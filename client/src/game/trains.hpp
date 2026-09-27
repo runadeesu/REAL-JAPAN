@@ -86,6 +86,9 @@ class Trains {
   bool atsActive(const Train& t) const { return t.manual && ats_[static_cast<size_t>(t.id) % 64]; }
   // Platform side offset of the tracks for a station's line (metres from the line centre).
   static double platformOffset(LineKind k) { return k == LineKind::Shinkansen ? 7.4 : 6.6; }
+  // Signed distance of `p` from the centre line of the station's line (positive: right of the
+  // station heading), measured on the curve itself (platforms on curves follow the track).
+  double lateral(const Station& st, const rj::geo::Vec3d& p) const;
   static double trackOffset(LineKind k) { return k == LineKind::Shinkansen ? 3.15 : 2.5; }
 
  private:

@@ -74,6 +74,34 @@ void Trains::pointAt(const RailLine& L, double s, rj::geo::Vec3d& p, double& hea
   grade = (B.z - A.z) / seg;
 }
 
+double Trains::lateral(const Station& st, const rj::geo::Vec3d& p) const {
+  if (st.line < 0 || st.line >= static_cast<int>(lines_.size())) return 0.0;
+  const auto& L = lines_[static_cast<size_t>(st.line)];
+  double best = 1e30, lat = 0.0;
+  for (size_t i = 1; i < L.pts.size(); ++i) {
+    double ds = std::fabs(L.cum[i] - st.s);
+    if (L.closed) ds = std::min(ds, L.length - ds);
+    if (ds > 260.0) continue;  // the stretch through this station
+    const auto& A = L.pts[i - 1];
+    const auto& B = L.pts[i];
+    const double vx = B.x - A.x, vy = B.y - A.y, l2 = vx * vx + vy * vy;
+    if (l2 <= 0) continue;
+    const double t = std::clamp(((p.x - A.x) * vx + (p.y - A.y) * vy) / l2, 0.0, 1.0);
+    const double qx = A.x + vx * t, qy = A.y + vy * t, d = std::hypot(p.x - qx, p.y - qy);
+    if (d < best) {
+      best = d;
+      const double l = std::sqrt(l2);
+      lat = ((p.x - A.x) * vy - (p.y - A.y) * vx) / l;  // right of the segment direction
+    }
+  }
+  // the line's direction may run against the station heading
+  const double hd = st.heading * M_PI / 180.0;
+  rj::geo::Vec3d q;
+  double h, g;
+  pointAt(L, st.s, q, h, g);
+  return std::cos(h - hd) >= 0 ? lat : -lat;
+}
+
 void Trains::place(const World& world) {
   for (auto& L : lines_) {
     L.pts.clear();

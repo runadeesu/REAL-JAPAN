@@ -428,8 +428,11 @@ def rail_corridors() -> Polygon:
     parts_ = [LineString(np.vstack([loop, loop[:1]])).buffer(11.0),
               LineString(smooth_path(L.RAIL_BRANCH, 4)).buffer(10.0),
               LineString(smooth_path(L.SHINKANSEN, 4)).buffer(14.0)]
-    for name, x, y, hd in list(L.STATIONS) + list(L.SHINKANSEN_STATIONS):
-        parts_.append(affinity.rotate(box(x - 24, y - 170, x + 24, y + 170), -hd, origin=(x, y)))
+    # stations (snapped onto the smoothed lines): the platforms and concourse along the track
+    from .railgeom import rail_lines2d, stations_aligned, track_piece
+    lines = rail_lines2d()
+    for name, x, y, hd, li, k in stations_aligned(lines):
+        parts_.append(LineString(track_piece(lines[li], k, 170.0, closed=(li == 0))).buffer(24.0))
     return unary_union(parts_)
 
 
@@ -442,8 +445,11 @@ def generate(seed: int = 20260927) -> Island:
     all_land = land.union(islet)
     net = build_roads(all_land, river, rng)
     reserved = []
-    for name, x, y, hd in L.STATIONS:
-        reserved.append(affinity.rotate(box(x - 30, y - 110, x + 30, y + 110), -hd, origin=(x, y)))
+    from .railgeom import rail_lines2d, stations_aligned, track_piece
+    lines = rail_lines2d()
+    for name, x, y, hd, li, k in stations_aligned(lines):
+        if li < 2:
+            reserved.append(LineString(track_piece(lines[li], k, 110.0, closed=(li == 0))).buffer(30.0))
     for key, (name, x, y) in L.LANDMARKS.items():
         r = {"temple": 110, "shrine": 45, "tower": 45, "wheel": 60, "stadium": 140}[key]
         reserved.append(Point(x, y).buffer(r))

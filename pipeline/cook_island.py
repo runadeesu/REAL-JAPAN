@@ -125,7 +125,9 @@ def main() -> int:
 
     # ---- buildings ----
     sx, sy = L.SCRAMBLE
-    st_xy = np.array([(x, y) for _, x, y, _ in L.STATIONS])
+    from island.railgeom import stations_aligned
+    stations = [st for st in stations_aligned() if st[4] < 2]  # loop and branch stations, snapped to the track
+    st_xy = np.array([(x, y) for _, x, y, _, _, _ in stations])
     blds = []
     for pc in isl.parcels:
         c = pc.poly.centroid
@@ -165,7 +167,7 @@ def main() -> int:
 
     summary, pois = [], []
     homes, works = [], []
-    for name, x, y, _ in L.STATIONS:
+    for name, x, y, _, _, _ in stations:
         la, lo = fi.to_geodetic(x, y)
         pois.append({"name": name, "lat": la, "lon": lo, "usage": 431, "height": 18.0, "id": f"chikage-{name}"})
     for key, (name, x, y) in L.LANDMARKS.items():

@@ -14,6 +14,7 @@
 #include "audio/audio.hpp"
 #include "config/settings.hpp"
 #include "game/aircraft.hpp"
+#include "game/crowd.hpp"
 #include "game/driving.hpp"
 #include "game/ferries.hpp"
 #include "game/jobs.hpp"
@@ -161,6 +162,7 @@ class App {
   Traffic traffic_;
   RoadMarkings markings_;
   Trains trains_;
+  Crowd crowd_;  // passengers in the cars and on the platforms near the camera
   int ride_train_ = -1, ride_car_ = 0;  // riding a train (id, car)
   float ride_look_yaw_ = 0.0f, ride_look_pitch_ = 0.0f;
   void updateTransportActions();
