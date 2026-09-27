@@ -132,7 +132,7 @@ bool parseDetail(const std::vector<unsigned char>& file, CellDetailCpu& out, std
     dst.resize(base + cnt * 9u);
     r.bytes(dst.data() + base, cnt * 36u);
   };
-  tris(out.walk);
+  tris(out.deck);  // extra walkable surfaces = bridge decks (drivable)
   const uint32_t nl = r.get<uint32_t>();
   for (uint32_t k = 0; k < nl && r.ok(); ++k) {
     StreetLight l{};

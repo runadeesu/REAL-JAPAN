@@ -40,6 +40,10 @@ struct Vehicle {
   rj::geo::Vec3d pos;
   float yaw = 0;  // compass radians
   float pitch = 0;
+  float roll = 0;        // body roll (positive: right side down)
+  float steer = 0;       // front road-wheel angle (positive: right)
+  float wheel_dist = 0;  // distance rolled (wheel rotation)
+  bool reversing = false;
 };
 
 class Traffic {
@@ -79,6 +83,15 @@ class Traffic {
   void setStopDistance(int edge, bool at_b, float d) { edges_[static_cast<size_t>(edge)].stop[at_b ? 1 : 0] = d; }
   void setEstimatedGroup(int node, int group) { nodes_[static_cast<size_t>(node)].est_group = group; }
   void clearRoadMarkingState();  // stop distances and estimated groups (before markings are rebuilt)
+  // The player's car: an obstacle the AI vehicles keep their distance from.
+  void setObstacle(bool on, const rj::geo::Vec3d& p) {
+    obstacle_on_ = on;
+    obstacle_ = p;
+  }
+  // Remove vehicle `id` from the simulation (the player takes the wheel); false if gone.
+  bool take(int id, Vehicle& out);
+  // Kerb-side lane pose nearest to p, travelling as close to `yaw_hint` as the road allows.
+  bool nearestLane(const rj::geo::Vec3d& p, double yaw_hint, rj::geo::Vec3d& out, double& heading) const;
 
  private:
   void samplePose(const Edge& e, int dir, int lane, double s, rj::geo::Vec3d& p, double& heading) const;
@@ -97,6 +110,8 @@ class Traffic {
   std::vector<float> cand_w_;
   rj::geo::Vec3d cand_at_{1e30, 1e30, 0};
   int warm_frames_ = 0;
+  bool obstacle_on_ = false;
+  rj::geo::Vec3d obstacle_{};
   float rnd();
 };
 

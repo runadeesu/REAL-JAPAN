@@ -13,6 +13,10 @@
 
 namespace rjc {
 
+// RJCELL chunk page for procedural facades (fictional island): uv = facade metres / (2048, 1024),
+// vertex alpha = facade style (see facade() in render/shaders.hpp).
+constexpr int kPageProcedural = -2;
+
 struct BuildingInfo {
   std::string id;
   std::string name;

@@ -43,11 +43,12 @@ from shapely.prepared import prep
 # Material ids shared with the client shader (client/src/render/materials.hpp).
 MAT = {"curb": 1, "sidewalk": 2, "tactile": 3, "marking": 4, "metal": 5, "metal_dark": 6, "sign": 7,
        "manhole": 8, "grating": 9, "lamp": 10, "glass": 11, "concrete": 12, "fence": 13, "bronze": 14,
-       "island": 15}
+       "island": 15, "water": 16, "canopy": 17, "asphalt": 18, "ballast": 19}
 
 CURB_H = 0.15      # Japanese standard mountable-kerb height for sidewalks (歩道の縁石) is 0.15 m
 MARK_LIFT = 0.018  # paint sits just above the terrain surface
 MAX_EDGE = 3.0     # subdivision so raised surfaces follow the terrain
+CURB_SEG = 2.0     # kerb segment length (terrain following)
 
 # frn function -> (material, rgb). Colours follow common Japanese practice for the class;
 # the actual sign faces / text are not in the data and are not invented.
@@ -219,7 +220,7 @@ def build_sidewalks(roads, footprints_local, frame, to_local, terrain: TerrainSa
                 continue
             if len(t) == 0:
                 continue
-            v2, t = _subdivide(v2, t, MAX_EDGE)
+            v2, t = _subdivide(v2, t, globals()["MAX_EDGE"])
             z = terrain(v2[:, 0], v2[:, 1]) + CURB_H
             V = np.column_stack([v2, z])
             geos.setdefault(mat, Geo()).add(V, (0.0, 0.0, 1.0), None, (255, 255, 255, 255), t)
@@ -246,7 +247,7 @@ def _curb_ring(pts: np.ndarray, terrain, bprep, rprep, raised_prep, geos, surfac
             continue  # against a wall
         if raised_prep is not None and raised_prep.contains(probe):
             continue  # another raised area (island next to sidewalk etc.)
-        n = max(1, int(math.ceil(L / 2.0)))
+        n = max(1, int(math.ceil(L / CURB_SEG)))
         s = np.linspace(0.0, 1.0, n + 1)
         P = a[None, :] + (b - a)[None, :] * s[:, None]
         tz = terrain(P[:, 0], P[:, 1])

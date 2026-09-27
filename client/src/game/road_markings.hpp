@@ -49,7 +49,9 @@ class RoadMarkings {
   ~RoadMarkings();
   // Needs the traffic graph placed in the current origin; (re)assigns its signal groups.
   // Also places ESTIMATED signals (heads + hardware) at major junctions that have no surveyed heads.
-  void build(Traffic& traffic, TrafficSignals& signals, const World& world);
+  // radius > 0 limits the work to the part of the network within `radius` of `center` (large worlds).
+  void build(Traffic& traffic, TrafficSignals& signals, const World& world, rj::nav::Vec2 center = {0, 0},
+             double radius = 0.0);
   void unload();
   template <class F>
   void forEachMesh(F&& f) const {

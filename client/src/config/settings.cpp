@@ -25,6 +25,7 @@ void applyKv(Settings& s, const std::map<std::string, std::string>& kv) {
     if (auto x = get(k)) try { v = std::stof(*x); } catch (...) {}
   };
   if (auto x = get("language")) s.language = (*x == "en") ? "en" : "ja";
+  if (auto x = get("world")) s.world = (*x == "shibuya") ? "shibuya" : "island";
   i("width", s.width);
   i("height", s.height);
   b("fullscreen", s.fullscreen);
@@ -87,7 +88,8 @@ bool Settings::save(const std::filesystem::path& user) const {
     << "photo_textures = " << (photo_textures ? 1 : 0) << "\n"
     << "post_fx = " << (post_fx ? 1 : 0) << "\n"
     << "head_bob = " << (head_bob ? 1 : 0) << "\n"
-    << "dev_overlay = " << (dev_overlay ? 1 : 0) << "\n";
+    << "dev_overlay = " << (dev_overlay ? 1 : 0) << "\n"
+    << "world = " << world << "\n";
   return writeFileAtomic(user, o.str());
 }
 

@@ -185,7 +185,9 @@ bool parseCell(const std::vector<unsigned char>& file, CellCpu& c, std::string& 
     return false;
   }
   for (auto& b : c.buildings)
-    b.textured = b.chunk >= 0 && b.chunk < static_cast<int32_t>(c.chunks.size()) && c.chunks[static_cast<size_t>(b.chunk)].page >= 0;
+    // Photo-textured (PLATEAU) or procedural facade (page -2): the near-field detail adds no windows.
+    b.textured = b.chunk >= 0 && b.chunk < static_cast<int32_t>(c.chunks.size()) &&
+                 (c.chunks[static_cast<size_t>(b.chunk)].page >= 0 || c.chunks[static_cast<size_t>(b.chunk)].page == kPageProcedural);
   if (png_len) c.ground = LoadImageFromMemory(".png", png.data(), static_cast<int>(png_len));
   for (const auto& j : jpgs) c.pages.push_back(LoadImageFromMemory(".jpg", j.data(), static_cast<int>(j.size())));
   c.bytes = data.size();
@@ -241,7 +243,7 @@ void uploadCell(CellCpu& cpu, CellGpu& gpu) {
     m.vertices = rlCopy(ch.pos);
     m.normals = rlCopy(ch.nrm);
     m.colors = rlCopy(ch.col);
-    if (ch.page >= 0) m.texcoords = rlCopy(ch.uv);
+    if (ch.page >= 0 || ch.page == kPageProcedural) m.texcoords = rlCopy(ch.uv);
     m.indices = rlCopy(ch.idx);
     UploadMesh(&m, false);
     releaseVertexCopies(m);

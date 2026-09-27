@@ -82,7 +82,7 @@ struct MeshBuilder {
     const Vec2 q[4] = {a, b, c, d};
     float z[4];
     for (int k = 0; k < 4; ++k) {
-      const auto h = world.terrainHeight(q[k].x, q[k].y);
+      const auto h = world.roadHeight(q[k].x, q[k].y);
       if (!h) return;
       z[k] = static_cast<float>(*h + kLift);
     }
@@ -332,7 +332,7 @@ void RoadMarkings::unload() {
   tris_ = 0;
 }
 
-void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World& world) {
+void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World& world, Vec2 center, double radius) {
   unload();
   traffic.clearRoadMarkingState();
   signals.clearEstimated();
@@ -341,6 +341,20 @@ void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World&
   const auto& nodes = traffic.nodes();
   const auto& edges = traffic.edges();
   MeshBuilder mb{world, meshes_, tris_, {}, {}, {}, {}, {}, {}};
+  std::vector<char> near_edge(edges.size(), 1), near_node(nodes.size(), 1);
+  if (radius > 0.0) {
+    for (size_t i = 0; i < edges.size(); ++i) {
+      bool in = false;
+      for (const auto& q : edges[i].pts)
+        if (std::hypot(q.x - center.x, q.y - center.y) < radius) {
+          in = true;
+          break;
+        }
+      near_edge[i] = in;
+    }
+    for (size_t n = 0; n < nodes.size(); ++n)
+      near_node[n] = std::hypot(nodes[n].pos.x - center.x, nodes[n].pos.y - center.y) < radius;
+  }
 
   // --- estimated signals: major junctions (>= 2 arms of >= 7.5 m) with no surveyed heads nearby.
   // Skeleton nodes of one large junction area are merged (within 28 m) into one intersection.
@@ -348,7 +362,7 @@ void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World&
     std::vector<int> cand;
     for (size_t n = 0; n < nodes.size(); ++n) {
       const auto& N = nodes[n];
-      if (N.signal_group >= 0 || N.edges.size() < 3) continue;
+      if (!near_node[n] || N.signal_group >= 0 || N.edges.size() < 3) continue;
       int major = 0;
       for (int ei : N.edges) major += edges[static_cast<size_t>(ei)].width >= 7.5f ? 1 : 0;
       if (major >= 2) cand.push_back(static_cast<int>(n));
@@ -391,7 +405,7 @@ void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World&
   std::vector<bool> internal(edges.size(), false);
   for (size_t i = 0; i < edges.size(); ++i) {
     const Traffic::Edge& e = edges[i];
-    if (e.a == e.b || e.pts.size() < 2) continue;
+    if (!near_edge[i] || e.a == e.b || e.pts.size() < 2) continue;
     const int ga = nodes[static_cast<size_t>(e.a)].signal_group, gb = nodes[static_cast<size_t>(e.b)].signal_group;
     if (ga >= 0 && ga == gb) {
       internal[i] = true;  // inside one junction area: no crossing, no lines
@@ -612,7 +626,7 @@ void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World&
   // --- longitudinal lines ---
   for (size_t i = 0; i < edges.size(); ++i) {
     const Traffic::Edge& e = edges[i];
-    if (internal[i] || e.width < 5.5f || e.pts.size() < 2 || e.length < 12.0) continue;  // no centre line on narrow streets
+    if (!near_edge[i] || internal[i] || e.width < 5.5f || e.pts.size() < 2 || e.length < 12.0) continue;  // no centre line on narrow streets
     const double u0 = trim[i][0], u1 = e.length - trim[i][1];
     if (u1 - u0 < 4.0) continue;
     // Roads PLATEAU already covers (surveyed lines) are left to the street detail.
@@ -661,7 +675,7 @@ void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World&
     const Color kLightPole{164, 166, 164, 255}, kConcrete{150, 150, 145, 255}, kWire{20, 20, 20, 255}, kLampBody{200, 200, 196, 255};
     for (size_t i = 0; i < edges.size(); ++i) {
       const Traffic::Edge& e = edges[i];
-      if (internal[i] || e.pts.size() < 2 || e.length < 15.0 || e.width < 3.0f) continue;
+      if (!near_edge[i] || internal[i] || e.pts.size() < 2 || e.length < 15.0 || e.width < 3.0f) continue;
       if (e.width >= 5.5f) {
         // Road lighting: 8 m poles about every 30 m, alternating sides (staggered) on wide roads.
         const bool both = e.width >= 12.0f;

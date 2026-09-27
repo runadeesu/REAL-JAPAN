@@ -99,7 +99,7 @@ void Traffic::place(const World& world) {
     double acc = 0;
     for (size_t k = 0; k < e.geo.size(); ++k) {
       rj::geo::Vec3d q = world.toLocal(e.geo[k]);
-      if (auto h = world.terrainHeight(q.x, q.y)) q.z = *h;
+      if (auto h = world.roadHeight(q.x, q.y)) q.z = *h;
       if (!e.pts.empty()) acc += std::hypot(q.x - e.pts.back().x, q.y - e.pts.back().y);
       e.pts.push_back(q);
       e.cum.push_back(acc);
@@ -327,6 +327,18 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
         dv = v.v - o.v;
       }
     }
+    if (obstacle_on_) {  // the player's car ahead in this lane
+      const double hx = std::sin(v.yaw), hy = std::cos(v.yaw);
+      const double rx = obstacle_.x - v.pos.x, ry = obstacle_.y - v.pos.y;
+      const double along = rx * hx + ry * hy, lat = std::fabs(rx * hy - ry * hx);
+      if (along > 0 && along < 45.0 && lat < 2.3) {
+        const double g = along - len * 0.5 - 2.4;
+        if (g < gap) {
+          gap = std::max(0.1, g);
+          dv = v.v;
+        }
+      }
+    }
     const double remain = e.length - v.s;
     // Look into the next edge for leaders near its start.
     if (remain < 30.0 && v.next_edge >= 0) {
@@ -392,6 +404,7 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
     v.braking = v.acc < -0.8 || (v.v < 0.3 && v.acc < 0.05);
     v.v = std::max(0.0, v.v + v.acc * dt);
     v.s += v.v * dt;
+    v.wheel_dist = static_cast<float>(std::fmod(v.wheel_dist + v.v * dt, 1000.0));
     while (true) {
       const Edge& e = edges_[static_cast<size_t>(v.edge)];
       if (v.s <= e.length) break;
@@ -407,10 +420,53 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
     samplePose(e, v.dir, v.lane, v.s, p, hd);
     // smooth the heading through polyline corners / junctions
     const double dy = wrapAngle(hd - v.yaw);
-    v.yaw = static_cast<float>(wrapAngle(v.yaw + dy * std::min(1.0, dt * 6.0)));
-    if (auto h = world.terrainHeight(p.x, p.y)) p.z = *h;
+    const double dyaw = dy * std::min(1.0, dt * 6.0);
+    v.yaw = static_cast<float>(wrapAngle(v.yaw + dyaw));
+    // front wheels follow the turn (kinematic steering angle from the yaw rate)
+    if (dt > 1e-4) {
+      const double want = std::clamp(std::atan(2.7 * dyaw / dt / std::max(v.v, 1.5)), -0.55, 0.55);
+      v.steer = static_cast<float>(v.steer + (want - v.steer) * std::min(1.0, dt * 5.0));
+    }
+    if (auto h = world.roadHeight(p.x, p.y)) p.z = *h;
     v.pos = p;
   }
+}
+
+bool Traffic::take(int id, Vehicle& out) {
+  for (auto it = veh_.begin(); it != veh_.end(); ++it)
+    if (it->id == id) {
+      out = *it;
+      veh_.erase(it);
+      return true;
+    }
+  return false;
+}
+
+bool Traffic::nearestLane(const rj::geo::Vec3d& p, double yaw_hint, rj::geo::Vec3d& out, double& heading) const {
+  double best = 1e30, best_u = 0;
+  int best_e = -1;
+  for (size_t ei = 0; ei < edges_.size(); ++ei) {
+    const Edge& e = edges_[ei];
+    for (size_t k = 1; k < e.pts.size(); ++k) {
+      const auto& A = e.pts[k - 1];
+      const auto& B = e.pts[k];
+      const double vx = B.x - A.x, vy = B.y - A.y, l2 = vx * vx + vy * vy;
+      const double t = l2 > 0 ? std::clamp(((p.x - A.x) * vx + (p.y - A.y) * vy) / l2, 0.0, 1.0) : 0.0;
+      const double d = std::hypot(p.x - (A.x + t * vx), p.y - (A.y + t * vy));
+      if (d < best) {
+        best = d;
+        best_e = static_cast<int>(ei);
+        best_u = e.cum[k - 1] + t * std::sqrt(l2);
+      }
+    }
+  }
+  if (best_e < 0) return false;
+  const Edge& e = edges_[static_cast<size_t>(best_e)];
+  double h0;
+  samplePose(e, 0, 0, best_u, out, h0);
+  const int dir = std::cos(h0 - yaw_hint) >= 0 ? 0 : 1;
+  samplePose(e, dir, 0, dir == 0 ? best_u : e.length - best_u, out, heading);
+  return true;
 }
 
 }  // namespace rjc

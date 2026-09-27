@@ -42,7 +42,7 @@ int App::run() {
     drawToast(dt);
     EndDrawing();
     ++frame_;
-    const bool walking = player_.auto_forward_s > 0.0f || !walk_legs_.empty();  // scripted walk finishes first
+    const bool walking = scriptBusy();  // scripted walk / drive / ride finishes first
     if (shot_frames_ >= 0 && !walking && --shot_frames_ < 0) {
       Image img = LoadImageFromScreen();
       ExportImage(img, opt_.screenshot.c_str());
@@ -64,7 +64,9 @@ bool App::boot() {
     fatal_ = "Missing language files in " + pathToUtf8(data / "lang");
     return false;
   }
-  slice_dir_ = data / "world" / "shibuya";
+  if (!opt_.world.empty()) settings_.world = opt_.world == "shibuya" ? "shibuya" : "island";
+  slice_dir_ = data / "world" / settings_.world;
+  if (!std::filesystem::exists(slice_dir_ / "client.txt")) slice_dir_ = data / "world" / "shibuya";  // island not cooked
   std::string err;
   if (!world_.loadMeta(slice_dir_, err)) {
     fatal_ = "World data error: " + err;
@@ -74,6 +76,9 @@ bool App::boot() {
   {
     std::string terr;
     if (!traffic_.load(slice_dir_ / "roads.rjroad", terr)) TraceLog(LOG_WARNING, "RJ: traffic disabled: %s", terr.c_str());
+    std::string rerr;
+    if (std::filesystem::exists(slice_dir_ / "rail.txt") && !trains_.load(slice_dir_ / "rail.txt", rerr))
+      TraceLog(LOG_WARNING, "RJ: trains disabled: %s", rerr.c_str());
   }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
@@ -282,10 +287,15 @@ void App::applyLaunchOverrides() {
 
 void App::placeRoads() {
   signals_.rebuild(world_);
+  if (trains_.loaded()) trains_.place(world_);
+  // Large worlds (the island) stream: markings and the walk network cover the area around the player.
+  const bool regional = world_.knownCount() > 8;
+  const rj::geo::Vec3d c = in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0};
+  roads_center_ = c;
   if (traffic_.loaded()) {
     traffic_.place(world_);
     traffic_.assignSignalGroups(signals_);
-    markings_.build(traffic_, signals_, world_);
+    markings_.build(traffic_, signals_, world_, {c.x, c.y}, regional ? static_cast<double>(settings_.view_distance_m) : 0.0);
     traffic_placed_ = true;
     peds_.buildNav(world_, &traffic_, &markings_);
   } else {
@@ -316,8 +326,27 @@ void App::update(float dt) {
   signals_.update(GetTime());
   if (in_session_ && screen_ != Screen::Loading && traffic_.loaded()) {
     if (!traffic_placed_ && world_.residentCount() > 0) placeRoads();
-    if (traffic_placed_ && screen_ != Screen::Pause && screen_ != Screen::Settings)
+    if (traffic_placed_ && drive_spawn_pending_) {
+      drive_spawn_pending_ = false;
+      Vehicle v;
+      v.type = VehicleType::Sedan;
+      v.color[0] = 0.55f, v.color[1] = 0.05f, v.color[2] = 0.06f;
+      double hd = player_.yaw;
+      v.pos = player_.pos;
+      traffic_.nearestLane(player_.pos, player_.yaw, v.pos, hd);
+      v.yaw = static_cast<float>(hd);
+      if (auto h = world_.roadHeight(v.pos.x, v.pos.y)) v.pos.z = *h;
+      driving_.enter(v);
+      player_.pos = v.pos;
+    }
+    // Streamed worlds: rebuild markings / walk network once the player has moved on and cells settled.
+    if (traffic_placed_ && world_.knownCount() > 8 && world_.pendingJobs() == 0 &&
+        std::hypot(player_.pos.x - roads_center_.x, player_.pos.y - roads_center_.y) > 600.0)
+      placeRoads();
+    if (traffic_placed_ && screen_ != Screen::Pause && screen_ != Screen::Settings) {
+      traffic_.setObstacle(driving_.hasCar(), driving_.car().pos);
       traffic_.update(dt, world_, signals_, player_.pos, clock_.jst().hour);
+    }
     if (frame_ % 30 == 0 && std::getenv("RJ_DEBUG")) {
       double dmin = 1e9;
       const Vehicle* nv = nullptr;
@@ -337,7 +366,9 @@ void App::update(float dt) {
   }
 
   if (screen_ == Screen::Loading) {
-    if (world_.residentCount() >= world_.knownCount() || (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > 600)) {
+    // Small slices load completely; streamed worlds start once the cells around the spawn are in.
+    if (world_.residentCount() >= world_.knownCount() ||
+        (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > (world_.knownCount() > 8 ? 20 : 600))) {
       player_.snapToGround(world_);
       placeRoads();
       screen_ = Screen::Title;
@@ -384,6 +415,42 @@ void App::update(float dt) {
             float yd = 0, sec = 0;
             if (std::sscanf(opt_.walk.substr(p0, p1 - p0).c_str(), "%f:%f", &yd, &sec) == 2) walk_legs_.push_back({yd, sec});
             p0 = p1 + 1;
+          }
+          if (st == "drive") {
+            // test aid: a sedan on the nearest lane (placed once the road graph is), heading near --yaw;
+            // --drive "throttle:steer:seconds,..."
+            drive_spawn_pending_ = true;
+            drive_look_pitch_ = -0.08f;
+            drive_first_person_ = std::getenv("RJ_DRIVE_FP") != nullptr;  // test aid: driver's seat view
+            if (const char* lk = std::getenv("RJ_DRIVE_LOOK")) drive_look_yaw_ = static_cast<float>(std::atof(lk)) * DEG2RAD;
+            for (size_t p0 = 0; p0 < opt_.drive.size();) {
+              size_t p1 = opt_.drive.find(',', p0);
+              if (p1 == std::string::npos) p1 = opt_.drive.size();
+              DriveLeg L{};
+              if (std::sscanf(opt_.drive.substr(p0, p1 - p0).c_str(), "%f:%f:%f", &L.throttle, &L.steer, &L.seconds) == 3)
+                drive_legs_.push_back(L);
+              p0 = p1 + 1;
+            }
+          }
+          if (st == "ride" && trains_.loaded() && opt_.station >= 0 &&
+              opt_.station < static_cast<int>(trains_.stations().size())) {
+            // test aid: stand on the platform beside the next train to stop here, board it, ride
+            const Station& sn = trains_.stations()[static_cast<size_t>(opt_.station)];
+            ride_test_t_ = 0.0f;
+            const double hd = sn.heading * DEG2RAD;
+            const double sx = std::cos(hd), sy = -std::sin(hd);
+            const auto kind = trains_.lines()[static_cast<size_t>(sn.line)].kind;
+            double side = 1.0;  // the platform of the first train that stops here (dir +1: left of the heading)
+            for (const auto& t : trains_.trains())
+              if (t.line == sn.line) {
+                side = t.dir > 0 ? -1.0 : 1.0;
+                if (t.at_station == opt_.station) break;
+              }
+            const double off = Trains::platformOffset(kind) - 1.4;
+            player_.pos = {sn.pos.x + sx * side * off, sn.pos.y + sy * side * off, sn.pos.z + 0.05};
+            player_.yaw = static_cast<float>(hd + (side > 0 ? -PI / 2 : PI / 2));
+            player_.vel_z = 0;
+            player_.fly = false;
           }
           if (st.rfind("phone", 0) == 0) {
             screen_ = Screen::Phone;
@@ -439,7 +506,50 @@ void App::update(float dt) {
             nearby = in.get();
           }
       }
-      player_.update(dt, world_, settings_, screen_ == Screen::Game, insideInterior(), nearby);
+      if (trains_.loaded()) trains_.update(std::min(dt, 0.1f));
+      if (ride_train_ >= 0) {
+        // Riding: the view turns with the car; look around with the mouse.
+        if (screen_ == Screen::Game) {
+          const Vector2 md = GetMouseDelta();
+          const float sens = 0.0022f * settings_.mouse_sensitivity;
+          ride_look_yaw_ = std::clamp(ride_look_yaw_ + md.x * sens, -2.6f, 2.6f);
+          ride_look_pitch_ = std::clamp(ride_look_pitch_ + (settings_.invert_y ? md.y : -md.y) * sens, -1.2f, 1.2f);
+        }
+        if (const Train* t = trains_.train(ride_train_)) {
+          rj::geo::Vec3d p;
+          float yaw, pitch;
+          trains_.carPose(*t, ride_car_, p, yaw, pitch);
+          player_.pos = {p.x, p.y, p.z + 1.2};
+          player_.yaw = yaw + ride_look_yaw_;
+        }
+      } else if (driving_.active()) {
+        // Driving: WASD / arrows, Space handbrake, V toggles chase / driver's seat view.
+        if (screen_ == Screen::Game) {
+          const Vector2 md = GetMouseDelta();
+          const float sens = 0.0022f * settings_.mouse_sensitivity;
+          drive_look_yaw_ = std::clamp(drive_look_yaw_ + md.x * sens, -2.8f, 2.8f);
+          drive_look_pitch_ = std::clamp(drive_look_pitch_ + (settings_.invert_y ? md.y : -md.y) * sens, -0.9f, 0.9f);
+          if (std::fabs(md.x) < 0.5f && std::fabs(driving_.car().v) > 3.0 && !std::getenv("RJ_DRIVE_LOOK"))  // camera settles behind
+            drive_look_yaw_ -= drive_look_yaw_ * std::min(1.0f, dt * 1.5f);
+          if (IsKeyPressed(KEY_V)) drive_first_person_ = !drive_first_person_;
+        }
+        DriveInput din = screen_ == Screen::Game ? readDriveInput() : DriveInput{};
+        if (!drive_legs_.empty()) {  // test aid
+          auto& L = drive_legs_.front();
+          din.throttle = std::max(0.0f, L.throttle);
+          din.brake = std::max(0.0f, -L.throttle);
+          din.steer = L.steer;
+          if ((L.seconds -= std::min(dt, 0.05f)) <= 0) drive_legs_.erase(drive_legs_.begin());  // same step as the car
+        }
+        driving_.update(dt, world_, traffic_, din, weather_.wetness());
+        if (frame_ % 15 == 0 && (!drive_legs_.empty() || std::getenv("RJ_DEBUG")))
+          TraceLog(LOG_INFO, "RJ: drive pos %.1f %.1f z %.2f v %.1f yaw %.0f pitch %.1f", driving_.car().pos.x, driving_.car().pos.y,
+                   driving_.car().pos.z, driving_.car().v, driving_.car().yaw * RAD2DEG, driving_.car().pitch * RAD2DEG);
+        player_.pos = driving_.car().pos;
+        player_.yaw = driving_.car().yaw + drive_look_yaw_;
+      } else {
+        player_.update(dt, world_, settings_, screen_ == Screen::Game, insideInterior(), nearby);
+      }
       if (!inside_id_.empty() && player_.left_interior) {
         // Walked up the stairs and out onto the pavement.
         inside_id_.clear();
@@ -467,6 +577,8 @@ void App::update(float dt) {
       }
       if (screen_ == Screen::Game) {
         updateInteriorAction();
+        updateTransportActions();
+        updateDriveActions();
         if (inside_id_.empty()) {
           hover_ = world_.pick(player_.eyeEnu(), player_.forwardEnu(), 300.0);
           hover_walker_ =
@@ -549,6 +661,7 @@ void App::update(float dt) {
 
 void App::updateInteriorAction() {
   prompt_.clear();
+  if (driving_.active()) return;
   const bool press = IsKeyPressed(KEY_E);
   if (const Interior* in = insideInterior()) {
     for (const auto& e : in->entrances()) {
@@ -579,6 +692,232 @@ void App::updateInteriorAction() {
         return;
       }
     }
+}
+
+std::string App::lineName(int line) const {
+  if (line < 0 || line >= static_cast<int>(trains_.lines().size())) return "";
+  switch (trains_.lines()[static_cast<size_t>(line)].kind) {
+    case LineKind::Loop: return tr("rail.line.loop");
+    case LineKind::Branch: return tr("rail.line.branch");
+    default: return tr("rail.line.shinkansen");
+  }
+}
+
+Camera3D App::rideCamera() const {
+  Camera3D c{};
+  const Train* t = trains_.train(ride_train_);
+  if (!t) return player_.camera(settings_.fov);
+  rj::geo::Vec3d p;
+  float yaw, pitch;
+  trains_.carPose(*t, ride_car_, p, yaw, pitch);
+  // seated: Shinkansen window seat (left, facing forward), commuter long bench seat (left, facing across)
+  const double fx = std::sin(yaw), fy = std::cos(yaw), rx = fy, ry = -fx;
+  double sx, sy, sz;
+  if (trains_.lines()[static_cast<size_t>(t->line)].kind == LineKind::Shinkansen) {
+    const float row = kShinkansenSeatRow0 + std::round(-kShinkansenSeatRow0 / kShinkansenSeatPitch) * kShinkansenSeatPitch;
+    sx = -1.28;
+    sy = row - 0.12;
+    sz = kShinkansenFloorZ + 1.12;
+  } else {
+    sx = -1.0;
+    sy = 0.0;
+    sz = kCommuterFloorZ + 1.1;
+  }
+  const rj::geo::Vec3d eye{p.x + rx * sx + fx * sy, p.y + ry * sx + fy * sy, p.z + sz + std::tan(pitch) * sy};
+  const float y = yaw + ride_look_yaw_, pt = pitch + ride_look_pitch_;
+  const rj::geo::Vec3d f{std::sin(y) * std::cos(pt), std::cos(y) * std::cos(pt), std::sin(pt)};
+  c.position = enuToRl(eye);
+  c.target = enuToRl({eye.x + f.x, eye.y + f.y, eye.z + f.z});
+  c.up = {0, 1, 0};
+  c.fovy = settings_.fov;
+  c.projection = CAMERA_PERSPECTIVE;
+  return c;
+}
+
+bool App::autoKeyE() const {
+  if (ride_test_t_ < 0.0f || ride_test_done_) return false;
+  if (ride_train_ < 0) return frame_ % 20 == 0;  // board
+  return opt_.alight && ride_test_t_ >= opt_.ride && frame_ % 20 == 0;  // alight at the next stop
+}
+
+bool App::scriptBusy() const {
+  if (player_.auto_forward_s > 0.0f || !walk_legs_.empty() || !drive_legs_.empty() || drive_spawn_pending_) return true;
+  return ride_test_t_ >= 0.0f && !ride_test_done_;
+}
+
+void App::updateDriveActions() {
+  if (!inside_id_.empty() || ride_train_ >= 0) return;
+  const bool e = IsKeyPressed(KEY_E);
+  if (driving_.active()) {
+    const Vehicle& c = driving_.car();
+    prompt_ = std::fabs(c.v) < 2.0 ? tr("drive.stopped") : std::string();
+    if (e && std::fabs(c.v) < 2.0) {
+      player_.pos = driving_.exitPosition();
+      player_.snapToGround(world_);
+      player_.vel_z = 0;
+      player_.fly = false;
+      player_.yaw = c.yaw;
+      driving_.leave();
+      toast(tr("drive.left"));
+    }
+    return;
+  }
+  if (!prompt_.empty() || player_.fly) return;  // another action has the E key
+  auto enter = [&]() {
+    drive_look_yaw_ = 0.0f;
+    drive_look_pitch_ = -0.08f;
+    toast(tr("drive.entered"));
+  };
+  if (driving_.hasCar()) {
+    const Vehicle& c = driving_.car();
+    const double d = std::hypot(c.pos.x - player_.pos.x, c.pos.y - player_.pos.y);
+    if (d > 400.0) {
+      driving_.drop();  // left far behind: the car is towed away
+    } else if (d < 3.6 && std::fabs(c.pos.z - player_.pos.z) < 2.0) {
+      prompt_ = tr("drive.enter_own");
+      if (e) {
+        driving_.enterParked();
+        enter();
+      }
+      return;
+    }
+  }
+  // A car stopped (or crawling) next to the player: signals, queues, junctions.
+  const Vehicle* best = nullptr;
+  double bd = 3.8;
+  for (const auto& v : traffic_.vehicles()) {
+    if (v.v > 4.0 || std::fabs(v.pos.z - player_.pos.z) > 2.0) continue;
+    const double d = std::hypot(v.pos.x - player_.pos.x, v.pos.y - player_.pos.y) - Traffic::lengthOf(v.type) * 0.3;
+    if (d < bd) {
+      bd = d;
+      best = &v;
+    }
+  }
+  if (!best) return;
+  prompt_ = tr(std::string("drive.enter.") + std::to_string(static_cast<int>(best->type)));
+  if (e) {
+    Vehicle v;
+    if (traffic_.take(best->id, v)) {
+      driving_.enter(v);
+      enter();
+    }
+  }
+}
+
+void App::updateTransportActions() {
+  if (!trains_.loaded() || !inside_id_.empty() || driving_.active()) return;
+  const bool e = IsKeyPressed(KEY_E) || autoKeyE(), x = IsKeyPressed(KEY_X);
+  if (ride_test_t_ >= 0.0f && !ride_test_done_) {  // test aid bookkeeping
+    if (ride_train_ >= 0) {
+      ride_test_t_ += std::min(GetFrameTime(), 0.1f);
+      if (!opt_.alight && ride_test_t_ >= opt_.ride) ride_test_done_ = true;
+    } else if (ride_test_t_ > 0.0f) {
+      ride_test_t_ += std::min(GetFrameTime(), 0.1f);  // alighted: settle for a moment
+      if (ride_test_t_ > opt_.ride + 1.0f) ride_test_done_ = true;
+    }
+  }
+  const auto& stations = trains_.stations();
+  if (ride_train_ >= 0) {
+    const Train* t = trains_.train(ride_train_);
+    if (!t) {
+      ride_train_ = -1;
+      return;
+    }
+    if (t->at_station >= 0) {
+      const Station& st = stations[static_cast<size_t>(t->at_station)];
+      prompt_ = i18n_.f("rail.alight", {{"station", st.name}});
+      if (e) {
+        rj::geo::Vec3d p;
+        float yaw, pitch;
+        trains_.carPose(*t, ride_car_, p, yaw, pitch);
+        const auto kind = trains_.lines()[static_cast<size_t>(t->line)].kind;
+        const double side = Trains::platformOffset(kind) - Trains::trackOffset(kind);  // platform beyond the left side
+        player_.pos = {p.x - std::cos(yaw) * side, p.y + std::sin(yaw) * side, st.pos.z + 0.05};
+        player_.vel_z = 0;
+        player_.fly = false;
+        player_.yaw = yaw;
+        ride_train_ = -1;
+        toast(i18n_.f("rail.alighted", {{"station", st.name}}));
+      }
+    } else if (t->next_stop >= 0) {
+      prompt_ = i18n_.f("rail.next", {{"line", lineName(t->line)}, {"station", stations[static_cast<size_t>(t->next_stop)].name},
+                                      {"kmh", std::to_string(static_cast<int>(t->v * 3.6))}});
+    } else {
+      prompt_ = i18n_.f("rail.running", {{"line", lineName(t->line)}, {"kmh", std::to_string(static_cast<int>(t->v * 3.6))}});
+    }
+    return;
+  }
+  const int si = trains_.stationNear(player_.pos, 190.0);
+  if (si < 0) return;
+  const Station& st = stations[static_cast<size_t>(si)];
+  const auto kind = trains_.lines()[static_cast<size_t>(st.line)].kind;
+  const double hd = st.heading * DEG2RAD;
+  const double sx = std::cos(hd), sy = -std::sin(hd);  // platform side axis (right of the heading)
+  const bool on_platform = std::fabs(player_.pos.z - st.pos.z) < 2.2;
+  if (on_platform) {
+    // the stopped train on this platform's side
+    const double side = (player_.pos.x - st.pos.x) * sx + (player_.pos.y - st.pos.y) * sy;
+    int tid = -1;
+    for (const auto& t : trains_.trains()) {
+      if (t.at_station != si || t.dwell < 3.0) continue;
+      rj::geo::Vec3d p;
+      float yaw, pitch;
+      trains_.carPose(t, t.cars / 2, p, yaw, pitch);
+      const double ts = (p.x - st.pos.x) * sx + (p.y - st.pos.y) * sy;
+      if (ts * side > 0) tid = t.id;
+    }
+    if (tid >= 0) {
+      const Train* t = trains_.train(tid);
+      std::string dest = trains_.destination(*t);
+      if (dest == "loop+") dest = tr("rail.dest.outer");
+      else if (dest == "loop-") dest = tr("rail.dest.inner");
+      else if (dest == "mainland") dest = tr("rail.dest.mainland");
+      prompt_ = i18n_.f("rail.board", {{"line", lineName(t->line)}, {"dest", dest}});
+      if (e) {
+        const int64_t fare = kind == LineKind::Shinkansen ? 2980 : 170;
+        if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare,
+                                          clock_.unixUtc(), lineName(t->line)) != rj::econ::TxResult::Ok) {
+          toast(tr("rail.no_money"));
+        } else {
+          // the car nearest to the player
+          double best = 1e30;
+          for (int k = 0; k < t->cars; ++k) {
+            rj::geo::Vec3d p;
+            float yaw, pitch;
+            trains_.carPose(*t, k, p, yaw, pitch);
+            const double d = std::hypot(p.x - player_.pos.x, p.y - player_.pos.y);
+            if (d < best) {
+              best = d;
+              ride_car_ = k;
+            }
+          }
+          ride_train_ = tid;
+          ride_look_yaw_ = kind == LineKind::Shinkansen ? -1.0f : 1.5708f;  // out of the window / across the car
+          ride_look_pitch_ = -0.05f;
+          toast(i18n_.f("rail.boarded", {{"line", lineName(t->line)}, {"fare", std::to_string(fare)}}));
+        }
+      }
+    } else {
+      prompt_ = tr("rail.wait");
+    }
+    if (x) {  // out through the gates, onto the street in front of the station
+      player_.pos = {st.pos.x - sx * 30.0, st.pos.y - sy * 30.0, st.pos.z};
+      player_.snapToGround(world_);
+      toast(i18n_.f("rail.exited", {{"station", st.name}}));
+    }
+    return;
+  }
+  if (std::hypot(player_.pos.x - st.pos.x, player_.pos.y - st.pos.y) < 55.0) {
+    prompt_ = i18n_.f("rail.enter", {{"station", st.name}});
+    if (e) {
+      const double side = ((player_.pos.x - st.pos.x) * sx + (player_.pos.y - st.pos.y) * sy) >= 0 ? 1.0 : -1.0;
+      const double off = Trains::platformOffset(kind);
+      player_.pos = {st.pos.x + sx * off * side, st.pos.y + sy * off * side, st.pos.z + 0.05};
+      player_.vel_z = 0;
+      player_.fly = false;
+      toast(i18n_.f("rail.entered", {{"station", st.name}}));
+    }
+  }
 }
 
 void App::runSelfTest() {
@@ -709,25 +1048,58 @@ void App::drawWorldView(const Camera3D& cam) {
     facades_.forEachMesh([&](const Mesh& m, int lod) {
       if (lod == 0) casters.push_back({&m, MatrixIdentity()});
     });
-    renderer_.vehicleCasters(traffic_, cam, casters);
+    renderer_.vehicleCasters(traffic_, cam, casters, driving_.hasCar() ? &driving_.car() : nullptr);
     renderer_.renderShadowMaps(cam, world_, lighting_, casters);
   }
+  // Driver's seat: rear view for the mirrors (every other frame)
+  const bool cockpit_view = driving_.active() && drive_first_person_ && screen_ != Screen::Title && !deep;
+  if (!cockpit_view) {
+    renderer_.invalidateMirror();
+  } else if (frame_ % 2 == 0 || shot_frames_ >= 0) {
+    Renderer::setClipPlanes(0.2f, 900.0f);
+    const Camera3D rear = driving_.rearCamera();
+    renderer_.setLights(collectLights(rear));
+    renderer_.renderMirror(rear, lighting_, render_time_, [&]() {
+      renderer_.drawWorld(rear, world_, settings_.photo_textures, !world_.meta().fictional);
+      renderer_.drawMarkings(markings_);
+      if (world_.meta().fictional) {
+        const auto g = world_.toGeodetic(rlToEnu(rear.position));
+        renderer_.drawOcean(rear, static_cast<float>(world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z));
+      }
+      renderer_.drawVehicles(traffic_, rear, lighting_);
+      renderer_.drawTrains(trains_, rear, -1, 0);
+      renderer_.drawPedestrians(peds_, lighting_.rain);
+    });
+  }
   // Indoors walls can be 0.3 m from the eye: pull the near plane in so it never cuts through them.
-  Renderer::setClipPlanes(in ? 0.08f : 0.2f, static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
+  Renderer::setClipPlanes(in ? 0.08f : (cockpit_view ? 0.05f : 0.2f), static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
   renderer_.beginScene(ro, lighting_, cam, render_time_);
   ClearBackground(deep ? Color{58, 58, 60, 255} : BLACK);
   const float aspect = static_cast<float>(GetScreenWidth()) / static_cast<float>(std::max(1, GetScreenHeight()));
   if (!deep) renderer_.drawSky(cam, lighting_, aspect);
   renderer_.setLights(collectLights(cam));
   BeginMode3D(cam);
-  renderer_.drawWorld(cam, world_, settings_.photo_textures, !in);
+  renderer_.drawWorld(cam, world_, settings_.photo_textures, !in && !world_.meta().fictional);
   if (!deep) renderer_.drawMarkings(markings_);
+  if (world_.meta().fictional && !deep) {
+    // Sea level (height 0) under the camera, in the floating-origin frame.
+    const auto g = world_.toGeodetic(rlToEnu(cam.position));
+    renderer_.drawOcean(cam, static_cast<float>(world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z));
+  }
   static const bool no_facades = std::getenv("RJ_NO_FACADES") != nullptr;      // debug isolation
   static const bool no_int_out = std::getenv("RJ_NO_INTERIOR_OUT") != nullptr;
   if (!deep) {
     if (!no_facades) renderer_.drawFacades(facades_);
     renderer_.drawSignals(signals_, cam);
-    renderer_.drawVehicles(traffic_, cam, lighting_);
+    Renderer::CockpitView cv;
+    const bool cockpit = driving_.active() && drive_first_person_ && screen_ != Screen::Title;
+    if (cockpit) {
+      cv.kmh = driving_.speedKmh();
+      cv.rpm = driving_.rpm();
+      cv.steer = driving_.steerAngle();
+    }
+    renderer_.drawVehicles(traffic_, cam, lighting_, driving_.hasCar() ? &driving_.car() : nullptr, cockpit ? &cv : nullptr);
+    renderer_.drawTrains(trains_, cam, ride_train_, ride_car_);
   }
   if (in) {
     renderer_.drawInterior(*in);
@@ -736,7 +1108,8 @@ void App::drawWorldView(const Camera3D& cam) {
     for (const auto& [id, interior] : world_.interiors()) renderer_.drawInterior(*interior);
   }
   if (in_session_ && screen_ != Screen::Title && !deep) renderer_.drawPedestrians(peds_, lighting_.rain);
-  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title) renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
+  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active())
+    renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
   renderer_.drawRain(cam, lighting_, render_time_);
   EndMode3D();
   renderer_.endScene(cam, lighting_, render_time_);
@@ -773,7 +1146,9 @@ void App::draw() {
     if (auto hit = in->raycast(player_.eyeEnu(), back, len))
       third_dist = static_cast<float>(std::max(0.3, (*hit - 0.25) / len * 4.5));
   }
-  drawWorldView(game_view ? player_.camera(settings_.fov, third_dist) : titleCamera());
+  drawWorldView(game_view ? (ride_train_ >= 0      ? rideCamera()
+                                  : driving_.active() ? driving_.camera(settings_.fov, drive_first_person_, drive_look_yaw_, drive_look_pitch_)
+                                                      : player_.camera(settings_.fov, third_dist)) : titleCamera());
 
   switch (screen_) {
     case Screen::Title: drawTitle(); break;
@@ -1050,6 +1425,17 @@ void App::drawHud() {
   const auto g = world_.toGeodetic(player_.pos);
   const auto t = jst();
   const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
+  if (driving_.active() && screen_ == Screen::Game) {  // speedometer
+    const double v = driving_.car().v;
+    const std::string kmh = std::to_string(static_cast<int>(std::lround(std::fabs(v) * 3.6)));
+    ui_.panel({30, 900, 400, 130}, Color{0, 0, 0, 140});
+    ui_.text(kmh, 54, 912, 72, theme::kText);
+    ui_.text("km/h", 64 + ui_.measure(kmh, 72), 954, 28, theme::kMuted);
+    const int gear = driving_.gear();
+    ui_.textRight(gear < 0 ? "R" : "D" + std::to_string(gear), 406, 912, 34, gear < 0 ? theme::kWarn : theme::kMuted);
+    ui_.textRight(std::to_string(static_cast<int>(driving_.rpm() / 100.0f) * 100) + " rpm", 406, 954, 22, theme::kMuted);
+    ui_.text(tr("drive.help"), 54, 992, 20, theme::kMuted);
+  }
   if (!settings_.dev_overlay) {
     // Immersive view: no panels. A faint dot, context prompts and the first-minute controls hint only.
     if (screen_ == Screen::Game && player_.camera_mode == 0) DrawCircle(cx, cy, 1.6f * ui_.scale(), Color{255, 255, 255, 150});
@@ -1138,15 +1524,22 @@ void App::drawBuildingInfo() {
   row(tr("info.storeys"), storeys_known ? i18n_.f("info.storeys_value", {{"a", std::to_string(b.storeys_above)},
                                                                         {"b", std::to_string(below)}})
                                         : tr("info.unknown"));
-  row(tr("info.lod"), tr(b.lod >= 2 ? "info.lod2" : "info.lod1"));
+  const bool fictional = b.interior_status == 3;  // INTERIOR_FICTIONAL: generated building on the invented island
+  if (!fictional) row(tr("info.lod"), tr(b.lod >= 2 ? "info.lod2" : "info.lod1"));
   yy += 6;
-  ui_.text(tr(b.geometry_status == 0 ? "verify.badge.verified_exterior" : "verify.badge.unverified"), x + 22, yy, 24,
-           b.geometry_status == 0 ? theme::kGood : theme::kWarn);
-  yy += 34;
-  yy += ui_.textWrapped(tr("verify.interior.unknown"), x + 22, yy, w - 44, 22, theme::kWarn);
-  yy += 4;
-  yy += ui_.textWrapped(tr("info.source") + "  " + tr("info.source_short." + std::to_string(b.source_index)), x + 22, yy,
-                        w - 44, 18, theme::kMuted);
+  if (fictional) {
+    ui_.text(tr("verify.badge.fictional"), x + 22, yy, 24, theme::kWarn);
+    yy += 34;
+    yy += ui_.textWrapped(tr("verify.interior.fictional"), x + 22, yy, w - 44, 22, theme::kMuted);
+  } else {
+    ui_.text(tr(b.geometry_status == 0 ? "verify.badge.verified_exterior" : "verify.badge.unverified"), x + 22, yy, 24,
+             b.geometry_status == 0 ? theme::kGood : theme::kWarn);
+    yy += 34;
+    yy += ui_.textWrapped(tr("verify.interior.unknown"), x + 22, yy, w - 44, 22, theme::kWarn);
+    yy += 4;
+    yy += ui_.textWrapped(tr("info.source") + "  " + tr("info.source_short." + std::to_string(b.source_index)), x + 22, yy,
+                          w - 44, 18, theme::kMuted);
+  }
   ui_.text(tr("info.id") + " " + b.id, x + 22, yy, 18, theme::kMuted);
 }
 

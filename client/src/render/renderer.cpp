@@ -208,6 +208,7 @@ bool Renderer::init() {
   leaf_tex_ = generateLeafTexture(512);
   vehicles_.build();
   humans_.build();
+  train_models_.build();
   lit_.locs[SHADER_LOC_MATRIX_VIEW] = GetShaderLocation(lit_, "matView");
   lit_.locs[SHADER_LOC_MATRIX_PROJECTION] = GetShaderLocation(lit_, "matProjection");
 
@@ -226,6 +227,7 @@ bool Renderer::init() {
     rlDisableFramebuffer();
   }
   plane_ = GenMeshPlane(12000.0f, 12000.0f, 1, 1);
+  ocean_ = GenMeshPlane(40000.0f, 40000.0f, 80, 80);
   body_ = GenMeshCylinder(0.25f, 1.35f, 12);
   legs_ = GenMeshCylinder(0.15f, 0.82f, 8);
   torso_ = GenMeshCylinder(0.21f, 0.64f, 10);
@@ -239,7 +241,8 @@ bool Renderer::init() {
 void Renderer::shutdown() {
   if (!ready_) return;
   releaseTargets();
-  for (Mesh* m : {&plane_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_}) UnloadMesh(*m);
+  freeTarget(mirror_);
+  for (Mesh* m : {&plane_, &ocean_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_}) UnloadMesh(*m);
   for (auto& s : shadow_)
     if (s.id) {
       rlUnloadFramebuffer(s.id);
@@ -249,6 +252,7 @@ void Renderer::shutdown() {
   if (leaf_tex_.id) UnloadTexture(leaf_tex_);
   vehicles_.unload();
   humans_.unload();
+  train_models_.unload();
   mat_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   mat_depth_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   for (Shader* s : {&lit_, &depth_, &sky_, &ssao_, &blur_, &bright_, &composite_, &ssr_}) UnloadShader(*s);
@@ -413,6 +417,50 @@ void Renderer::beginScene(const RenderOptions& o, const Lighting& L, const Camer
   bindGlobalTextures();
 }
 
+void Renderer::renderMirror(const Camera3D& rear, const Lighting& L, float time_s, const std::function<void()>& scene) {
+  constexpr int kW = 512, kH = 144;
+  if (!mirror_.id) {
+    mirror_ = LoadRenderTexture(kW, kH);
+    SetTextureFilter(mirror_.texture, TEXTURE_FILTER_BILINEAR);
+  }
+  frame_L_ = L;
+  BeginTextureMode(mirror_);
+  ClearBackground(BLACK);
+  applyFrameUniforms(rear, L, time_s);
+  bindGlobalTextures();
+  sky_res_override_ = {static_cast<float>(kW), static_cast<float>(kH)};
+  drawSky(rear, L, static_cast<float>(kW) / kH);
+  sky_res_override_ = {0, 0};
+  BeginMode3D(rear);
+  scene();
+  EndMode3D();
+  EndTextureMode();
+  mirror_ok_ = true;
+}
+
+void Renderer::drawMirrorGlass(const Vector3 c[4], float u0, float u1) {
+  // A mirror shows the rear view flipped left-right; render-target rows run bottom-up.
+  rlDrawRenderBatchActive();
+  rlDisableColorBlend();
+  rlColorMask(true, true, true, false);  // keep the scene's reflection mask (alpha) untouched
+  rlSetTexture(mirror_.texture.id);
+  rlBegin(RL_QUADS);
+  rlColor4ub(235, 235, 235, 255);
+  rlTexCoord2f(u1, 0.0f);
+  rlVertex3f(c[0].x, c[0].y, c[0].z);
+  rlTexCoord2f(u0, 0.0f);
+  rlVertex3f(c[1].x, c[1].y, c[1].z);
+  rlTexCoord2f(u0, 1.0f);
+  rlVertex3f(c[2].x, c[2].y, c[2].z);
+  rlTexCoord2f(u1, 1.0f);
+  rlVertex3f(c[3].x, c[3].y, c[3].z);
+  rlEnd();
+  rlSetTexture(0);
+  rlDrawRenderBatchActive();
+  rlColorMask(true, true, true, true);
+  rlEnableColorBlend();
+}
+
 void Renderer::setLights(const std::vector<PointLight>& lights) {
   const int n = static_cast<int>(std::min<size_t>(lights.size(), kMaxLights));
   setI(lit_, "numLights", n);
@@ -435,7 +483,8 @@ void Renderer::drawSky(const Camera3D& cam, const Lighting& L, float aspect) {
   const Matrix view = GetCameraMatrix(cam);
   const Matrix proj = MatrixPerspective(cam.fovy * DEG2RAD, aspect, 0.3, 4000.0);
   const Matrix inv = MatrixInvert(MatrixMultiply(view, proj));
-  const Vector2 res{static_cast<float>(post_active_ ? tw_ : GetRenderWidth()), static_cast<float>(post_active_ ? th_ : GetRenderHeight())};
+  Vector2 res{static_cast<float>(post_active_ ? tw_ : GetRenderWidth()), static_cast<float>(post_active_ ? th_ : GetRenderHeight())};
+  if (sky_res_override_.x > 0) res = sky_res_override_;
   set2(sky_, "resolution", res);
   SetShaderValueMatrix(sky_, GetShaderLocation(sky_, "invViewProj"), inv);
   set3(sky_, "camPos", cam.position);
@@ -519,10 +568,21 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, bool photo_tex
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     setI(lit_, "materialOverride", -1);
   }
-  // Vertex-coloured buildings (LOD1 / untextured LOD2).
+  // Procedural facades (fictional island): windows, glass, balconies, roofs, signs from style codes.
+  mode(3, 0);
+  for (const auto& [code, c] : world.cells())
+    for (size_t i = 0; i < c->gpu.chunks.size(); ++i) {
+      if (c->gpu.chunk_page[i] != kPageProcedural) continue;
+      DrawMesh(c->gpu.chunks[i], mat_, c->model);
+      ++draw_calls_;
+      triangles_ += c->gpu.chunks[i].triangleCount;
+    }
+  mode(0, 0);
+  // Vertex-coloured buildings (LOD1 / untextured LOD2, rooftop equipment).
   for (const auto& [code, c] : world.cells())
     for (size_t i = 0; i < c->gpu.chunks.size(); ++i) {
       const int page = c->gpu.chunk_page[i];
+      if (page == kPageProcedural) continue;
       if (page >= 0 && page < static_cast<int>(c->gpu.pages.size()) && c->gpu.pages[static_cast<size_t>(page)].id) continue;
       setI(lit_, "materialOverride", kMatWallPaint);
       DrawMesh(c->gpu.chunks[i], mat_, c->model);
@@ -623,6 +683,54 @@ void Renderer::drawMarkings(const RoadMarkings& rm) {
   rlEnableBackfaceCulling();
 }
 
+void Renderer::drawOcean(const Camera3D& cam, float sea_y) {
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", kMatWater);
+  const float gx = std::round(cam.position.x / 500.0f) * 500.0f, gz = std::round(cam.position.z / 500.0f) * 500.0f;
+  DrawMesh(ocean_, mat_, MatrixTranslate(gx, sea_y, gz));
+  ++draw_calls_;
+  setI(lit_, "materialOverride", -1);
+}
+
+void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_train, int ride_car) {
+  if (!trains.loaded()) return;
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", -1);
+  set3(lit_, "emissiveTint", Vector3{2.5f, 2.4f, 2.2f});
+  rlDisableBackfaceCulling();
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  for (const auto& t : trains.trains()) {
+    const bool shink = trains.lines()[static_cast<size_t>(t.line)].kind == LineKind::Shinkansen;
+    for (int k = 0; k < t.cars; ++k) {
+      rj::geo::Vec3d p;
+      float yaw, pitch;
+      trains.carPose(t, k, p, yaw, pitch);
+      if (std::hypot(p.x - c.x, p.y - c.y) > 1100.0) continue;
+      const bool end = k == 0 || k == t.cars - 1;
+      const bool reversed = k == t.cars - 1 && k > 0;  // the rear cab faces backwards
+      const TrainCarModel& m = train_models_.get(shink ? (end ? TrainCar::ShinkansenNose : TrainCar::ShinkansenMid)
+                                                       : (end ? TrainCar::CommuterCab : TrainCar::CommuterMid));
+      const float y = reversed ? yaw + PI : yaw;
+      const float pt = reversed ? -pitch : pitch;
+      const Vector3 rp = enuToRl(p);
+      const Matrix M = MatrixMultiply(MatrixMultiply(MatrixRotateX(pt), MatrixRotateY(-y)), MatrixTranslate(rp.x, rp.y, rp.z));
+      DrawMesh(m.shell, mat_, M);
+      const bool riding = t.id == ride_train && k == ride_car;
+      if (!riding && m.glass.vaoId) DrawMesh(m.glass, mat_, M);
+      if (riding && m.interior.vaoId) DrawMesh(m.interior, mat_, M);
+      draw_calls_ += 2;
+      triangles_ += m.shell.triangleCount;
+    }
+  }
+  rlEnableBackfaceCulling();
+}
+
 void Renderer::drawSignals(const TrafficSignals& ts, const Camera3D& cam) {
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   const Vector3 kGreen{0.0f, 0.95f, 0.62f}, kYellow{1.0f, 0.62f, 0.0f}, kRed{1.0f, 0.07f, 0.03f};
@@ -656,25 +764,63 @@ void Renderer::drawSignals(const TrafficSignals& ts, const Camera3D& cam) {
 }
 
 namespace {
-Matrix vehicleMatrix(const Vehicle& v) {
+Matrix vehicleMatrix(const Vehicle& v, bool body = true) {
   const Vector3 p = enuToRl(v.pos);
-  return MatrixMultiply(MatrixRotateY(-v.yaw), MatrixTranslate(p.x, p.y, p.z));
+  const Matrix tilt = body ? MatrixMultiply(MatrixRotateZ(-v.roll), MatrixRotateX(v.pitch)) : MatrixRotateX(v.pitch);
+  return MatrixMultiply(MatrixMultiply(tilt, MatrixRotateY(-v.yaw)), MatrixTranslate(p.x, p.y, p.z));
 }
+Vector3 modelToRl(const float* p) { return {p[0], p[2], -p[1]}; }
 }  // namespace
 
-void Renderer::vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out) const {
+void Renderer::vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out, const Vehicle* extra) const {
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   for (const auto& v : traffic.vehicles())
     if (std::hypot(v.pos.x - c.x, v.pos.y - c.y) < 90.0) out.push_back({&vehicles_.get(v.type).body, vehicleMatrix(v)});
+  if (extra) out.push_back({&vehicles_.get(extra->type).body, vehicleMatrix(*extra)});
 }
 
-void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L) {
+void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L, const Vehicle* extra, const CockpitView* cockpit) {
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   rlDisableBackfaceCulling();
-  for (const auto& v : traffic.vehicles()) {
+  std::vector<const Vehicle*> list;
+  list.reserve(traffic.vehicles().size() + 1);
+  for (const auto& v : traffic.vehicles()) list.push_back(&v);
+  if (extra) list.push_back(extra);  // the player's car
+  for (const Vehicle* vp : list) {
+    const Vehicle& v = *vp;
     if (std::hypot(v.pos.x - c.x, v.pos.y - c.y) > 320.0) continue;
     const VehicleModel& m = vehicles_.get(v.type);
     const Matrix M = vehicleMatrix(v);
+    if (cockpit && vp == extra) {  // from the driver's seat
+      const Color paint{static_cast<unsigned char>(std::sqrt(v.color[0]) * 255), static_cast<unsigned char>(std::sqrt(v.color[1]) * 255),
+                        static_cast<unsigned char>(std::sqrt(v.color[2]) * 255), 255};
+      drawMeshMat(m.cockpit, M, -1, WHITE);
+      drawMeshMat(m.bonnet, M, -1, paint);
+      const Vector3 sp = modelToRl(m.steer_pos);
+      const float wheel_turn = std::clamp(cockpit->steer * 15.0f, -9.5f, 9.5f);  // steering ratio ~15:1
+      const Matrix S = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-wheel_turn), MatrixRotateX(m.steer_tilt)),
+                                                     MatrixTranslate(sp.x, sp.y, sp.z)), M);
+      drawMeshMat(m.steering, S, -1, WHITE);
+      const float glow = 0.5f + 1.2f * L.night;
+      drawMeshMat(m.gauges, M, -1, WHITE, Vector3{glow, glow, glow * 0.95f});
+      const float vals[2] = {std::clamp(std::fabs(cockpit->kmh) / 180.0f, 0.0f, 1.0f), std::clamp(cockpit->rpm / 8000.0f, 0.0f, 1.0f)};
+      for (int k = 0; k < 2; ++k) {
+        const Vector3 gp = modelToRl(m.gauge_pos[k]);
+        const float a = (-120.0f + 240.0f * vals[k]) * DEG2RAD;
+        const Matrix N = MatrixMultiply(MatrixMultiply(MatrixRotateZ(-a), MatrixTranslate(gp.x, gp.y, gp.z)), M);
+        drawMeshMat(m.needle, N, -1, WHITE, Vector3Scale(Vector3{1.0f, 0.32f, 0.06f}, 1.2f + 2.0f * L.night));
+      }
+      if (mirror_ok_) {
+        // interior mirror: centre of the rear view; door mirrors: the outer parts on their side
+        const float crops[3][2] = {{0.24f, 0.76f}, {0.0f, 0.34f}, {0.66f, 1.0f}};
+        for (int k = 0; k < 3; ++k) {
+          Vector3 q[4];
+          for (int i = 0; i < 4; ++i) q[i] = Vector3Transform(modelToRl(m.mirror_glass[k][i]), M);
+          drawMirrorGlass(q, crops[k][0], crops[k][1]);
+        }
+      }
+      continue;
+    }
     const Color paint{static_cast<unsigned char>(std::sqrt(v.color[0]) * 255), static_cast<unsigned char>(std::sqrt(v.color[1]) * 255),
                       static_cast<unsigned char>(std::sqrt(v.color[2]) * 255), 255};
     // body: per-vertex materials (paint tinted by colDiffuse, glass, trim, plates)
@@ -687,12 +833,15 @@ void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const L
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     ++draw_calls_;
     triangles_ += m.body.triangleCount;
-    // wheels: unit cylinder (axis +y) -> axis along the vehicle's right, radius r, width 0.22 m
+    // wheels: turn with the distance rolled, the front pair steers; the left pair is mirrored
+    const Matrix Mw = vehicleMatrix(v, false);
+    const float spin = -v.wheel_dist / m.wheel_r;
     for (const auto& wp : m.wheel_pos) {
       const float side = wp[0] > 0 ? 1.0f : -1.0f;
-      const Matrix W = MatrixMultiply(MatrixMultiply(MatrixScale(m.wheel_r, 0.22f, m.wheel_r), MatrixRotateZ(-side * PI / 2)),
-                                      MatrixTranslate(wp[0] + (side > 0 ? -0.22f : 0.22f) * 0.0f, m.wheel_r, -wp[1]));
-      drawMeshMat(m.wheel, MatrixMultiply(W, M), kMatTyre, WHITE);
+      Matrix W = MatrixMultiply(MatrixScale(side, 1.0f, 1.0f), MatrixRotateX(spin));
+      if (wp[1] > 0) W = MatrixMultiply(W, MatrixRotateY(-v.steer));
+      W = MatrixMultiply(W, MatrixTranslate(wp[0], m.wheel_r, -wp[1]));
+      drawMeshMat(m.wheel, MatrixMultiply(W, Mw), -1, WHITE);
     }
     // lamps
     const float night = L.night;

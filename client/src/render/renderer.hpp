@@ -12,15 +12,18 @@
 // NOT implemented (honest list): ray-traced GI/reflections, volumetric light shafts, virtual
 // texturing, motion blur. See docs/STATUS.md.
 
+#include <functional>
 #include <vector>
 
 #include "game/pedestrians.hpp"
 #include "game/road_markings.hpp"
+#include "game/trains.hpp"
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
 #include "raylib.h"
 #include "render/humans.hpp"
 #include "render/textures.hpp"
+#include "render/trains.hpp"
 #include "render/vehicles.hpp"
 #include "world/facade.hpp"
 #include "world/world.hpp"
@@ -85,6 +88,10 @@ class Renderer {
   void renderShadowMaps(const Camera3D& cam, const World& world, const Lighting& L, const std::vector<Caster>& extra_casters = {});
   void beginScene(const RenderOptions& o, const Lighting& L, const Camera3D& cam, float time_s);
   void drawSky(const Camera3D& cam, const Lighting& L, float aspect);
+  // Rear view for the car's mirrors: renders `scene` (3D draw calls) from `rear` into a small
+  // target. Call before beginScene(). The cockpit then shows it (mirror-flipped) on the glass.
+  void renderMirror(const Camera3D& rear, const Lighting& L, float time_s, const std::function<void()>& scene);
+  void invalidateMirror() { mirror_ok_ = false; }
   void setLights(const std::vector<PointLight>& lights);
   // neutral_floor: flat stand-in plane outside data coverage (off underground, where it would cut through).
   void drawWorld(const Camera3D& cam, const World& world, bool photo_textures, bool neutral_floor = true);
@@ -94,9 +101,18 @@ class Renderer {
   void drawInterior(const Interior& in);
   void drawFacades(const FacadeDetail& f);
   void drawMarkings(const RoadMarkings& m);
+  // Open sea to the horizon at raylib height sea_y (fictional island world).
+  void drawOcean(const Camera3D& cam, float sea_y);
+  // ride_train / ride_car: the car the player sits in (drawn without glass, with its interior)
+  void drawTrains(const Trains& trains, const Camera3D& cam, int ride_train, int ride_car);
   void drawSignals(const TrafficSignals& ts, const Camera3D& cam);
-  void drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L);
-  void vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out) const;
+  // extra: the player's car; with a cockpit view it is drawn from the driver's seat (interior, gauges)
+  struct CockpitView {
+    float kmh = 0, rpm = 0, steer = 0;  // steer: road-wheel angle (rad)
+  };
+  void drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L, const Vehicle* extra = nullptr,
+                    const CockpitView* cockpit = nullptr);
+  void vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out, const Vehicle* extra = nullptr) const;
   void drawRain(const Camera3D& cam, const Lighting& L, float time_s);
   void endScene(const Camera3D& cam, const Lighting& L, float time_s);
   void beginTransparent();  // re-enable blending (rain, particles) after the opaque pass
@@ -120,6 +136,8 @@ class Renderer {
   Texture2D leaf_tex_{};
   VehicleModels vehicles_;
   HumanModels humans_;
+  Mesh ocean_{};
+  TrainModels train_models_;
   void drawHuman(const Mesh& m, const Matrix& model, Color top, Color bottom, Color skin, Color hair);
   // shadows: 0 = near cascade, 1 = far cascade
   RenderTexture2D shadow_[2]{};
@@ -129,6 +147,10 @@ class Renderer {
   bool shadow_valid_ = false;
   // post targets
   RenderTexture2D scene_{};
+  RenderTexture2D mirror_{};
+  bool mirror_ok_ = false;
+  Vector2 sky_res_override_{0, 0};
+  void drawMirrorGlass(const Vector3 c[4], float u0, float u1);
   RenderTexture2D ao_{}, ao_blur_{}, bright_rt_{}, bloom_a_{}, bloom_b_{}, lum_{}, ssr_rt_{};
   int tw_ = 0, th_ = 0;
   bool post_active_ = false;

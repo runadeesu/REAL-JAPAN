@@ -38,6 +38,7 @@ struct SliceMeta {
   std::string name_ja, name_en;
   double spawn_lat = 0, spawn_lon = 0, spawn_heading = 0;
   double core_bbox[4] = {0, 0, 0, 0};
+  bool fictional = false;  // "world fictional": an invented island (sea all around, no source data)
   std::vector<CellMeta> cells;
   std::vector<Poi> pois;
   std::vector<SourceMeta> sources;
@@ -60,6 +61,8 @@ struct LoadedCell {
   std::vector<float> walk;                 // raised walkable triangles (9 floats each)
   std::unordered_map<int64_t, std::vector<uint32_t>> walk_hash;  // 4 m buckets -> triangle index
   std::vector<float> cross;                // crosswalk triangles
+  std::vector<float> deck;                 // bridge decks (drivable, 9 floats per triangle)
+  std::unordered_map<int64_t, std::vector<uint32_t>> deck_hash;
   std::unordered_set<int64_t> mark_hash;   // 2 m buckets holding surveyed road markings
   struct Light {
     rj::geo::Vec3d pos;
@@ -94,6 +97,8 @@ class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
   // Walkable surface: raised sidewalks / traffic islands (real PLATEAU areas) where present, else terrain.
   std::optional<double> surfaceHeight(double x, double y) const;
   bool onCrosswalk(double x, double y) const;
+  // Drivable surface: bridge decks where present, else terrain.
+  std::optional<double> roadHeight(double x, double y) const;
   // Surveyed PLATEAU road markings (frn 1000-1299) within ~radius of (x, y).
   bool hasSurveyedMarking(double x, double y, double radius) const;
   bool pointInBuilding(double x, double y) const;  // inside any PLATEAU footprint

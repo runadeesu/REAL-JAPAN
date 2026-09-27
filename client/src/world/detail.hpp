@@ -30,6 +30,10 @@ enum Mat : int {
   kMatFence = 13,
   kMatBronze = 14,
   kMatIsland = 15,
+  kMatWater = 16,    // river / sea surface
+  kMatCanopy = 17,   // forest canopy (fictional island mountains)
+  kMatAsphalt = 18,  // bridge decks
+  kMatBallast = 19,  // elevated track bed
   // Runtime-generated (procedural facade detail, vehicles, people): 20+
   kMatWindow = 20,
   kMatShopGlass = 21,
@@ -83,6 +87,7 @@ struct CellDetailCpu {
   };
   std::vector<Chunk> chunks;
   std::vector<float> walk;   // walkable triangles (cell ENU), 9 floats each
+  std::vector<float> deck;   // bridge decks (RJDET extra walk section): drivable and walkable
   std::vector<float> cross;  // crosswalk triangles (cell ENU)
   std::vector<float> marks;  // centroids (x, y) of surveyed road-marking triangles (cell ENU)
   std::vector<StreetLight> lights;

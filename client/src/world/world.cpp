@@ -69,6 +69,7 @@ bool World::loadMeta(const std::filesystem::path& dir, std::string& err) {
     try {
       if (k == "name_ja") meta_.name_ja = head[1];
       else if (k == "name_en") meta_.name_en = head[1];
+      else if (k == "world") meta_.fictional = head.size() > 1 && head[1] == "fictional";
       else if (k == "spawn") {
         const auto v = splitWs(head[1]);
         meta_.spawn_lat = std::stod(v.at(0));
@@ -282,6 +283,24 @@ void World::placeCell(LoadedCell& c) {
       for (int by = static_cast<int>(std::floor(y0 / 4.0)); by <= static_cast<int>(std::floor(y1 / 4.0)); ++by)
         c.walk_hash[bucketKey(bx, by)].push_back(static_cast<uint32_t>(t / 9));
   }
+  c.deck.clear();
+  c.deck_hash.clear();
+  for (size_t t = 0; t + 8 < det.deck.size(); t += 9) {
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (int k = 0; k < 3; ++k) {
+      const auto p = toO(&det.deck[t + k * 3]);
+      c.deck.push_back(static_cast<float>(p.x));
+      c.deck.push_back(static_cast<float>(p.y));
+      c.deck.push_back(static_cast<float>(p.z));
+      x0 = std::min(x0, static_cast<float>(p.x));
+      x1 = std::max(x1, static_cast<float>(p.x));
+      y0 = std::min(y0, static_cast<float>(p.y));
+      y1 = std::max(y1, static_cast<float>(p.y));
+    }
+    for (int bx = static_cast<int>(std::floor(x0 / 4.0)); bx <= static_cast<int>(std::floor(x1 / 4.0)); ++bx)
+      for (int by = static_cast<int>(std::floor(y0 / 4.0)); by <= static_cast<int>(std::floor(y1 / 4.0)); ++by)
+        c.deck_hash[bucketKey(bx, by)].push_back(static_cast<uint32_t>(t / 9));
+  }
   c.cross.resize(det.cross.size());
   for (size_t v = 0; v + 2 < det.cross.size(); v += 3) {
     const auto p = toO(&det.cross[v]);
@@ -428,6 +447,17 @@ std::optional<double> World::surfaceHeight(double x, double y) const {
     if (it == c->walk_hash.end()) continue;
     for (uint32_t t : it->second)
       if (auto z = triZ(&c->walk[static_cast<size_t>(t) * 9], x, y)) return z;
+  }
+  return roadHeight(x, y);
+}
+
+std::optional<double> World::roadHeight(double x, double y) const {
+  const int64_t k = bucketKey(static_cast<int>(std::floor(x / 4.0)), static_cast<int>(std::floor(y / 4.0)));
+  for (const auto& [code, c] : loaded_) {
+    auto it = c->deck_hash.find(k);
+    if (it == c->deck_hash.end()) continue;
+    for (uint32_t t : it->second)
+      if (auto z = triZ(&c->deck[static_cast<size_t>(t) * 9], x, y)) return z;
   }
   return terrainHeight(x, y);
 }
