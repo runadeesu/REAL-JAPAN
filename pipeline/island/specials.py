@@ -569,6 +569,35 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
             for k0, k1 in ((0, 1), (1, 2), (2, 3), (3, 0)):
                 A, B = V[k0], V[k1]
                 _dquad(geos, "concrete", [A - [0, 0, 1.1], B - [0, 0, 1.1], B, A])
+            if kind_i == 2:
+                # platform screen doors (typical of Shinkansen stations): 1.3 m fence 0.5 m back from the
+                # edge with openings at the car doors of an 8 x 25 m train stopped at the centre
+                # (one door at the rear of each car; the reversed rear cab has it at the front end)
+                fdir = 1.0 if sg < 0 else -1.0  # trains on the left platform run along the heading
+                opens = []
+                for k in range(8):
+                    u = (3.5 - k) * 25.0 + (11.4 if k == 7 else -11.4)
+                    opens.append(u * fdir)
+                opens.sort()
+                edge = c - side * sg * (width / 2 - 0.5)
+                u = -length / 2 + 2.0
+                cuts = []
+                for o in opens:
+                    if o - 1.15 > u:
+                        cuts.append((u, o - 1.15))
+                    u = o + 1.15
+                cuts.append((u, length / 2 - 2.0))
+                for ua, ub in cuts:
+                    if ub - ua < 0.3:
+                        continue
+                    pa, pb = edge + fwd * ua, edge + fwd * ub
+                    q2 = [pa, pb]
+                    Vp = xf.p([[p_[0], p_[1], ztop] for p_ in q2] + [[p_[0], p_[1], ztop + 1.3] for p_ in q2[::-1]])
+                    _dquad(geos, "metal", [Vp[0], Vp[1], Vp[2], Vp[3]], (214, 216, 220, 255))
+                    _dquad(geos, "metal", [Vp[1], Vp[0], Vp[3], Vp[2]], (214, 216, 220, 255))
+                    for uu in (ua, ub):  # door pockets / posts
+                        P0 = xf.p([[*(edge + fwd * uu), ztop]])[0]
+                        _box_d(geos, "metal_dark", P0 + [0, 0, 0.67], (0.12, 0.12, 0.67))
             # tactile strip along the track edge + canopy
             e0 = c - side * sg * (width / 2 - 0.9)
             t = [e0 - fwd * length / 2 - side * 0.3, e0 + fwd * length / 2 - side * 0.3, e0 + fwd * length / 2 + side * 0.3,

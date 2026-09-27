@@ -16,9 +16,11 @@ shot() {  # name, env, args...
 shot drive_cockpit "RJ_DRIVE_FP=1" --state drive --pos 34.58650,140.39640 --yaw 0 --drive "1:0:5,0.4:0:1"
 shot drive_chase "" --state drive --pos 34.58650,140.39640 --yaw 0 --drive "1:0:5,0.4:0.25:1.2"
 shot drive_side "RJ_DRIVE_LOOK=70" --state drive --pos 34.58650,140.39640 --yaw 0 --drive "1:0:3,0.3:0:1"
-# Shinkansen: window seat after departure; loop line
+# Shinkansen: the train at the terminal platform, window seat after departure; loop line
+shot shinkansen_platform "" --state platform --station 6
 shot ride_shinkansen "" --state ride --station 6 --ride 85 --simspeed 3
 shot ride_loop "" --state ride --station 0 --ride 40 --simspeed 3
+shot train_cab "" --state trainjob --station 0 --ride 45 --simspeed 3
 # ferry: alongside the pier (from the pier), on deck under way
 shot ferry_view "" --state ferryview --station 0
 shot ferry_deck "" --state ferry --station 0 --ride 160 --simspeed 4

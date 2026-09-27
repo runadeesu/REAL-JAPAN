@@ -139,6 +139,10 @@ void App::updateTrainDriving() {
     drive_train_ = -1;
     return;
   }
+  if (opt_.state == "trainjob" && ride_test_t_ >= 0) {  // test aid: depart under power, then coast
+    trains_.setNotch(t->id, ride_test_t_ < opt_.ride * 0.75f ? 4 : 0);
+    return;
+  }
   if (screen_ == Screen::Game) {
     int n = t->notch;
     if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP)) n = std::min(5, n <= -8 ? -7 : n + 1);

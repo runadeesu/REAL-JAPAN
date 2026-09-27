@@ -353,7 +353,7 @@ void makeCockpit(VehicleModel& m, VehicleType type, const CockpitSpec& c) {
     sw.box({0, -0.012f, 0.0f}, {0.02f, 0.004f, 0.01f}, kChrome, kMatMetal);  // emblem plate (generic)
     m.steering = sw.upload();
     // low enough that the dials show above the rim
-    m.steer_pos[0] = ex, m.steer_pos[1] = ey + 0.42f, m.steer_pos[2] = ez - 0.42f;
+    m.steer_pos[0] = ex, m.steer_pos[1] = ey + 0.40f, m.steer_pos[2] = ez - 0.385f;
     m.steer_tilt = c.tilt;
     // column shroud from the wheel to the dashboard
     g.beam({ex, ey + 0.47f, ez - 0.48f}, {ex, dash_back + 0.05f, dz - 0.25f}, 0.08f, 0.08f, dark, kMatUntinted);

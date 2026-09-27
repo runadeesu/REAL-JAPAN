@@ -23,7 +23,7 @@ struct TrainCarModel {
   float length = 20.0f;
 };
 
-enum class TrainCar : int { CommuterMid = 0, CommuterCab, ShinkansenMid, ShinkansenNose, Count };
+enum class TrainCar : int { CommuterMid = 0, CommuterCab, ShinkansenMid, ShinkansenNose, ShinkansenPanto, Count };
 
 class TrainModels {
  public:

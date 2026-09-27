@@ -859,7 +859,7 @@ void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_tr
       if (std::hypot(p.x - c.x, p.y - c.y) > 1100.0) continue;
       const bool end = k == 0 || k == t.cars - 1;
       const bool reversed = k == t.cars - 1 && k > 0;  // the rear cab faces backwards
-      const TrainCarModel& m = train_models_.get(shink ? (end ? TrainCar::ShinkansenNose : TrainCar::ShinkansenMid)
+      const TrainCarModel& m = train_models_.get(shink ? (end ? TrainCar::ShinkansenNose : (k % 4 == 2 ? TrainCar::ShinkansenPanto : TrainCar::ShinkansenMid))
                                                        : (end ? TrainCar::CommuterCab : TrainCar::CommuterMid));
       const float y = reversed ? yaw + PI : yaw;
       const float pt = reversed ? -pitch : pitch;

@@ -306,18 +306,54 @@ TrainCarModel makeCommuter(bool cab) {
   for (int sx = -1; sx <= 1; sx += 2) sideWall(g, glass, s, static_cast<float>(sx), y0, y1, windows, doors);
   roof(g, s, y0, y1);
   endWall(g, s, y0, -1, s.body);
-  if (cab) {  // front face: sloped dark glass, band, headlights
-    endWall(g, s, y1, 1, Color{40, 42, 46, 255});
-    glass.quad({-1.3f, y1 + 0.02f, 1.9f}, {1.3f, y1 + 0.02f, 1.9f}, {1.3f, y1 + 0.02f, 2.85f}, {-1.3f, y1 + 0.02f, 2.85f}, Color{255, 255, 255, 255}, kGlass);
+  if (cab) {
+    // front face with a real windscreen opening (the driver looks through it), black mask, band, lamps
+    const Color fc{40, 42, 46, 255};
+    const float wz0 = 1.9f, wz1 = 2.85f, wx = 1.3f;
+    auto F = [&](float xa, float xb, float za, float zb) { g.quad({xa, y1, za}, {xb, y1, za}, {xb, y1, zb}, {xa, y1, zb}, fc, kShell); };
+    F(-s.W, s.W, s.zFloor, wz0);
+    F(-s.W, s.W, wz1, s.zSide);
+    F(-s.W, -wx, wz0, wz1);
+    F(wx, s.W, wz0, wz1);
+    const Vector3 prof[] = {{s.W, y1, s.zSide}, {s.shoulderX, y1, s.zShoulder}, {0, y1, s.zRoof}, {-s.shoulderX, y1, s.zShoulder}, {-s.W, y1, s.zSide}};
+    for (int i = 0; i + 1 < 5; ++i) g.quad(prof[i + 1], prof[i], {0, y1, s.zSide}, {0, y1, s.zSide}, fc, kShell);
+    glass.quad({-wx, y1 + 0.02f, wz0}, {wx, y1 + 0.02f, wz0}, {wx, y1 + 0.02f, wz1}, {-wx, y1 + 0.02f, wz1}, Color{255, 255, 255, 255}, kGlass);
     g.box({0, y1 + 0.03f, 1.43f}, {1.44f, 0.02f, 0.07f}, s.band, kShell);
     for (float x : {-1.0f, 1.0f}) g.box({x, y1 + 0.04f, 1.2f}, {0.18f, 0.02f, 0.08f}, Color{255, 250, 235, 255}, kMatSignalLamp);
+    // wipers at the base of the windscreen, destination display above
+    g.box({-0.6f, y1 + 0.04f, wz0 + 0.3f}, {0.02f, 0.01f, 0.32f}, Color{20, 20, 20, 255}, kDark);
+    g.box({0.6f, y1 + 0.04f, wz0 + 0.3f}, {0.02f, 0.01f, 0.32f}, Color{20, 20, 20, 255}, kDark);
+    g.box({0, y1 + 0.03f, 3.08f}, {0.7f, 0.02f, 0.1f}, Color{255, 170, 60, 255}, kGlass);
   } else {
     endWall(g, s, y1, 1, s.body);
   }
   underframe(g, s, y0, y1);
   // pantograph frame on the roof
   g.box({0, 2.0f, s.zRoof + 0.15f}, {0.9f, 0.6f, 0.03f}, Color{80, 80, 80, 255}, kMatMetal);
-  interior(in, s, y0, y1, doors, windows);
+  const float cab_back = y1 - 1.6f;
+  interior(in, s, y0, cab ? cab_back : y1, doors, windows);
+  if (cab) {  // driver's cab: partition, desk with the master controller and gauges, seat
+    const float zf = s.zFloor + kFloorAbove;
+    const Color wall{210, 208, 202, 255}, desk{52, 54, 58, 255};
+    in.quad({-s.W + 0.05f, cab_back, zf}, {s.W - 0.05f, cab_back, zf}, {s.W - 0.05f, cab_back, s.zSide}, {-s.W + 0.05f, cab_back, s.zSide}, wall, kShell);
+    in.quad({-s.W + 0.05f, cab_back, zf}, {s.W - 0.05f, cab_back, zf}, {s.W - 0.05f, y1 - 0.05f, zf}, {-s.W + 0.05f, y1 - 0.05f, zf}, Color{90, 90, 92, 255}, kShell);
+    in.quad({-s.W + 0.05f, y1 - 0.05f, s.zSide - 0.05f}, {s.W - 0.05f, y1 - 0.05f, s.zSide - 0.05f}, {s.W - 0.05f, cab_back, s.zSide - 0.05f},
+            {-s.W + 0.05f, cab_back, s.zSide - 0.05f}, Color{200, 200, 196, 255}, kShell);
+    for (float sx : {-1.0f, 1.0f}) {  // cab side walls with the side window
+      const float x = sx * (s.W - 0.05f);
+      if (sx > 0) in.quad({x, y1 - 0.05f, zf}, {x, cab_back, zf}, {x, cab_back, s.zWin0}, {x, y1 - 0.05f, s.zWin0}, wall, kShell);
+      else in.quad({x, cab_back, zf}, {x, y1 - 0.05f, zf}, {x, y1 - 0.05f, s.zWin0}, {x, cab_back, s.zWin0}, wall, kShell);
+    }
+    in.box({-0.48f, y1 - 0.42f, zf + 0.62f}, {0.62f, 0.3f, 0.34f}, desk, kShell);                                             // desk
+    in.box({-0.48f, y1 - 0.5f, zf + 1.02f}, {0.6f, 0.2f, 0.06f}, Color{36, 36, 40, 255}, kShell);                              // desk top
+    in.box({-0.62f, y1 - 0.55f, zf + 1.1f}, {0.13f, 0.02f, 0.07f}, Color{10, 10, 12, 255}, kShell);                            // speedometer face
+    in.box({-0.62f, y1 - 0.565f, zf + 1.1f}, {0.1f, 0.004f, 0.05f}, Color{255, 170, 60, 255}, kGlass);                         // lit gauge
+    in.box({-0.18f, y1 - 0.62f, zf + 1.12f}, {0.03f, 0.08f, 0.05f}, Color{20, 20, 22, 255}, kShell);                           // master controller
+    in.box({-0.18f, y1 - 0.7f, zf + 1.18f}, {0.08f, 0.02f, 0.02f}, Color{200, 40, 40, 255}, kShell);                           // its handle
+    in.box({-0.55f, cab_back + 0.55f, zf + 0.42f}, {0.24f, 0.22f, 0.06f}, Color{40, 60, 90, 255}, kShell);                     // seat
+    in.box({-0.55f, cab_back + 0.3f, zf + 0.75f}, {0.24f, 0.05f, 0.3f}, Color{40, 60, 90, 255}, kShell);
+    in.box({0.5f, y1 - 0.35f, zf + 0.45f}, {0.35f, 0.25f, 0.45f}, Color{120, 122, 126, 255}, kShell);                         // cabinet
+  }
   TrainCarModel m;
   m.length = s.L;
   m.shell = g.upload();
@@ -326,50 +362,115 @@ TrainCarModel makeCommuter(bool cab) {
   return m;
 }
 
-TrainCarModel makeShinkansen(bool nose) {
+TrainCarModel makeShinkansen(bool nose, bool panto = false) {
   Spec s{25.0f, 1.69f, 1.1f, 2.05f, 2.55f, 3.1f, 3.48f, 3.65f, 1.3f, {242, 242, 240, 255}, {26, 64, 160, 255}, {242, 242, 240, 255},
          1.38f, 1.55f, true};
   Geo g, glass, in;
   const float y0 = -s.L / 2;
-  const float y1 = nose ? s.L / 2 - 11.0f : s.L / 2;
+  const float y1 = nose ? s.L / 2 - 11.5f : s.L / 2;
   std::vector<std::pair<float, float>> windows, doors = {{y0 + 0.6f, y0 + 1.6f}};
   for (float y = y0 + 2.4f; y < y1 - 0.9f; y += 1.04f) windows.push_back({y, y + 0.62f});
   for (int sx = -1; sx <= 1; sx += 2) sideWall(g, glass, s, static_cast<float>(sx), y0, y1, windows, doors);
   roof(g, s, y0, y1);
   endWall(g, s, y0, -1, s.body);
+  // thin second stripe under the band, full-length side skirts over the bogies (typical of high-speed cars)
+  for (float sx : {-1.0f, 1.0f}) {
+    const float x = sx * (s.W + 0.004f);
+    auto Q = [&](float ya, float yb, float za, float zb, Color c) {
+      if (sx > 0) g.quad({x, ya, za}, {x, yb, za}, {x, yb, zb}, {x, ya, zb}, c, kShell);
+      else g.quad({x, yb, za}, {x, ya, za}, {x, ya, zb}, {x, yb, zb}, c, kShell);
+    };
+    Q(y0, y1, 1.24f, 1.28f, s.band);
+    const float xs = sx * (s.W - 0.06f);
+    const Color skirt{214, 216, 218, 255};
+    if (sx > 0) g.quad({xs, y0 + 0.2f, 0.55f}, {xs, y1 - 0.2f, 0.55f}, {xs, y1 - 0.2f, s.zFloor}, {xs, y0 + 0.2f, s.zFloor}, skirt, kShell);
+    else g.quad({xs, y1 - 0.2f, 0.55f}, {xs, y0 + 0.2f, 0.55f}, {xs, y0 + 0.2f, s.zFloor}, {xs, y1 - 0.2f, s.zFloor}, skirt, kShell);
+  }
+  // gangway bellows at the car ends
+  const Color bel{30, 30, 32, 255};
+  g.box({0, y0 - 0.12f, (s.zFloor + s.zSide) * 0.5f}, {s.W - 0.28f, 0.14f, (s.zSide - s.zFloor) * 0.5f - 0.1f}, bel, kDark);
+  if (!nose) g.box({0, y1 + 0.12f, (s.zFloor + s.zSide) * 0.5f}, {s.W - 0.28f, 0.14f, (s.zSide - s.zFloor) * 0.5f - 0.1f}, bel, kDark);
+  if (panto) {  // single-arm pantograph with its noise shield
+    const float py = y0 + 5.0f, pz = s.zRoof;
+    const Color pc{90, 92, 96, 255};
+    g.box({0, py, pz + 0.06f}, {0.55f, 1.1f, 0.06f}, Color{120, 122, 126, 255}, kMatMetal);
+    for (float sx : {-1.0f, 1.0f}) g.box({sx * 0.95f, py, pz + 0.18f}, {0.03f, 1.6f, 0.2f}, Color{228, 228, 226, 255}, kShell);  // shield
+    Geo& h = g;
+    const Vector3 a{0, py - 0.6f, pz + 0.12f}, b{0, py + 0.4f, pz + 0.9f}, c{0, py - 0.2f, pz + 1.6f};
+    auto bar = [&](Vector3 p, Vector3 q) {
+      const Vector3 m{(p.x + q.x) / 2, (p.y + q.y) / 2, (p.z + q.z) / 2};
+      h.box(m, {0.035f, std::fabs(q.y - p.y) / 2 + 0.03f, std::fabs(q.z - p.z) / 2 + 0.03f}, pc, kMatMetal);
+    };
+    bar(a, b);
+    bar(b, c);
+    g.box({0, c.y, c.z + 0.03f}, {0.75f, 0.06f, 0.025f}, Color{60, 60, 62, 255}, kMatMetal);  // pan head
+  }
   if (!nose) {
     endWall(g, s, y1, 1, s.body);
   } else {
-    // long nose: cross-section shrinks and drops towards the tip
-    const int nr = 12;
+    // long aerodynamic nose (generic): the section narrows and drops, a canopy hump over the cab,
+    // the blue band sweeps down towards the tip; cab windscreen, headlights low on the flanks
+    const int nr = 30, ns = 12;
     const float Ln = s.L / 2 - y1;
+    auto smooth = [](float e0, float e1, float x) {
+      const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+      return t * t * (3 - 2 * t);
+    };
     std::vector<std::vector<Vector3>> rings;
+    std::vector<float> ts;
     for (int i = 0; i <= nr; ++i) {
       const float t = static_cast<float>(i) / nr;
       const float y = y1 + t * Ln;
-      const float w = s.W * (1.0f - 0.72f * std::pow(t, 1.9f));
-      const float zt = s.zRoof - 2.25f * std::pow(t, 1.35f);
-      const float zb = s.zFloor - 0.15f + 0.2f * t;
-      const float zs = std::min(zt - 0.1f, s.zSide - 1.45f * std::pow(t, 1.3f));
-      rings.push_back({{-w, y, zb}, {w, y, zb}, {w, y, std::max(zb + 0.1f, zs)}, {w * 0.72f, y, std::max(zb + 0.12f, (zs + zt) / 2)},
-                       {0, y, zt}, {-w * 0.72f, y, std::max(zb + 0.12f, (zs + zt) / 2)}, {-w, y, std::max(zb + 0.1f, zs)}});
-    }
-    for (int i = 0; i < nr; ++i) {
-      const float t = (i + 0.5f) / nr;
-      for (int k = 0; k < 7; ++k) {
-        const Vector3 a = rings[static_cast<size_t>(i)][static_cast<size_t>(k)], b = rings[static_cast<size_t>(i)][static_cast<size_t>((k + 1) % 7)];
-        const Vector3 c = rings[static_cast<size_t>(i) + 1][static_cast<size_t>((k + 1) % 7)], d = rings[static_cast<size_t>(i) + 1][static_cast<size_t>(k)];
-        const bool top = k == 3 || k == 4;
-        const bool cabwin = top && t > 0.42f && t < 0.62f;
-        const bool bandSide = (k == 1 || k == 5 + 1 - 1) && t < 0.7f;
-        Color c0 = cabwin ? Color{20, 22, 26, 255} : (bandSide ? s.band : s.body);
-        if (k == 0) continue;  // bottom closed by the underframe
-        g.quad(a, d, c, b, c0, cabwin ? kGlass : kShell);
+      const float w = std::max(0.08f, s.W * (1.0f - 0.86f * std::pow(t, 2.1f)));
+      const float hump = 0.22f * std::exp(-std::pow((t - 0.40f) / 0.11f, 2.0f));
+      const float zt = s.zRoof - 2.25f * std::pow(smooth(0.03f, 1.0f, t), 1.15f) + hump * (1.0f - t);
+      const float zb = s.zFloor - 0.2f + 0.5f * std::pow(t, 2.4f);
+      const float zm = std::min(zt - 0.12f, std::max(zb + 0.08f, s.zSide - 1.25f * std::pow(t, 1.2f) - 0.35f * t));
+      std::vector<Vector3> r;
+      // lower flank (vertical), then a superellipse cap from zm up to zt
+      r.push_back({w, y, zb});
+      for (int k = 0; k <= ns; ++k) {
+        const float th = PI * k / ns;
+        const float c = std::cos(th), sn = std::sin(th);
+        const float ex = 2.0f / 3.2f;
+        const float x = w * (c >= 0 ? 1.0f : -1.0f) * std::pow(std::fabs(c), ex);
+        const float z = zm + (zt - zm) * std::pow(sn, ex);
+        r.push_back({x, y, z});
       }
+      r.push_back({-w, y, zb});
+      rings.push_back(r);
+      ts.push_back(t);
     }
-    g.box({0, y1 + Ln - 0.2f, 1.05f}, {0.2f, 0.2f, 0.15f}, Color{255, 250, 235, 255}, kMatSignalLamp);
+    const size_t np = rings[0].size();
+    for (int i = 0; i < nr; ++i) {
+      const float t = (ts[static_cast<size_t>(i)] + ts[static_cast<size_t>(i) + 1]) * 0.5f;
+      const float band_c = 1.465f - 0.25f * t, band_h = 0.085f * (1.0f - 0.5f * t);
+      for (size_t k = 0; k + 1 < np; ++k) {
+        const Vector3 a = rings[static_cast<size_t>(i)][k], b = rings[static_cast<size_t>(i)][k + 1];
+        const Vector3 c = rings[static_cast<size_t>(i) + 1][k + 1], d = rings[static_cast<size_t>(i) + 1][k];
+        const float zc = (a.z + b.z + c.z + d.z) * 0.25f, xc = (a.x + b.x + c.x + d.x) * 0.25f;
+        const bool cab = t > 0.28f && t < 0.5f && zc > rings[static_cast<size_t>(i)][1].z + 0.05f && std::fabs(xc) < s.W * 0.62f;
+        const bool band = std::fabs(zc - band_c) < band_h;
+        Color col = cab ? Color{18, 20, 24, 255} : band ? s.band : s.body;
+        g.quad(a, d, c, b, col, cab ? kGlass : kShell);
+      }
+      // underside
+      const Vector3 a = rings[static_cast<size_t>(i)].front(), b = rings[static_cast<size_t>(i)].back();
+      const Vector3 c = rings[static_cast<size_t>(i) + 1].back(), d = rings[static_cast<size_t>(i) + 1].front();
+      g.quad(b, c, d, a, Color{60, 62, 66, 255}, kDark);
+    }
+    // tip cap
+    const auto& last = rings.back();
+    for (size_t k = 1; k + 1 < last.size(); ++k) g.quad(last[0], last[k], last[k + 1], last[k + 1], s.body, kShell);
+    // headlights (paired lamps low on the flanks of the nose)
+    const float tl = 0.8f, yl = y1 + tl * Ln;
+    const float wl = s.W * (1.0f - 0.86f * std::pow(tl, 2.1f));
+    for (float sx : {-1.0f, 1.0f})
+      g.box({sx * wl * 0.72f, yl, 1.42f}, {0.12f, 0.18f, 0.035f}, Color{255, 250, 235, 255}, kMatSignalLamp);
+    // nose-end skirt fairing
+    g.box({0, y1 + 1.5f, 0.75f}, {s.W - 0.1f, 1.5f, 0.2f}, Color{214, 216, 218, 255}, kShell);
   }
-  underframe(g, s, y0, nose ? y1 + 4.0f : y1);
+  underframe(g, s, y0, nose ? y1 + 3.0f : y1);
   interior(in, s, y0, y1, doors, windows);
   TrainCarModel m;
   m.length = s.L;
@@ -387,6 +488,7 @@ void TrainModels::build() {
   m_[static_cast<int>(TrainCar::CommuterCab)] = makeCommuter(true);
   m_[static_cast<int>(TrainCar::ShinkansenMid)] = makeShinkansen(false);
   m_[static_cast<int>(TrainCar::ShinkansenNose)] = makeShinkansen(true);
+  m_[static_cast<int>(TrainCar::ShinkansenPanto)] = makeShinkansen(false, true);
   ready_ = true;
 }
 

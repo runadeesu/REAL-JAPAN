@@ -111,6 +111,7 @@ class App {
 
   LaunchOptions opt_;
   Settings settings_;
+  std::string saved_world_;  // world as stored in settings.ini (before a --world override)
   I18n i18n_;
   Ui ui_;
   World world_;

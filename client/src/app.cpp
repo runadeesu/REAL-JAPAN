@@ -64,6 +64,7 @@ bool App::boot() {
     fatal_ = "Missing language files in " + pathToUtf8(data / "lang");
     return false;
   }
+  saved_world_ = settings_.world;  // a --world launch option is not written back to settings.ini
   if (!opt_.world.empty()) settings_.world = opt_.world == "shibuya" ? "shibuya" : "island";
   slice_dir_ = data / "world" / settings_.world;
   if (!std::filesystem::exists(slice_dir_ / "client.txt")) slice_dir_ = data / "world" / "shibuya";  // island not cooked
@@ -146,7 +147,11 @@ void App::setLanguage(const std::string& code) {
   saveSettings();
 }
 
-void App::saveSettings() { settings_.save(userDir() / "settings.ini"); }
+void App::saveSettings() {
+  Settings s = settings_;
+  if (!opt_.world.empty()) s.world = saved_world_;
+  s.save(userDir() / "settings.ini");
+}
 
 void App::applyWindowMode() {
   const bool is_full = IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE);
@@ -452,9 +457,9 @@ void App::update(float dt) {
               p0 = p1 + 1;
             }
           }
-          if (st == "ride" && trains_.loaded() && opt_.station >= 0 &&
+          if ((st == "ride" || st == "platform" || st == "trainjob") && trains_.loaded() && opt_.station >= 0 &&
               opt_.station < static_cast<int>(trains_.stations().size())) {
-            ride_test_t_ = 0.0f;
+            ride_test_t_ = st == "platform" ? -1.0f : 0.0f;  // platform: just stand there and look
             ride_place_pending_ = true;
           }
           if (st == "fly" && aviation_.loaded()) {  // test aid: in the light aircraft lined up on the runway
@@ -931,6 +936,20 @@ void App::placeRideTest() {
   const double off = Trains::platformOffset(kind) - 1.4;
   player_.pos = {sn.pos.x + sx * side * off, sn.pos.y + sy * side * off, sn.pos.z + 0.05};
   player_.yaw = static_cast<float>(hd + (side > 0 ? -PI / 2 : PI / 2));
+  if (opt_.state == "platform") {  // on the platform just ahead of the train's nose, looking back at it
+    for (const auto& t : trains_.trains()) {
+      if (t.line != sn.line || t.at_station != opt_.station) continue;
+      rj::geo::Vec3d p;
+      float yaw, pitch;
+      trains_.carPose(t, 0, p, yaw, pitch);
+      const double fx = std::sin(yaw), fy = std::cos(yaw), lx = -fy, ly = fx;  // train forward / left (platform side)
+      const double ahead = t.car_len * 0.5 + 6.0, lat = Trains::platformOffset(kind) - Trains::trackOffset(kind) - 1.2;
+      player_.pos = {p.x + fx * ahead + lx * lat, p.y + fy * ahead + ly * lat, sn.pos.z + 0.05};
+      player_.yaw = static_cast<float>(yaw + PI - 0.28);
+      player_.pitch = -0.06f;
+      break;
+    }
+  }
   player_.vel_z = 0;
   player_.fly = false;
   TraceLog(LOG_INFO, "RJ: ride test on %s platform (side %.0f) at %.1f %.1f %.1f", sn.name.c_str(), side, player_.pos.x, player_.pos.y, player_.pos.z);
@@ -938,6 +957,9 @@ void App::placeRideTest() {
 
 void App::updateRideTest() {
   if (ride_test_t_ < 0.0f || ride_test_done_) return;
+  if (opt_.state == "trainjob" && ride_train_ >= 0 && drive_train_ < 0) {  // take the controls once aboard
+    if (const Train* t = trains_.train(ride_train_); t && t->at_station >= 0) startTrainDriving();
+  }
   if (frame_ % 60 == 0)
     TraceLog(LOG_INFO, "RJ: ride test t %.1f train %d ferry %d jet %d prompt '%s' pos %.1f %.1f %.1f", ride_test_t_, ride_train_, ride_ferry_, ride_jet_,
              prompt_.c_str(), player_.pos.x, player_.pos.y, player_.pos.z);
@@ -1424,6 +1446,24 @@ std::vector<PointLight> App::collectLights(const Camera3D& cam) const {
   for (const auto& p : shops) {
     const double dx = p.x - c.x, dy = p.y - c.y;
     cand.push_back({dx * dx + dy * dy + 400.0, {enuToRl(p), 9.0f, Vector3Scale(Vector3{1.0f, 0.93f, 0.82f}, 7.0f * std::max(k, 0.25f) * lighting_.occupancy.z)}});
+  }
+  // headlights: the player's car throws light on the road ahead; nearby traffic too
+  auto beam = [&](const Vehicle& v, double ahead, float range, float power, double prio) {
+    const rj::geo::Vec3d p{v.pos.x + std::sin(v.yaw) * ahead, v.pos.y + std::cos(v.yaw) * ahead, v.pos.z + 0.9};
+    cand.push_back({prio, {enuToRl(p), range, Vector3Scale(Vector3{1.0f, 0.95f, 0.86f}, power * k)}});
+  };
+  if (driving_.hasCar() && driving_.active()) {
+    beam(driving_.car(), 7.0, 15.0f, 20.0f, 0.0);
+    beam(driving_.car(), 17.0, 22.0f, 14.0f, 1.0);
+  }
+  {
+    std::vector<std::pair<double, const Vehicle*>> near;
+    for (const auto& v : traffic_.vehicles()) {
+      const double dx = v.pos.x - c.x, dy = v.pos.y - c.y, d2 = dx * dx + dy * dy;
+      if (d2 < 140.0 * 140.0) near.push_back({d2, &v});
+    }
+    std::sort(near.begin(), near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < near.size() && i < 6; ++i) beam(*near[i].second, 7.0, 13.0f, 9.0f, near[i].first + 900.0);
   }
   std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
   for (size_t i = 0; i < cand.size() && out.size() < Renderer::kMaxLights; ++i) out.push_back(cand[i].l);
