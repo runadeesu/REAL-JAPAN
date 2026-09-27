@@ -4,13 +4,18 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "config/settings.hpp"
+#include "game/aircraft.hpp"
 #include "game/driving.hpp"
+#include "game/ferries.hpp"
+#include "game/jobs.hpp"
 #include "game/pedestrians.hpp"
 #include "game/player.hpp"
 #include "game/town_sim.hpp"
@@ -52,6 +57,8 @@ struct LaunchOptions {
   int station = -1;       // test aid (--state ride): stand on this station's platform and board the next train
   float ride = 0.0f;      // test aid: ride this many seconds before the screenshot
   bool alight = false;    // test aid: after --ride, alight at the next stop
+  int sim_speed = 1;      // test aid: transport simulation steps per frame (trains, ferries, aircraft)
+  std::string fly_script; // test aid (--state fly): "throttle:elevator:aileron:seconds,..."
 };
 
 class App {
@@ -61,7 +68,7 @@ class App {
 
  private:
   enum class Screen { Boot, Loading, Title, Settings, Slots, Credits, Game, Pause, Phone, Fatal };
-  enum class PhoneApp { Home, Map, Clock, Wallet, Town };
+  enum class PhoneApp { Home, Map, Clock, Wallet, Town, Work, Hobby };
 
   bool boot();
   void shutdown();
@@ -156,6 +163,86 @@ class App {
   void updateTransportActions();
   Camera3D rideCamera() const;
   std::string lineName(int line) const;
+  Aviation aviation_;
+  int ride_jet_ = -1;                    // aboard this scheduled flight (id)
+  bool jet_flown_ = false;               // the flight has left the stand (alighting then ends the trip)
+  float jet_look_yaw_ = -1.25f, jet_look_pitch_ = -0.12f;
+  bool flying_ = false, fly_cockpit_ = false;
+  float fly_look_yaw_ = 0.0f, fly_look_pitch_ = 0.0f;
+  PlaneControls plane_in_;
+  float crash_t_ = -1.0f;
+  struct FlyLeg {
+    float throttle, elevator, aileron, seconds;
+  };
+  std::vector<FlyLeg> fly_legs_;
+  bool fly_test_pending_ = false;
+  bool ride_place_pending_ = false;  // --state ride: stand on the platform once the stations are placed
+  void placeRideTest();
+  void updateAviationActions();
+  Camera3D jetCamera() const;
+  // --- work & hobbies (app_activities.cpp) ---
+  Jobs jobs_;
+  int drive_train_ = -1;  // the train the player drives (also ride_train_)
+  int train_stops_ = 0;
+  int64_t train_pay_ = 0;
+  std::string train_msg_;
+  float train_msg_t_ = 0;
+  struct Till {
+    bool on = false;
+    int stage = 0;  // 0 scanning, 1 change
+    std::vector<int> items;  // catalogue indices
+    std::vector<bool> scanned;
+    bool age_checked = false;
+    int64_t tendered = 0, entered = 0;
+    int served = 0, mistakes = 0;
+    int64_t pay = 0;
+    std::string msg;
+    float msg_t = 0;
+    uint32_t rng = 12345u;
+  } till_;
+  struct Fishing {
+    int stage = 0;  // 0 idle, 1 waiting, 2 bite, 3 reeling
+    double t = 0, wait = 0, tension = 0, dist = 0, strength = 1;
+    int species = -1;
+    float size = 0;
+    rj::geo::Vec3d bobber;
+    uint32_t rng = 777u;
+  } fish_;
+  std::map<std::string, float> fish_log_;  // species key -> best size (cm)
+  int fish_count_ = 0;
+  bool photo_mode_ = false, photo_request_ = false;
+  float photo_fov_ = 0;
+  std::set<std::string> photo_spots_;
+  int photos_taken_ = 0;
+  struct Worship {
+    int stage = 0;  // 0 idle, 1.. sequence
+    double t = 0;
+    bool temple = false;
+    std::string place;
+    float pitch0 = 0;
+  } worship_;
+  std::string last_omikuji_;
+  std::set<std::string> goshuin_;
+  int worship_count_ = 0;
+  float phone_scroll_ = 0;
+  void updateActivities(float dt);
+  void drawActivityHud();
+  void drawPhoneWork(float cx, float yy, float cw, float bottom);
+  void drawPhoneHobby(float cx, float yy, float cw, float bottom);
+  void drawWorldMarkers(const Camera3D& cam);
+  bool waterAhead(double& sea_z, rj::geo::Vec3d& spot) const;
+  void startTrainDriving();
+  void updateTrainDriving();
+  Camera3D cabCamera() const;
+  void tillNextCustomer();
+  void takePhoto();
+  Ferries ferries_;
+  int ride_ferry_ = -1;                  // aboard this ferry (id)
+  double ferry_x_ = 0, ferry_y_ = 0;     // position on its open deck (ship frame)
+  float ferry_look_yaw_ = 0.0f;          // view relative to the ship's heading
+  bool ferry_test_pending_ = false;      // --state ferry: put the player beside the docked ship
+  void updateFerryActions();
+  std::string pierName(int pier) const;
   Driving driving_;
   float drive_look_yaw_ = 0.0f, drive_look_pitch_ = 0.0f;
   bool drive_first_person_ = false;
@@ -169,6 +256,7 @@ class App {
   float ride_test_t_ = -1.0f;  // >= 0: ride test running (seconds since boarding)
   bool ride_test_done_ = false;
   bool autoKeyE() const;
+  void updateRideTest();
   bool scriptBusy() const;
   bool traffic_placed_ = false;
   void placeRoads();  // road graph, signal groups, markings and the walk network in the current origin

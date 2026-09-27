@@ -193,6 +193,31 @@ void Trains::update(double dt) {
       continue;
     }
     const double amax = L.kind == LineKind::Shinkansen ? 0.7 : 0.9, brake = L.kind == LineKind::Shinkansen ? 0.8 : 1.0;
+    if (t.manual) {
+      // player's notches: power up to 0.9 m/s^2, service brake up to 1.0 m/s^2, emergency 1.4
+      double a = t.notch > 0 ? amax * t.notch / 5.0 : t.notch <= -8 ? -1.4 : t.notch < 0 ? -brake * (-t.notch) / 7.0 : -0.03;
+      // ATS: train ahead on the same track, overspeed
+      bool ats = false;
+      for (const auto& o : trains_) {
+        if (&o == &t || o.line != t.line || o.dir != t.dir) continue;
+        double gap = (o.s - t.dir * o.cars * o.car_len - t.s) * t.dir;
+        if (L.closed) {
+          gap = std::fmod(gap, L.length);
+          if (gap < 0) gap += L.length;
+        }
+        if (gap > 0 && gap < 60.0 + t.v * t.v / (2.0 * brake) && t.v > 0.5) ats = true;
+      }
+      if (t.v > t.vmax + 1.0) ats = true;
+      if (ats) a = std::min(a, -1.2);
+      ats_[static_cast<size_t>(t.id) % 64] = ats;
+      t.v = std::max(0.0, t.v + a * dt);
+      t.s += t.dir * t.v * dt;
+      if (L.closed) {
+        t.s = std::fmod(t.s, L.length);
+        if (t.s < 0) t.s += L.length;
+      }
+      continue;
+    }
     double target;
     if (t.next_stop >= 0) {
       target = stopMark(t, t.next_stop);
@@ -240,6 +265,45 @@ void Trains::update(double dt) {
       if (t.s < 0) t.s += L.length;
     }
   }
+}
+
+void Trains::setManual(int id, bool on) {
+  for (auto& t : trains_)
+    if (t.id == id) {
+      t.manual = on;
+      t.notch = 0;
+      if (!on && t.at_station < 0) chooseNextStop(t);
+    }
+}
+
+void Trains::setNotch(int id, int notch) {
+  for (auto& t : trains_)
+    if (t.id == id) t.notch = std::clamp(notch, -8, 5);
+}
+
+double Trains::distToStop(const Train& t) const {
+  if (t.next_stop < 0) return 1e9;
+  const auto& L = lines_[static_cast<size_t>(t.line)];
+  double d = (stopMark(t, t.next_stop) - t.s) * t.dir;
+  if (L.closed) {
+    d = std::fmod(d, L.length);
+    if (d < -L.length * 0.5) d += L.length;
+    if (d > L.length * 0.5) d -= L.length;
+  }
+  return d;
+}
+
+bool Trains::openDoors(int id, double& stop_error) {
+  for (auto& t : trains_)
+    if (t.id == id && t.manual && t.v < 0.1 && t.next_stop >= 0 && t.at_station < 0) {
+      const double d = distToStop(t);
+      if (std::fabs(d) > 8.0) return false;
+      stop_error = -d;  // + overran, - short of the mark
+      t.at_station = t.next_stop;
+      t.dwell = 20.0;
+      return true;
+    }
+  return false;
 }
 
 const Train* Trains::train(int id) const {

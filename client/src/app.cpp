@@ -79,6 +79,12 @@ bool App::boot() {
     std::string rerr;
     if (std::filesystem::exists(slice_dir_ / "rail.txt") && !trains_.load(slice_dir_ / "rail.txt", rerr))
       TraceLog(LOG_WARNING, "RJ: trains disabled: %s", rerr.c_str());
+    std::string ferr;
+    if (std::filesystem::exists(slice_dir_ / "transport.txt") && !ferries_.load(slice_dir_ / "transport.txt", ferr))
+      TraceLog(LOG_WARNING, "RJ: ferries disabled: %s", ferr.c_str());
+    std::string aerr;
+    if (std::filesystem::exists(slice_dir_ / "transport.txt") && !aviation_.load(slice_dir_ / "transport.txt", aerr))
+      TraceLog(LOG_WARNING, "RJ: aviation disabled: %s", aerr.c_str());
   }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
@@ -288,6 +294,8 @@ void App::applyLaunchOverrides() {
 void App::placeRoads() {
   signals_.rebuild(world_);
   if (trains_.loaded()) trains_.place(world_);
+  if (ferries_.loaded()) ferries_.place(world_);
+  if (aviation_.loaded()) aviation_.place(world_);
   // Large worlds (the island) stream: markings and the walk network cover the area around the player.
   const bool regional = world_.knownCount() > 8;
   const rj::geo::Vec3d c = in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0};
@@ -434,23 +442,31 @@ void App::update(float dt) {
           }
           if (st == "ride" && trains_.loaded() && opt_.station >= 0 &&
               opt_.station < static_cast<int>(trains_.stations().size())) {
-            // test aid: stand on the platform beside the next train to stop here, board it, ride
-            const Station& sn = trains_.stations()[static_cast<size_t>(opt_.station)];
             ride_test_t_ = 0.0f;
-            const double hd = sn.heading * DEG2RAD;
-            const double sx = std::cos(hd), sy = -std::sin(hd);
-            const auto kind = trains_.lines()[static_cast<size_t>(sn.line)].kind;
-            double side = 1.0;  // the platform of the first train that stops here (dir +1: left of the heading)
-            for (const auto& t : trains_.trains())
-              if (t.line == sn.line) {
-                side = t.dir > 0 ? -1.0 : 1.0;
-                if (t.at_station == opt_.station) break;
-              }
-            const double off = Trains::platformOffset(kind) - 1.4;
-            player_.pos = {sn.pos.x + sx * side * off, sn.pos.y + sy * side * off, sn.pos.z + 0.05};
-            player_.yaw = static_cast<float>(hd + (side > 0 ? -PI / 2 : PI / 2));
-            player_.vel_z = 0;
-            player_.fly = false;
+            ride_place_pending_ = true;
+          }
+          if (st == "fly" && aviation_.loaded()) {  // test aid: in the light aircraft lined up on the runway
+            fly_test_pending_ = true;
+            for (size_t p0 = 0; p0 < opt_.fly_script.size();) {
+              size_t p1 = opt_.fly_script.find(',', p0);
+              if (p1 == std::string::npos) p1 = opt_.fly_script.size();
+              FlyLeg L{};
+              if (std::sscanf(opt_.fly_script.substr(p0, p1 - p0).c_str(), "%f:%f:%f:%f", &L.throttle, &L.elevator, &L.aileron, &L.seconds) == 4)
+                fly_legs_.push_back(L);
+              p0 = p1 + 1;
+            }
+          }
+          if (st == "jet" && aviation_.loaded()) {  // test aid: at the terminal, board the next flight, ride
+            ride_test_t_ = 0.0f;
+            const Airport& ap = aviation_.airport();
+            const rj::geo::Vec3d nx{ap.twy_a.x - ap.rwy_a.x, ap.twy_a.y - ap.rwy_a.y, 0};
+            const double l = std::max(1.0, std::hypot(nx.x, nx.y));
+            player_.pos = {ap.terminal.x + nx.x / l * 140.0, ap.terminal.y + nx.y / l * 140.0, ap.terminal.z};
+            player_.snapToGround(world_);
+          }
+          if (st == "ferry" && ferries_.loaded()) {  // test aid: beside the ship at pier --station, board, ride
+            ferry_test_pending_ = true;
+            ride_test_t_ = 0.0f;
           }
           if (st.rfind("phone", 0) == 0) {
             screen_ = Screen::Phone;
@@ -458,6 +474,8 @@ void App::update(float dt) {
             if (st == "phone:town") phone_app_ = PhoneApp::Town;
             if (st == "phone:clock") phone_app_ = PhoneApp::Clock;
             if (st == "phone:wallet") phone_app_ = PhoneApp::Wallet;
+            if (st == "phone:work") phone_app_ = PhoneApp::Work;
+            if (st == "phone:hobby") phone_app_ = PhoneApp::Hobby;
           }
         }
         if (!opt_.screenshot.empty()) shot_frames_ = opt_.frames;
@@ -468,7 +486,7 @@ void App::update(float dt) {
     return;
   }
 
-  const bool want_lock = (screen_ == Screen::Game);
+  const bool want_lock = (screen_ == Screen::Game) && !till_.on;
   if (want_lock != cursor_locked_) {
     if (want_lock) DisableCursor();
     else EnableCursor();
@@ -507,7 +525,142 @@ void App::update(float dt) {
           }
       }
       if (trains_.loaded()) trains_.update(std::min(dt, 0.1f));
-      if (ride_train_ >= 0) {
+      for (int k = 0; k < opt_.sim_speed; ++k) {
+        if (k > 0 && trains_.loaded()) trains_.update(std::min(dt, 0.1f));
+        if (ferries_.loaded()) ferries_.update(std::min(dt, 0.1f), render_time_ + k * 0.1f, lighting_.wind);
+        if (aviation_.loaded()) aviation_.update(std::min(dt, 0.1f), world_);
+      }
+      if (ride_place_pending_ && traffic_placed_) {
+        ride_place_pending_ = false;
+        placeRideTest();
+      }
+      if (fly_test_pending_ && traffic_placed_) {
+        fly_test_pending_ = false;
+        const Airport& ap = aviation_.airport();
+        const double dx = ap.rwy_b.x - ap.rwy_a.x, dy = ap.rwy_b.y - ap.rwy_a.y, l = std::max(1.0, std::hypot(dx, dy));
+        aviation_.plane().reset({ap.rwy_a.x + dx / l * 120.0, ap.rwy_a.y + dy / l * 120.0, ap.rwy_a.z}, std::atan2(dx, dy) * RAD2DEG, world_);
+        flying_ = true;
+        fly_cockpit_ = std::getenv("RJ_FLY_COCKPIT") != nullptr;
+        plane_in_ = PlaneControls{};
+      }
+      if (ferry_test_pending_ && traffic_placed_) {
+        ferry_test_pending_ = false;
+        const int pi = std::clamp(opt_.station, 0, static_cast<int>(ferries_.piers().size()) - 1);
+        if (const Ferry* f = ferries_.dockedAt(pi)) {
+          player_.pos = ferries_.gangwayPier(*f);
+          player_.snapToGround(world_);
+          const rj::geo::Vec3d fp = f->pos;
+          player_.yaw = static_cast<float>(std::atan2(fp.x - player_.pos.x, fp.y - player_.pos.y));
+        }
+      }
+      if (ride_ferry_ >= 0) {
+        // Aboard: walk about the open deck (WASD), look around with the mouse; the ship carries you.
+        if (const Ferry* f = ferries_.ship(ride_ferry_)) {
+          const ShipClass& C = Ferries::shipClass(f->cls);
+          if (screen_ == Screen::Game) {
+            const Vector2 md = GetMouseDelta();
+            const float sens = 0.0022f * settings_.mouse_sensitivity;
+            ferry_look_yaw_ = std::remainder(ferry_look_yaw_ + md.x * sens, 2.0f * PI);
+            player_.pitch = std::clamp(player_.pitch + (settings_.invert_y ? md.y : -md.y) * sens, -1.4f, 1.4f);
+            const float fwd = (IsKeyDown(KEY_W) ? 1.0f : 0.0f) - (IsKeyDown(KEY_S) ? 1.0f : 0.0f);
+            const float side = (IsKeyDown(KEY_D) ? 1.0f : 0.0f) - (IsKeyDown(KEY_A) ? 1.0f : 0.0f);
+            const float spd = (IsKeyDown(KEY_LEFT_SHIFT) ? 3.2f : 1.4f) * dt;
+            const double a = ferry_look_yaw_;
+            ferry_x_ += (std::sin(a) * fwd + std::cos(a) * side) * spd;
+            ferry_y_ += (std::cos(a) * fwd - std::sin(a) * side) * spd;
+          }
+          ferry_x_ = std::clamp(ferry_x_, -static_cast<double>(C.deck_x), static_cast<double>(C.deck_x));
+          ferry_y_ = std::clamp(ferry_y_, C.deck_y0 + 0.5, C.deck_y1 - 0.5);
+          const double hx = C.house_x + 0.35, hy0 = C.house_y0 - 0.35, hy1 = C.house_y1 + 0.35;
+          if (std::fabs(ferry_x_) < hx && ferry_y_ > hy0 && ferry_y_ < hy1) {  // round the deckhouse
+            const double dx = hx - std::fabs(ferry_x_), d0 = ferry_y_ - hy0, d1 = hy1 - ferry_y_;
+            if (dx <= d0 && dx <= d1) ferry_x_ = ferry_x_ >= 0 ? hx : -hx;
+            else if (d0 < d1) ferry_y_ = hy0;
+            else ferry_y_ = hy1;
+          }
+          player_.pos = ferries_.toWorld(*f, ferry_x_, ferry_y_, C.deck_z);
+          player_.yaw = f->yaw + ferry_look_yaw_;
+          player_.cam_z = player_.pos.z;
+          player_.cam_z_init = true;
+          player_.bob_amount = 0.0f;
+          if (f->phase == Ferry::Phase::Offmap) ferries_.fastForwardOffmap(f->id);
+        } else {
+          ride_ferry_ = -1;
+        }
+      } else if (ride_jet_ >= 0) {
+        // Scheduled flight: seated at the window, look around with the mouse.
+        if (screen_ == Screen::Game) {
+          const Vector2 md = GetMouseDelta();
+          const float sens = 0.0022f * settings_.mouse_sensitivity;
+          jet_look_yaw_ = std::clamp(jet_look_yaw_ + md.x * sens, -2.4f, 2.4f);
+          jet_look_pitch_ = std::clamp(jet_look_pitch_ + (settings_.invert_y ? md.y : -md.y) * sens, -1.1f, 1.1f);
+        }
+        if (const Airliner* a = aviation_.airliner(ride_jet_)) {
+          if (a->phase != Airliner::Phase::AtStand) jet_flown_ = true;
+          if (a->phase == Airliner::Phase::Offmap) aviation_.fastForwardOffmap(a->id);
+          else player_.pos = {a->pos.x, a->pos.y, a->pos.z - 2.4};
+        } else {
+          ride_jet_ = -1;
+        }
+      } else if (flying_) {
+        // Light aircraft: W/S pitch, A/D roll, Q/E rudder, Shift/Ctrl throttle, F/R flaps, Space brakes.
+        LightPlane& pl = aviation_.plane();
+        const bool stopped = pl.onGround() && pl.airspeed() < 1.0 && !pl.crashed();
+        if (screen_ == Screen::Game) {
+          const Vector2 md = GetMouseDelta();
+          const float sens = 0.0022f * settings_.mouse_sensitivity;
+          fly_look_yaw_ = std::clamp(fly_look_yaw_ + md.x * sens, -2.8f, 2.8f);
+          fly_look_pitch_ = std::clamp(fly_look_pitch_ + (settings_.invert_y ? md.y : -md.y) * sens, -1.0f, 1.0f);
+          if (IsKeyPressed(KEY_V)) fly_cockpit_ = !fly_cockpit_;
+          if (IsKeyPressed(KEY_E) && stopped && fly_legs_.empty()) {
+            const rj::geo::Vec3d r = pl.right();
+            player_.pos = {pl.pos().x - r.x * 1.7, pl.pos().y - r.y * 1.7, pl.pos().z};
+            player_.snapToGround(world_);
+            player_.yaw = static_cast<float>(pl.heading() * DEG2RAD);
+            flying_ = false;
+            toast(tr("fly.left"));
+          } else {
+            auto key = [](int k) { return IsKeyDown(k) ? 1.0f : 0.0f; };
+            plane_in_.elevator = key(KEY_S) - key(KEY_W) + key(KEY_DOWN) - key(KEY_UP);
+            plane_in_.aileron = key(KEY_D) - key(KEY_A) + key(KEY_RIGHT) - key(KEY_LEFT);
+            plane_in_.rudder = (stopped ? 0.0f : key(KEY_E)) - key(KEY_Q);
+            plane_in_.throttle = std::clamp(plane_in_.throttle + (key(KEY_LEFT_SHIFT) - key(KEY_LEFT_CONTROL)) * 0.6f * dt, 0.0f, 1.0f);
+            if (IsKeyPressed(KEY_F)) plane_in_.flaps = std::min(3, plane_in_.flaps + 1);
+            if (IsKeyPressed(KEY_R)) plane_in_.flaps = std::max(0, plane_in_.flaps - 1);
+            plane_in_.brake = IsKeyDown(KEY_SPACE);
+          }
+        }
+        if (!fly_legs_.empty()) {  // test aid
+          auto& L = fly_legs_.front();
+          plane_in_.throttle = L.throttle;
+          plane_in_.elevator = L.elevator;
+          plane_in_.aileron = L.aileron;
+          plane_in_.brake = false;
+          if ((L.seconds -= std::min(dt, 0.05f)) <= 0) fly_legs_.erase(fly_legs_.begin());
+          if (frame_ % 20 == 0)
+            TraceLog(LOG_INFO, "RJ: fly v %.1f kt alt %.0f m vs %.1f pitch %.1f roll %.1f aoa %.1f ground %d", pl.airspeed() * 1.944,
+                     pl.pos().z - aviation_.airport().rwy_a.z, pl.verticalSpeed(), pl.pitchDeg(), pl.rollDeg(), pl.alpha() * RAD2DEG, pl.onGround());
+        }
+        if (flying_) {
+          pl.update(dt, world_, plane_in_, weather_.now().wind_ms);
+          player_.pos = pl.pos();
+          if (pl.crashed()) {
+            if (crash_t_ < 0) {
+              crash_t_ = 0;
+              toast(tr("fly.crashed"));
+            }
+            crash_t_ += dt;
+            if (crash_t_ > 3.0f) {
+              crash_t_ = -1;
+              flying_ = false;
+              aviation_.resetPlane(world_);
+              const rj::geo::Vec3d r = aviation_.plane().right();
+              player_.pos = {aviation_.plane().pos().x - r.x * 2.0, aviation_.plane().pos().y - r.y * 2.0, aviation_.plane().pos().z};
+              player_.snapToGround(world_);
+            }
+          }
+        }
+      } else if (ride_train_ >= 0) {
         // Riding: the view turns with the car; look around with the mouse.
         if (screen_ == Screen::Game) {
           const Vector2 md = GetMouseDelta();
@@ -548,7 +701,7 @@ void App::update(float dt) {
         player_.pos = driving_.car().pos;
         player_.yaw = driving_.car().yaw + drive_look_yaw_;
       } else {
-        player_.update(dt, world_, settings_, screen_ == Screen::Game, insideInterior(), nearby);
+        player_.update(dt, world_, settings_, screen_ == Screen::Game && !till_.on && worship_.stage == 0 && fish_.stage == 0, insideInterior(), nearby);
       }
       if (!inside_id_.empty() && player_.left_interior) {
         // Walked up the stairs and out onto the pavement.
@@ -578,7 +731,11 @@ void App::update(float dt) {
       if (screen_ == Screen::Game) {
         updateInteriorAction();
         updateTransportActions();
+        updateFerryActions();
+        updateAviationActions();
         updateDriveActions();
+        updateRideTest();
+        updateActivities(dt);
         if (inside_id_.empty()) {
           hover_ = world_.pick(player_.eyeEnu(), player_.forwardEnu(), 300.0);
           hover_walker_ =
@@ -587,7 +744,13 @@ void App::update(float dt) {
           hover_.reset();
           hover_walker_ = nullptr;
         }
-        if (IsKeyPressed(KEY_ESCAPE)) screen_ = Screen::Pause;
+        if (IsKeyPressed(KEY_ESCAPE) && photo_mode_) {
+          photo_mode_ = false;
+        } else if (IsKeyPressed(KEY_ESCAPE) && till_.on) {
+          till_.on = false;
+        } else if (IsKeyPressed(KEY_ESCAPE) && fish_.stage == 0) {
+          screen_ = Screen::Pause;
+        }
         if (IsKeyPressed(KEY_TAB)) {
           screen_ = Screen::Phone;
           phone_app_ = PhoneApp::Home;
@@ -734,19 +897,212 @@ Camera3D App::rideCamera() const {
   return c;
 }
 
+void App::placeRideTest() {
+  // test aid: stand on the platform beside the next train to stop here (boarding is automatic)
+  const Station& sn = trains_.stations()[static_cast<size_t>(opt_.station)];
+  const double hd = sn.heading * DEG2RAD;
+  const double sx = std::cos(hd), sy = -std::sin(hd);
+  const auto kind = trains_.lines()[static_cast<size_t>(sn.line)].kind;
+  double side = 1.0;  // the platform of the first train that stops here (dir +1: left of the heading)
+  for (const auto& t : trains_.trains())
+    if (t.line == sn.line) {
+      side = t.dir > 0 ? -1.0 : 1.0;
+      if (t.at_station == opt_.station) break;
+    }
+  const double off = Trains::platformOffset(kind) - 1.4;
+  player_.pos = {sn.pos.x + sx * side * off, sn.pos.y + sy * side * off, sn.pos.z + 0.05};
+  player_.yaw = static_cast<float>(hd + (side > 0 ? -PI / 2 : PI / 2));
+  player_.vel_z = 0;
+  player_.fly = false;
+  TraceLog(LOG_INFO, "RJ: ride test on %s platform (side %.0f) at %.1f %.1f %.1f", sn.name.c_str(), side, player_.pos.x, player_.pos.y, player_.pos.z);
+}
+
+void App::updateRideTest() {
+  if (ride_test_t_ < 0.0f || ride_test_done_) return;
+  if (frame_ % 60 == 0)
+    TraceLog(LOG_INFO, "RJ: ride test t %.1f train %d ferry %d jet %d prompt '%s' pos %.1f %.1f %.1f", ride_test_t_, ride_train_, ride_ferry_, ride_jet_,
+             prompt_.c_str(), player_.pos.x, player_.pos.y, player_.pos.z);
+  if (ride_train_ >= 0 || ride_ferry_ >= 0 || ride_jet_ >= 0) {
+    ride_test_t_ += std::min(GetFrameTime(), 0.1f) * static_cast<float>(opt_.sim_speed);
+    if (!opt_.alight && ride_test_t_ >= opt_.ride) ride_test_done_ = true;
+  } else if (ride_test_t_ > 0.0f) {
+    ride_test_t_ += std::min(GetFrameTime(), 0.1f);  // alighted: settle for a moment
+    if (ride_test_t_ > opt_.ride + 1.0f) ride_test_done_ = true;
+  }
+}
+
 bool App::autoKeyE() const {
-  if (ride_test_t_ < 0.0f || ride_test_done_) return false;
-  if (ride_train_ < 0) return frame_ % 20 == 0;  // board
+  if (ride_test_t_ < 0.0f || ride_test_done_ || ferry_test_pending_ || ride_place_pending_) return false;
+  if (ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0) return frame_ % 20 == 0;  // board
   return opt_.alight && ride_test_t_ >= opt_.ride && frame_ % 20 == 0;  // alight at the next stop
 }
 
 bool App::scriptBusy() const {
-  if (player_.auto_forward_s > 0.0f || !walk_legs_.empty() || !drive_legs_.empty() || drive_spawn_pending_) return true;
+  if (player_.auto_forward_s > 0.0f || !walk_legs_.empty() || !drive_legs_.empty() || drive_spawn_pending_ || ferry_test_pending_ || ride_place_pending_ ||
+      fly_test_pending_ || !fly_legs_.empty())
+    return true;
   return ride_test_t_ >= 0.0f && !ride_test_done_;
 }
 
+std::string App::pierName(int pier) const { return tr("ferry.pier." + std::to_string(pier)); }
+
+Camera3D App::jetCamera() const {
+  Camera3D c{};
+  const Airliner* a = aviation_.airliner(ride_jet_);
+  if (!a) return player_.camera(settings_.fov);
+  const Vector3 p = enuToRl(a->pos);
+  const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-a->roll), MatrixRotateX(a->pitch)), MatrixRotateY(-a->yaw)),
+                                  MatrixTranslate(p.x, p.y, p.z));
+  const Vector3 eye = Vector3Transform({kJetSeat[0], kJetSeat[2], -kJetSeat[1]}, M);
+  const float ly = jet_look_yaw_, lp = jet_look_pitch_;
+  const Vector3 dir_m{std::sin(ly) * std::cos(lp), std::sin(lp), -std::cos(ly) * std::cos(lp)};  // model -> raylib axes
+  const Vector3 tgt = Vector3Transform(Vector3Add({kJetSeat[0], kJetSeat[2], -kJetSeat[1]}, dir_m), M);
+  const Vector3 up = Vector3Subtract(Vector3Transform({kJetSeat[0], kJetSeat[2] + 1.0f, -kJetSeat[1]}, M), eye);
+  c.position = eye;
+  c.target = tgt;
+  c.up = Vector3Normalize(up);
+  c.fovy = settings_.fov;
+  c.projection = CAMERA_PERSPECTIVE;
+  return c;
+}
+
+void App::updateAviationActions() {
+  if (!aviation_.loaded() || !inside_id_.empty() || driving_.active() || ride_train_ >= 0 || ride_ferry_ >= 0) return;
+  const bool e = IsKeyPressed(KEY_E) || autoKeyE();
+  const Airport& ap = aviation_.airport();
+  const rj::geo::Vec3d nxv{ap.twy_a.x - ap.rwy_a.x, ap.twy_a.y - ap.rwy_a.y, 0};
+  const double nl = std::max(1.0, std::hypot(nxv.x, nxv.y));
+  const rj::geo::Vec3d landside{ap.terminal.x + nxv.x / nl * 140.0, ap.terminal.y + nxv.y / nl * 140.0, ap.terminal.z};
+  if (ride_jet_ >= 0) {
+    const Airliner* a = aviation_.airliner(ride_jet_);
+    if (!a) {
+      ride_jet_ = -1;
+      return;
+    }
+    const std::string kt = std::to_string(static_cast<int>(a->v * 1.944));
+    const std::string ft = std::to_string(static_cast<int>(std::max(0.0, (a->pos.z - 2.4 - ap.rwy_a.z) * 3.281) / 100.0) * 100);
+    using P = Airliner::Phase;
+    switch (a->phase) {
+      case P::AtStand:
+        prompt_ = jet_flown_ ? tr("jet.alight") : tr("jet.boarding");
+        if (e && (jet_flown_ || a->timer > 20.0)) {
+          aviation_.setAboard(a->id, false);
+          ride_jet_ = -1;
+          player_.pos = landside;
+          player_.snapToGround(world_);
+          player_.vel_z = 0;
+          toast(tr(jet_flown_ ? "jet.alighted" : "jet.left_before"));
+        }
+        break;
+      case P::Pushback:
+      case P::TaxiOut: prompt_ = tr("jet.taxi_out"); break;
+      case P::Takeoff: prompt_ = i18n_.f("jet.takeoff", {{"kt", kt}}); break;
+      case P::Climb: prompt_ = i18n_.f("jet.climb", {{"ft", ft}, {"kt", kt}}); break;
+      case P::Offmap: prompt_ = tr("jet.mainland"); break;
+      case P::Approach: prompt_ = i18n_.f("jet.approach", {{"ft", ft}, {"kt", kt}}); break;
+      case P::Landing: prompt_ = i18n_.f("jet.landing", {{"kt", kt}}); break;
+      case P::TaxiIn: prompt_ = tr("jet.taxi_in"); break;
+    }
+    return;
+  }
+  if (flying_) return;
+  if (!prompt_.empty() || player_.fly) return;
+  if (std::hypot(player_.pos.x - landside.x, player_.pos.y - landside.y) < 50.0) {
+    if (const Airliner* a = aviation_.boardable()) {
+      const int64_t fare = 12800;
+      prompt_ = i18n_.f("jet.board", {{"fare", std::to_string(fare)}});
+      if (e) {
+        if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare, clock_.unixUtc(),
+                                          tr("jet.airline")) != rj::econ::TxResult::Ok) {
+          toast(tr("rail.no_money"));
+          return;
+        }
+        ride_jet_ = a->id;
+        jet_flown_ = false;
+        aviation_.setAboard(a->id, true);
+        jet_look_yaw_ = -1.25f;
+        jet_look_pitch_ = -0.12f;
+        toast(i18n_.f("jet.boarded", {{"fare", std::to_string(fare)}}));
+      }
+    } else {
+      prompt_ = tr("jet.wait");
+    }
+    return;
+  }
+  const LightPlane& pl = aviation_.plane();
+  if (!pl.crashed() && pl.onGround() && std::hypot(player_.pos.x - pl.pos().x, player_.pos.y - pl.pos().y) < 6.5 &&
+      std::fabs(player_.pos.z - pl.pos().z) < 3.0) {
+    prompt_ = tr("fly.enter");
+    if (e) {
+      flying_ = true;
+      fly_cockpit_ = true;
+      fly_look_yaw_ = fly_look_pitch_ = 0.0f;
+      plane_in_ = PlaneControls{};
+      plane_in_.brake = true;
+      toast(tr("fly.entered"));
+    }
+  }
+}
+
+void App::updateFerryActions() {
+  if (!ferries_.loaded() || !inside_id_.empty() || driving_.active() || ride_train_ >= 0 || ride_jet_ >= 0 || flying_) return;
+  const bool e = IsKeyPressed(KEY_E) || autoKeyE();
+  if (ride_ferry_ >= 0) {
+    const Ferry* f = ferries_.ship(ride_ferry_);
+    if (!f) {
+      ride_ferry_ = -1;
+      return;
+    }
+    const int at = ferries_.currentPier(*f);
+    const std::string kn = std::to_string(static_cast<int>(std::lround(std::fabs(f->v) * 1.944)));
+    if (f->phase == Ferry::Phase::Docked && at >= 0 && f->timer > 3.0) {
+      prompt_ = i18n_.f("ferry.alight", {{"pier", pierName(at)}});
+      if (e) {
+        player_.pos = ferries_.gangwayPier(*f);
+        player_.snapToGround(world_);
+        player_.vel_z = 0;
+        player_.fly = false;
+        ride_ferry_ = -1;
+        toast(i18n_.f("ferry.alighted", {{"pier", pierName(at)}}));
+      }
+    } else if (f->phase == Ferry::Phase::Offmap) {
+      prompt_ = tr("ferry.mainland");
+    } else {
+      const int dest = ferries_.destinationPier(*f);
+      prompt_ = dest >= 0 ? i18n_.f("ferry.under_way", {{"pier", pierName(dest)}, {"kn", kn}}) : i18n_.f("ferry.to_mainland", {{"kn", kn}});
+    }
+    return;
+  }
+  if (!prompt_.empty() || player_.fly) return;
+  const int pi = ferries_.pierNear(player_.pos, 20.0);
+  if (pi < 0 || std::fabs(player_.pos.z - (ferries_.piers()[static_cast<size_t>(pi)].pos.z + 2.4)) > 2.5) return;
+  const Ferry* f = ferries_.dockedAt(pi);
+  if (!f) {
+    prompt_ = i18n_.f("ferry.wait", {{"pier", pierName(pi)}});
+    return;
+  }
+  const int dest = ferries_.destinationPier(*f);
+  const int64_t fare = f->cls == 0 ? 480 : 2400;
+  prompt_ = i18n_.f("ferry.board", {{"dest", dest >= 0 ? pierName(dest) : tr("ferry.dest.mainland")}, {"fare", std::to_string(fare)}});
+  if (e) {
+    if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare, clock_.unixUtc(),
+                                      tr("ferry.name")) != rj::econ::TxResult::Ok) {
+      toast(tr("rail.no_money"));
+      return;
+    }
+    const ShipClass& C = Ferries::shipClass(f->cls);
+    double sx, sy;
+    ferries_.toShip(*f, player_.pos, sx, sy);
+    ferry_x_ = sx > 0 ? C.deck_x - 0.6 : -(C.deck_x - 0.6);
+    ferry_y_ = std::clamp(sy, C.deck_y0 + 2.0, C.deck_y1 - 2.0);
+    ferry_look_yaw_ = sx > 0 ? -PI / 2 : PI / 2;  // facing across the deck, away from the pier
+    ride_ferry_ = f->id;
+    toast(i18n_.f("ferry.boarded", {{"fare", std::to_string(fare)}}));
+  }
+}
+
 void App::updateDriveActions() {
-  if (!inside_id_.empty() || ride_train_ >= 0) return;
+  if (!inside_id_.empty() || ride_train_ >= 0 || ride_ferry_ >= 0 || ride_jet_ >= 0 || flying_) return;
   const bool e = IsKeyPressed(KEY_E);
   if (driving_.active()) {
     const Vehicle& c = driving_.car();
@@ -805,17 +1161,8 @@ void App::updateDriveActions() {
 }
 
 void App::updateTransportActions() {
-  if (!trains_.loaded() || !inside_id_.empty() || driving_.active()) return;
+  if (!trains_.loaded() || !inside_id_.empty() || driving_.active() || ride_ferry_ >= 0 || ride_jet_ >= 0 || flying_ || drive_train_ >= 0) return;
   const bool e = IsKeyPressed(KEY_E) || autoKeyE(), x = IsKeyPressed(KEY_X);
-  if (ride_test_t_ >= 0.0f && !ride_test_done_) {  // test aid bookkeeping
-    if (ride_train_ >= 0) {
-      ride_test_t_ += std::min(GetFrameTime(), 0.1f);
-      if (!opt_.alight && ride_test_t_ >= opt_.ride) ride_test_done_ = true;
-    } else if (ride_test_t_ > 0.0f) {
-      ride_test_t_ += std::min(GetFrameTime(), 0.1f);  // alighted: settle for a moment
-      if (ride_test_t_ > opt_.ride + 1.0f) ride_test_done_ = true;
-    }
-  }
   const auto& stations = trains_.stations();
   if (ride_train_ >= 0) {
     const Train* t = trains_.train(ride_train_);
@@ -1068,6 +1415,8 @@ void App::drawWorldView(const Camera3D& cam) {
       }
       renderer_.drawVehicles(traffic_, rear, lighting_);
       renderer_.drawTrains(trains_, rear, -1, 0);
+      renderer_.drawShips(ferries_, rear, lighting_);
+      renderer_.drawAircraft(aviation_, rear, lighting_, -1, nullptr);
       renderer_.drawPedestrians(peds_, lighting_.rain);
     });
   }
@@ -1100,6 +1449,22 @@ void App::drawWorldView(const Camera3D& cam) {
     }
     renderer_.drawVehicles(traffic_, cam, lighting_, driving_.hasCar() ? &driving_.car() : nullptr, cockpit ? &cv : nullptr);
     renderer_.drawTrains(trains_, cam, ride_train_, ride_car_);
+    renderer_.drawShips(ferries_, cam, lighting_);
+    Renderer::FlightView fv;
+    if (flying_) {
+      const LightPlane& pl = aviation_.plane();
+      fv.cockpit = fly_cockpit_;
+      fv.kt = static_cast<float>(pl.airspeed() * 1.944);
+      const auto g = world_.toGeodetic(pl.pos());
+      fv.alt_ft = static_cast<float>((pl.pos().z - world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z) * 3.281);
+      fv.vs_fpm = static_cast<float>(pl.verticalSpeed() * 196.85);
+      fv.heading = static_cast<float>(pl.heading());
+      fv.pitch = static_cast<float>(pl.pitchDeg());
+      fv.roll = static_cast<float>(pl.rollDeg());
+      fv.elevator = pl.controls().elevator;
+      fv.aileron = pl.controls().aileron;
+    }
+    renderer_.drawAircraft(aviation_, cam, lighting_, ride_jet_, flying_ ? &fv : nullptr);
   }
   if (in) {
     renderer_.drawInterior(*in);
@@ -1108,7 +1473,8 @@ void App::drawWorldView(const Camera3D& cam) {
     for (const auto& [id, interior] : world_.interiors()) renderer_.drawInterior(*interior);
   }
   if (in_session_ && screen_ != Screen::Title && !deep) renderer_.drawPedestrians(peds_, lighting_.rain);
-  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active())
+  if (in_session_ && screen_ != Screen::Title && !deep && !photo_request_) drawWorldMarkers(cam);
+  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_)
     renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
   renderer_.drawRain(cam, lighting_, render_time_);
   EndMode3D();
@@ -1146,9 +1512,18 @@ void App::draw() {
     if (auto hit = in->raycast(player_.eyeEnu(), back, len))
       third_dist = static_cast<float>(std::max(0.3, (*hit - 0.25) / len * 4.5));
   }
-  drawWorldView(game_view ? (ride_train_ >= 0      ? rideCamera()
-                                  : driving_.active() ? driving_.camera(settings_.fov, drive_first_person_, drive_look_yaw_, drive_look_pitch_)
-                                                      : player_.camera(settings_.fov, third_dist)) : titleCamera());
+  Camera3D view_cam;
+  if (!game_view) view_cam = titleCamera();
+  else if (ride_train_ >= 0) view_cam = drive_train_ >= 0 ? cabCamera() : rideCamera();
+  else if (ride_jet_ >= 0) view_cam = jetCamera();
+  else if (flying_) view_cam = aviation_.plane().camera(settings_.fov, fly_cockpit_, fly_look_yaw_, fly_look_pitch_);
+  else if (driving_.active()) view_cam = driving_.camera(settings_.fov, drive_first_person_, drive_look_yaw_, drive_look_pitch_);
+  else view_cam = player_.camera(photo_mode_ && photo_fov_ > 0 ? photo_fov_ : settings_.fov, third_dist);
+  drawWorldView(view_cam);
+  if (photo_request_) {  // the frame as seen, before the HUD is drawn
+    photo_request_ = false;
+    takePhoto();
+  }
 
   switch (screen_) {
     case Screen::Title: drawTitle(); break;
@@ -1422,9 +1797,27 @@ void App::drawCredits() {
 // ---------------------------------------------------------------------------
 void App::drawHud() {
   const float vw = ui_.vw();
+  drawActivityHud();
+  if (photo_mode_) return;  // viewfinder only
   const auto g = world_.toGeodetic(player_.pos);
   const auto t = jst();
   const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
+  if (flying_ && screen_ == Screen::Game) {  // flight data
+    const LightPlane& pl = aviation_.plane();
+    const auto g = world_.toGeodetic(pl.pos());
+    const double alt_ft = (pl.pos().z - world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z) * 3.281;
+    const PlaneControls& pc = pl.controls();
+    char buf[200];
+    std::snprintf(buf, sizeof buf, "IAS %3d kt   ALT %5d ft   VS %+5d fpm   HDG %03d", static_cast<int>(pl.airspeed() * 1.944),
+                  static_cast<int>(alt_ft / 10) * 10, static_cast<int>(pl.verticalSpeed() * 196.85 / 10) * 10, static_cast<int>(pl.heading()) % 360);
+    char buf2[160];
+    std::snprintf(buf2, sizeof buf2, "THR %3d%%   FLAPS %d°   RPM %4d", static_cast<int>(pc.throttle * 100), pc.flaps * 10, static_cast<int>(pl.rpm()));
+    ui_.panel({30, 900, 760, 130}, Color{0, 0, 0, 140});
+    ui_.text(buf, 50, 912, 30, theme::kText);
+    ui_.text(buf2, 50, 950, 26, theme::kMuted);
+    ui_.text(tr("fly.help"), 50, 992, 20, theme::kMuted);
+    if (pl.stalled()) ui_.textCentered("STALL", vw / 2, 120, 48, theme::kWarn);
+  }
   if (driving_.active() && screen_ == Screen::Game) {  // speedometer
     const double v = driving_.car().v;
     const std::string kmh = std::to_string(static_cast<int>(std::lround(std::fabs(v) * 3.6)));
@@ -1656,6 +2049,11 @@ void App::drawMap(Rectangle r, double half, bool labels) {
       if (half < 600) ui_.text(p.name, s.x / ui_.scale() + 8, s.y / ui_.scale() - 10, 18, WHITE);
     }
   }
+  if (jobs_.active()) {  // job target
+    const Vector2 s = toScreen(jobs_.target().pos);
+    DrawCircleV(s, 7 * ui_.scale(), theme::kWarn);
+    DrawCircleLinesV(s, 10 * ui_.scale(), BLACK);
+  }
   // Player arrow (north-up map; yaw is the compass heading).
   const float a = player_.yaw;
   const float L = 14 * ui_.scale();
@@ -1690,9 +2088,11 @@ void App::drawPhone() {
       const AppDef apps[] = {{"phone.map", PhoneApp::Map, Color{40, 140, 90, 255}},
                              {"phone.clock", PhoneApp::Clock, Color{60, 90, 190, 255}},
                              {"phone.wallet", PhoneApp::Wallet, Color{200, 140, 30, 255}},
-                             {"phone.town", PhoneApp::Town, Color{170, 60, 150, 255}}};
-      const float bw = (cw - 20) / 2, bh = 120;
-      for (int i = 0; i < 4; ++i) {
+                             {"phone.town", PhoneApp::Town, Color{170, 60, 150, 255}},
+                             {"phone.work", PhoneApp::Work, Color{210, 80, 40, 255}},
+                             {"phone.hobby", PhoneApp::Hobby, Color{40, 150, 170, 255}}};
+      const float bw = (cw - 20) / 2, bh = 100;
+      for (int i = 0; i < 6; ++i) {
         const Rectangle r{cx + (i % 2) * (bw + 20), yy + (i / 2) * (bh + 20), bw, bh};
         DrawRectangleRounded(ui_.px(r), 0.2f, 8, apps[i].c);
         if (ui_.hovered(r)) DrawRectangleRoundedLinesEx(ui_.px(r), 0.2f, 8, 3 * ui_.scale(), WHITE);
@@ -1702,7 +2102,7 @@ void App::drawPhone() {
           phone_app_ = apps[i].app;
         }
       }
-      yy += 2 * (bh + 20) + 10;
+      yy += 3 * (bh + 20) + 10;
       if (ui_.button({cx, yy, cw, 64}, tr("phone.settings"), true, 28)) {
         settings_return_ = Screen::Phone;
         screen_ = Screen::Settings;
@@ -1714,6 +2114,14 @@ void App::drawPhone() {
       ui_.textCentered(tr("phone.hint"), x + w / 2, y + h - 50, 20, theme::kMuted);
       break;
     }
+    case PhoneApp::Work:
+      drawPhoneWork(cx, yy, cw, y + h - 90);
+      back();
+      break;
+    case PhoneApp::Hobby:
+      drawPhoneHobby(cx, yy, cw, y + h - 90);
+      back();
+      break;
     case PhoneApp::Map: {
       ui_.text(tr("phone.map"), cx, yy, 32, theme::kText);
       yy += 50;

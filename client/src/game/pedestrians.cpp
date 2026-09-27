@@ -135,7 +135,8 @@ void Pedestrians::buildNav(const World& world, const Traffic* traffic, const Roa
   // without sidewalks are shared space in Japan and cost only a little more than a sidewalk.
   if (traffic)
     for (const auto& e : traffic->edges()) {
-      const uint8_t c = e.width >= 9.0f ? 120 : e.width >= 6.5f ? 60 : 13;
+      // (wide roads at the grid's maximum so people walk to the crossings rather than jaywalk)
+      const uint8_t c = e.width >= 9.0f ? 255 : e.width >= 6.5f ? 90 : 13;
       for (size_t k = 1; k < e.pts.size(); ++k)
         nav_.costSegment({e.pts[k - 1].x, e.pts[k - 1].y}, {e.pts[k].x, e.pts[k].y}, e.width * 0.5, c);
     }

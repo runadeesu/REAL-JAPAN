@@ -15,13 +15,17 @@
 #include <functional>
 #include <vector>
 
+#include "game/aircraft.hpp"
+#include "game/ferries.hpp"
 #include "game/pedestrians.hpp"
 #include "game/road_markings.hpp"
 #include "game/trains.hpp"
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
 #include "raylib.h"
+#include "render/aircraft.hpp"
 #include "render/humans.hpp"
+#include "render/ships.hpp"
 #include "render/textures.hpp"
 #include "render/trains.hpp"
 #include "render/vehicles.hpp"
@@ -105,6 +109,14 @@ class Renderer {
   void drawOcean(const Camera3D& cam, float sea_y);
   // ride_train / ride_car: the car the player sits in (drawn without glass, with its interior)
   void drawTrains(const Trains& trains, const Camera3D& cam, int ride_train, int ride_car);
+  void drawShips(const Ferries& ferries, const Camera3D& cam, const Lighting& L);
+  // Aircraft: scheduled jets (ride_jet: drawn from the cabin) and the light aircraft (cockpit
+  // instruments when flown from the seat).
+  struct FlightView {
+    bool cockpit = false;
+    float kt = 0, alt_ft = 0, vs_fpm = 0, heading = 0, turn_dps = 0, pitch = 0, roll = 0, elevator = 0, aileron = 0;
+  };
+  void drawAircraft(const Aviation& av, const Camera3D& cam, const Lighting& L, int ride_jet, const FlightView* fv);
   void drawSignals(const TrafficSignals& ts, const Camera3D& cam);
   // extra: the player's car; with a cockpit view it is drawn from the driver's seat (interior, gauges)
   struct CockpitView {
@@ -138,6 +150,8 @@ class Renderer {
   HumanModels humans_;
   Mesh ocean_{};
   TrainModels train_models_;
+  ShipModels ship_models_;
+  AircraftModels aircraft_models_;
   void drawHuman(const Mesh& m, const Matrix& model, Color top, Color bottom, Color skin, Color hair);
   // shadows: 0 = near cascade, 1 = far cascade
   RenderTexture2D shadow_[2]{};

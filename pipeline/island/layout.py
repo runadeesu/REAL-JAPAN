@@ -23,7 +23,8 @@ RUNWAY = ((-3650, -2350), (-1880, -2880), 45.0)  # threshold A, threshold B, wid
 TERMINAL = (-2700, -2250)
 # Ferry terminal on the south-east cape; routes to the islet and off the map.
 FERRY_TERMINAL = (3150, -2150)
-FERRY_ROUTES = [[(3150, -2250), (2800, -2600), (2400, -2780)], [(3150, -2250), (3600, -2900), (4300, -3500)]]
+# (first / last points are the pier heads; the client adds the berthing legs)
+FERRY_ROUTES = [[(3150, -2445), (2800, -2600), (2500, -2760)], [(3150, -2445), (3600, -2900), (4300, -3500)]]
 # Beach on the east coast (千景海岸).
 BEACH = [(3350, 450), (3900, 450), (3700, 1650), (3200, 1600)]
 # Artificial island in the bay (台場風), reached by a suspension bridge.
@@ -101,7 +102,7 @@ SHINKANSEN = [(-40, -1250), (-40, -700), (-40, -100), (60, 700), (260, 1250), (4
 SHINKANSEN_DECK = 16.0
 SHINKANSEN_STATIONS = [("千景中央駅（新幹線）", -40, -760, 0), ("千景北駅", 545, 2900, 3)]
 # Ferry piers (terminal on the south-east cape, and the islet).
-FERRY_PIERS = [(3150, -2260, 180), (2380, -2800, 250)]
+FERRY_PIERS = [(3150, -2325, 180), (2388, -2800, 70)]  # pier root at the coast, heading out to sea
 
 # Landmarks (generated specially).
 LANDMARKS = {

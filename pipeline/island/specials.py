@@ -284,6 +284,10 @@ def _airport(terrain, spec: Spec):
         p0 = np.array([ax, ay]) + d * t
         taxi = taxi.union(LineString([p0, p0 + nx * 190]).buffer(11.5))
     tx, ty = L.TERMINAL
+    along_t = float((np.array([tx, ty]) - np.array([ax, ay])) @ ux)
+    for s_ in (along_t - 200, along_t + 200):  # taxiway -> apron links
+        p0 = np.array([ax, ay]) + ux * s_
+        taxi = taxi.union(LineString([p0 + nx * 190, p0 + nx * 300]).buffer(11.5))
     apron = orient(affinity.rotate(sbox(tx - 380, ty - 90, tx + 380, ty + 70), math.degrees(math.atan2(ux[1], ux[0])), origin=(tx, ty)), 1.0)
     spec.apron = unary_union([apron, taxi]).difference(spec.runway)
     ap = Polygon(L.AIRPORT)
@@ -728,6 +732,25 @@ def write_extra(spec: Spec, out: str, fi) -> None:
         la0, lo0 = fi.to_geodetic(ax, ay)
         la1, lo1 = fi.to_geodetic(bx, by)
         f.write(f"runway {la0:.8f} {lo0:.8f} {la1:.8f} {lo1:.8f} {w}\n")
+        # taxi network (island metres -> geodetic): parallel taxiway, runway connectors, apron links,
+        # apron taxilane and the gate stands in front of the terminal (nose towards the building)
+        A, B = np.array([ax, ay], float), np.array([bx, by], float)
+        dv = B - A
+        ux_ = dv / np.linalg.norm(dv)
+        nx_ = np.array([-ux_[1], ux_[0]])
+        T = np.array(L.TERMINAL, float)
+        at = float((T - A) @ ux_)
+        g2 = lambda p: "%.8f %.8f" % fi.to_geodetic(float(p[0]), float(p[1]))
+        f.write(f"taxiway {g2(A + nx_ * 190)} {g2(B + nx_ * 190)}\n")
+        for t in (0.08, 0.35, 0.65, 0.92):
+            f.write(f"connector {g2(A + dv * t)} {g2(A + dv * t + nx_ * 190)}\n")
+        for s_ in (at - 200, at + 200):
+            f.write(f"apronlink {g2(A + ux_ * s_ + nx_ * 190)} {g2(A + ux_ * s_ + nx_ * 330)}\n")
+        f.write(f"apronlane {g2(A + ux_ * (at - 360) + nx_ * 330)} {g2(A + ux_ * (at + 360) + nx_ * 330)}\n")
+        hd_stand = math.degrees(math.atan2(nx_[0], nx_[1])) % 360
+        for s_ in (-300, -180, -60, 60, 180, 300):
+            f.write(f"stand {g2(A + ux_ * (at + s_) + nx_ * 398)} {hd_stand:.1f}\n")
+        f.write(f"terminal {g2(T)}\n")
         for x, y, hd in L.FERRY_PIERS:
             la, lo = fi.to_geodetic(x, y)
             f.write(f"pier {la:.8f} {lo:.8f} {hd}\n")

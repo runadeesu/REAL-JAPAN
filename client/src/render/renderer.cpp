@@ -209,6 +209,8 @@ bool Renderer::init() {
   vehicles_.build();
   humans_.build();
   train_models_.build();
+  ship_models_.build();
+  aircraft_models_.build();
   lit_.locs[SHADER_LOC_MATRIX_VIEW] = GetShaderLocation(lit_, "matView");
   lit_.locs[SHADER_LOC_MATRIX_PROJECTION] = GetShaderLocation(lit_, "matProjection");
 
@@ -253,6 +255,8 @@ void Renderer::shutdown() {
   vehicles_.unload();
   humans_.unload();
   train_models_.unload();
+  ship_models_.unload();
+  aircraft_models_.unload();
   mat_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   mat_depth_.shader = Shader{rlGetShaderIdDefault(), rlGetShaderLocsDefault()};
   for (Shader* s : {&lit_, &depth_, &sky_, &ssao_, &blur_, &bright_, &composite_, &ssr_}) UnloadShader(*s);
@@ -693,6 +697,147 @@ void Renderer::drawOcean(const Camera3D& cam, float sea_y) {
   DrawMesh(ocean_, mat_, MatrixTranslate(gx, sea_y, gz));
   ++draw_calls_;
   setI(lit_, "materialOverride", -1);
+}
+
+void Renderer::drawShips(const Ferries& ferries, const Camera3D& cam, const Lighting& L) {
+  if (!ferries.loaded()) return;
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", -1);
+  rlDisableBackfaceCulling();
+  for (const auto& f : ferries.ships()) {
+    if (f.phase == Ferry::Phase::Offmap || std::hypot(f.pos.x - c.x, f.pos.y - c.y) > 4500.0) continue;
+    const Vector3 p = enuToRl({f.pos.x, f.pos.y, f.pos.z + f.heave});
+    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-f.roll), MatrixRotateX(f.pitch)), MatrixRotateY(-f.yaw)),
+                                    MatrixTranslate(p.x, p.y, p.z));
+    const Mesh& m = ship_models_.get(f.cls).hull;
+    DrawMesh(m, mat_, M);
+    ++draw_calls_;
+    triangles_ += m.triangleCount;
+  }
+  rlEnableBackfaceCulling();
+  // Wakes: foam trail from the stern, widening and fading with age, plus the bow wave.
+  // (Unlit foam, dimmed with the daylight.)
+  const float day = std::clamp(0.12f + 0.9f * (1.0f - L.night) * std::min(1.0f, (L.sun_color.x + L.ambient_sky.x) * 0.8f), 0.08f, 1.0f);
+  const unsigned char fc = static_cast<unsigned char>(235 * day);
+  rlDrawRenderBatchActive();
+  rlDisableDepthMask();
+  rlDisableBackfaceCulling();
+  rlColorMask(true, true, true, false);  // keep the reflection mask in alpha
+  rlSetTexture(rlGetTextureIdDefault());
+  for (const auto& f : ferries.ships()) {
+    if (f.phase == Ferry::Phase::Offmap || f.trail.size() < 2 || f.wake < 0.05f) continue;
+    if (std::hypot(f.pos.x - c.x, f.pos.y - c.y) > 3000.0) continue;
+    const ShipClass& C = Ferries::shipClass(f.cls);
+    const size_t n = f.trail.size();
+    rlBegin(RL_QUADS);
+    for (size_t i = n - 1; i > 0; --i) {
+      const auto& a = f.trail[i];
+      const auto& b = f.trail[i - 1];
+      const double dx = a.x - b.x, dy = a.y - b.y, l = std::max(1e-3, std::hypot(dx, dy));
+      const double nx = -dy / l, ny = dx / l;
+      const float ageA = static_cast<float>(n - 1 - i) / static_cast<float>(n), ageB = static_cast<float>(n - i) / static_cast<float>(n);
+      const float wA = C.beam * (0.45f + 1.8f * ageA), wB = C.beam * (0.45f + 1.8f * ageB);
+      const unsigned char aA = static_cast<unsigned char>(170 * f.wake * (1.0f - ageA)), aB = static_cast<unsigned char>(170 * f.wake * (1.0f - ageB));
+      const Vector3 A0 = enuToRl({a.x + nx * wA, a.y + ny * wA, a.z + 0.06}), A1 = enuToRl({a.x - nx * wA, a.y - ny * wA, a.z + 0.06});
+      const Vector3 B0 = enuToRl({b.x + nx * wB, b.y + ny * wB, b.z + 0.06}), B1 = enuToRl({b.x - nx * wB, b.y - ny * wB, b.z + 0.06});
+      rlColor4ub(fc, fc, fc, aA);
+      rlVertex3f(A0.x, A0.y, A0.z);
+      rlVertex3f(A1.x, A1.y, A1.z);
+      rlColor4ub(fc, fc, fc, aB);
+      rlVertex3f(B1.x, B1.y, B1.z);
+      rlVertex3f(B0.x, B0.y, B0.z);
+    }
+    // bow wave: two short foam wedges along the hull
+    const double fx = std::sin(f.yaw), fy = std::cos(f.yaw), rx = fy, ry = -fx;
+    for (float sg : {1.0f, -1.0f}) {
+      const rj::geo::Vec3d bow{f.pos.x + fx * C.length * 0.48, f.pos.y + fy * C.length * 0.48, f.pos.z + 0.07};
+      const rj::geo::Vec3d mid{f.pos.x + fx * C.length * 0.1 + rx * sg * C.beam * 0.62, f.pos.y + fy * C.length * 0.1 + ry * sg * C.beam * 0.62, f.pos.z + 0.07};
+      const rj::geo::Vec3d out{mid.x + rx * sg * 3.0 - fx * 10.0, mid.y + ry * sg * 3.0 - fy * 10.0, mid.z};
+      const Vector3 P0 = enuToRl(bow), P1 = enuToRl(mid), P2 = enuToRl(out);
+      rlColor4ub(fc, fc, fc, static_cast<unsigned char>(200 * f.wake));
+      rlVertex3f(P0.x, P0.y, P0.z);
+      rlVertex3f(P1.x, P1.y, P1.z);
+      rlColor4ub(fc, fc, fc, 0);
+      rlVertex3f(P2.x, P2.y, P2.z);
+      rlVertex3f(P2.x, P2.y, P2.z);
+    }
+    rlEnd();
+  }
+  rlSetTexture(0);
+  rlDrawRenderBatchActive();
+  rlColorMask(true, true, true, true);
+  rlEnableDepthMask();
+  rlEnableBackfaceCulling();
+}
+
+void Renderer::drawAircraft(const Aviation& av, const Camera3D& cam, const Lighting& L, int ride_jet, const FlightView* fv) {
+  if (!av.loaded()) return;
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", -1);
+  rlDisableBackfaceCulling();
+  const JetModel& J = aircraft_models_.jet();
+  const float nav = 3.0f + 9.0f * L.night;
+  const bool strobe = std::fmod(GetTime(), 1.3) < 0.08;
+  for (const auto& a : av.airliners()) {
+    if (a.phase == Airliner::Phase::Offmap || std::hypot(a.pos.x - c.x, a.pos.y - c.y) > 9000.0) continue;
+    const Vector3 p = enuToRl(a.pos);
+    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-a.roll), MatrixRotateX(a.pitch)), MatrixRotateY(-a.yaw)),
+                                    MatrixTranslate(p.x, p.y, p.z));
+    if (a.id == ride_jet) drawMeshMat(J.cabin, M, -1, WHITE);
+    else drawMeshMat(J.fuselage, M, -1, WHITE);
+    drawMeshMat(J.wings, M, -1, WHITE);
+    if (a.gear > 0.3f) drawMeshMat(J.gear, M, -1, WHITE);
+    drawMeshMat(J.nav_red, M, kMatSignalLamp, WHITE, Vector3{nav, nav * 0.04f, nav * 0.03f});
+    drawMeshMat(J.nav_green, M, kMatSignalLamp, WHITE, Vector3{nav * 0.05f, nav, nav * 0.25f});
+    drawMeshMat(J.nav_white, M, kMatSignalLamp, WHITE, strobe ? Vector3{30, 30, 30} : Vector3{0.3f, 0.3f, 0.3f});
+  }
+  // light aircraft
+  const LightPlane& pl = av.plane();
+  const LightPlaneModel& Lm = aircraft_models_.light();
+  if (!pl.crashed() || fv) {
+    const Matrix M = pl.modelMatrix();
+    const bool pit = fv && fv->cockpit;
+    drawMeshMat(pit ? Lm.cockpit : Lm.fuselage, M, -1, WHITE);
+    drawMeshMat(Lm.rest, M, -1, WHITE);
+    const Matrix P = MatrixMultiply(MatrixMultiply(MatrixRotateZ(-pl.prop()), MatrixTranslate(0, -0.1f, -Lm.prop_y)), M);
+    drawMeshMat(Lm.prop, P, -1, WHITE);
+    if (pit) {
+      const float glow = 0.6f + 1.2f * L.night;
+      drawMeshMat(Lm.dial_marks, M, -1, WHITE, Vector3{glow, glow, glow});
+      auto needle = [&](int dial, float deg, float scale, float dz, Vector3 col) {
+        const float* d = Lm.dial[dial];
+        const Matrix N = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixScale(1, scale, 1), MatrixRotateZ(-deg * DEG2RAD)),
+                                                       MatrixTranslate(d[0], d[2] + dz, -d[1])), M);
+        drawMeshMat(Lm.needle, N, -1, WHITE, Vector3Scale(col, glow * 1.6f));
+      };
+      const Vector3 W{1, 1, 1}, O{1.0f, 0.45f, 0.08f};
+      needle(0, -150.0f + 300.0f * std::clamp(fv->kt / 200.0f, 0.0f, 1.0f), 1.0f, 0, W);
+      const float off = std::clamp(-fv->pitch * 0.0012f, -0.035f, 0.035f);
+      needle(1, 90.0f - fv->roll, 1.0f, off, W);  // horizon line
+      needle(1, -90.0f - fv->roll, 1.0f, off, W);
+      needle(1, 90.0f, 0.45f, 0, O);               // fixed aeroplane symbol
+      needle(1, -90.0f, 0.45f, 0, O);
+      needle(2, 360.0f * std::fmod(std::max(0.0f, fv->alt_ft), 1000.0f) / 1000.0f, 1.0f, 0, W);
+      needle(2, 360.0f * std::max(0.0f, fv->alt_ft) / 10000.0f, 0.6f, 0, W);
+      const float turn = std::clamp(fv->turn_dps / 3.0f, -1.0f, 1.0f) * 25.0f;
+      needle(3, 90.0f + turn, 0.8f, 0, W);
+      needle(3, -90.0f + turn, 0.8f, 0, W);
+      needle(4, fv->heading, 1.0f, 0, O);
+      needle(5, -90.0f + std::clamp(fv->vs_fpm / 2000.0f, -1.0f, 1.0f) * 170.0f, 1.0f, 0, W);
+      const float* y = Lm.yoke_pos;
+      const Matrix Y = MatrixMultiply(MatrixMultiply(MatrixRotateZ(-fv->aileron * 0.6f), MatrixTranslate(y[0], y[2], -(y[1] - fv->elevator * 0.07f))), M);
+      drawMeshMat(Lm.yoke, Y, -1, WHITE);
+    }
+  }
+  rlEnableBackfaceCulling();
 }
 
 void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_train, int ride_car) {

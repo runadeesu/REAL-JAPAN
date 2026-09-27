@@ -59,6 +59,12 @@ set(RJ_SOURCES
   src/game/road_markings.cpp
   src/game/trains.cpp
   src/game/driving.cpp
+  src/game/ferries.cpp
+  src/render/ships.cpp
+  src/game/aircraft.cpp
+  src/game/jobs.cpp
+  src/app_activities.cpp
+  src/render/aircraft.cpp
   src/render/trains.cpp
   src/game/traffic.cpp
   src/ui/ui.cpp

@@ -49,6 +49,8 @@ struct Train {
   double vmax = 22.0;
   double hold = 0;      // turnaround / off-map wait
   bool offmap = false;  // Shinkansen beyond the island (towards the mainland)
+  bool manual = false;  // driven by the player (notches), with an ATS-style safety brake
+  int notch = 0;        // -8 emergency, -7..-1 brake, 0 coast, 1..5 power
 };
 
 class Trains {
@@ -67,6 +69,12 @@ class Trains {
   int trainStoppedAt(int station) const;                      // train id or -1
   std::string destination(const Train& t) const;
   int nextStation(const Train& t) const { return t.next_stop; }
+  // player driving
+  void setManual(int id, bool on);
+  void setNotch(int id, int notch);
+  bool openDoors(int id, double& stop_error);  // stopped near the next stop mark: open, dwell
+  double distToStop(const Train& t) const;     // metres ahead to the next stop mark
+  bool atsActive(const Train& t) const { return t.manual && ats_[static_cast<size_t>(t.id) % 64]; }
   // Platform side offset of the tracks for a station's line (metres from the line centre).
   static double platformOffset(LineKind k) { return k == LineKind::Shinkansen ? 7.4 : 6.6; }
   static double trackOffset(LineKind k) { return k == LineKind::Shinkansen ? 3.15 : 2.5; }
@@ -79,6 +87,7 @@ class Trains {
   std::vector<Station> stations_;
   std::vector<Train> trains_;
   bool placed_ = false;
+  bool ats_[64] = {};
 };
 
 }  // namespace rjc
