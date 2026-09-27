@@ -145,22 +145,40 @@ void Aviation::place(const World& world) {
     jets_.push_back(b);
     plane_.reset(A.ga_stand, A.ga_heading, world);
   }
-  for (auto& a : jets_) {
+  for (auto& a : jets_) {  // (moving jets are carried over a rebase by shiftOrigin)
     const auto& st = A.stands[static_cast<size_t>(a.stand)];
     if (a.phase == Airliner::Phase::AtStand) {
       a.pos = {st.pos.x, st.pos.y, st.pos.z + kJetRefZ};
       a.yaw = static_cast<float>(st.heading * kDeg);
       a.path.clear();
-    } else if (a.phase != Airliner::Phase::Offmap) {
-      // re-placed while moving (origin rebase): restart the leg from a clean state
-      a.phase = Airliner::Phase::Offmap;
-      a.timer = 30.0;
     }
   }
+  heights_ok_ = false;
+  height_retry_ = 0;
   placed_ = true;
 }
 
 void Aviation::resetPlane(const World& world) { plane_.reset(airport_.ga_stand, airport_.ga_heading, world); }
+
+void Aviation::shiftOrigin(const rj::geo::Rigid3d& X) {
+  for (auto& a : jets_) {
+    a.pos = X.apply(a.pos);
+    for (auto& p : a.path) p = X.apply(p);
+  }
+  plane_.shiftOrigin(X);
+}
+
+void LightPlane::shiftOrigin(const rj::geo::Rigid3d& X) {
+  auto rot = [&](const V3& v) {
+    return V3{X.R[0] * v.x + X.R[1] * v.y + X.R[2] * v.z, X.R[3] * v.x + X.R[4] * v.y + X.R[5] * v.z, X.R[6] * v.x + X.R[7] * v.y + X.R[8] * v.z};
+  };
+  pos_ = X.apply(pos_);
+  cam_pos_ = X.apply(cam_pos_);
+  vel_ = rot(vel_);
+  f_ = rot(f_);
+  r_ = rot(r_);
+  u_ = rot(u_);
+}
 
 void Aviation::setPath(Airliner& a, std::vector<V3> pts) const {
   a.path = std::move(pts);
@@ -281,9 +299,39 @@ void Aviation::buildApproach(Airliner& a) const {
   setPath(a, p);
 }
 
+void Aviation::refreshHeights(const World& world) {
+  // the airport may be far from where the game started: take the ground heights once loaded
+  bool ok = true;
+  auto fix = [&](rj::geo::Vec3d& p) {
+    if (auto h = world.terrainHeight(p.x, p.y)) p.z = *h;
+    else ok = false;
+  };
+  Airport& A = airport_;
+  fix(A.rwy_a);
+  fix(A.rwy_b);
+  fix(A.twy_a);
+  fix(A.twy_b);
+  fix(A.lane_a);
+  fix(A.lane_b);
+  fix(A.terminal);
+  fix(A.ga_stand);
+  for (auto& c : A.connectors) fix(c.first), fix(c.second);
+  for (auto& c : A.apron_links) fix(c.first), fix(c.second);
+  for (auto& s : A.stands) fix(s.pos);
+  if (ok) {
+    ground_z_ = A.terminal.z;
+    for (auto& a : jets_)
+      if (a.phase == Airliner::Phase::AtStand) a.pos.z = A.stands[static_cast<size_t>(a.stand)].pos.z + kJetRefZ;
+  }
+  heights_ok_ = ok;
+}
+
 void Aviation::update(double dt, const World& world) {
   if (!placed_) return;
-  (void)world;
+  if (!heights_ok_ && (height_retry_ -= dt) <= 0) {
+    height_retry_ = 1.0;
+    refreshHeights(world);
+  }
   dt = std::min(dt, 0.1);
   const Airport& A = airport_;
   const V3 ux = norm(sub(A.rwy_b, A.rwy_a));
@@ -392,7 +440,8 @@ void Aviation::update(double dt, const World& world) {
       }
       case Airliner::Phase::Climb: {
         a.timer += dt;
-        a.v = std::min(125.0, a.v + 1.1 * dt);
+        // initial climb about 165 kt, speeding up above 3,000 ft (typical departure procedure)
+        a.v = std::min(a.pos.z - ground_z_ < 900.0 ? 85.0 : 125.0, a.v + 1.1 * dt);
         a.s += a.v * dt;
         pointAt(a, a.s, p, hd, grade);
         if (a.timer > 7.0) a.gear = std::max(0.0f, a.gear - static_cast<float>(dt) / 8.0f);
@@ -498,8 +547,11 @@ void LightPlane::reset(const V3& pos, double heading_deg, const World& world) {
   u_ = {0, 0, 1};
   r_ = cross(f_, u_);
   pos_ = pos;
-  if (auto gz = world.terrainHeight(pos.x, pos.y)) pos_.z = *gz;
-  pos_.z += 1.05;
+  snapped_ = false;
+  if (auto gz = world.terrainHeight(pos.x, pos.y)) {
+    pos_.z = *gz + 1.05;
+    snapped_ = true;
+  }
   vel_ = {0, 0, 0};
   p_ = q_ = yr_ = 0;
   ctl_ = cmd_ = PlaneControls{};
@@ -550,7 +602,8 @@ void LightPlane::step(double h, const World& world, float wind_ms) {
   // aerodynamic moments (coefficients per rad, textbook light-aircraft values)
   const double Ve = std::max(V, 6.0);
   const double ph = p_ * kSpan / (2 * Ve), qh = q_ * kChord / (2 * Ve), rh = yr_ * kSpan / (2 * Ve);
-  const double Cm = 0.02 - 1.0 * alpha_ + 1.1 * 0.30 * ctl_.elevator - 12.0 * qh - 0.03 * fl;
+  // elevator: Cm_de ~1.3 /rad with ~28 deg of travel -> about 0.6 at full deflection
+  const double Cm = 0.02 - 1.0 * alpha_ + 0.62 * ctl_.elevator - 12.0 * qh - 0.03 * fl;
   const double Cl = -0.09 * beta + 0.18 * 0.35 * ctl_.aileron - 0.47 * ph + 0.1 * rh;
   const double Cn = 0.065 * beta + 0.07 * 0.35 * ctl_.rudder - 0.012 * 0.35 * ctl_.aileron - 0.1 * rh;
   double Mx = Cl * qbar * kS * kSpan, My = Cm * qbar * kS * kChord, Mz = Cn * qbar * kS * kSpan;
@@ -617,6 +670,14 @@ void LightPlane::step(double h, const World& world, float wind_ms) {
 
 void LightPlane::update(double dt, const World& world, const PlaneControls& in, float wind_ms) {
   if (crashed_) return;
+  if (!snapped_) {  // parked: wait for the ground under the wheels to stream in
+    if (auto gz = world.terrainHeight(pos_.x, pos_.y)) {
+      pos_.z = *gz + 1.05;
+      snapped_ = true;
+    } else {
+      return;
+    }
+  }
   dt = std::min(dt, 0.05);
   // control surfaces move at a finite rate; throttle and flaps as commanded
   auto slew = [&](float& c, float t, float r) { c += std::clamp(t - c, -r * static_cast<float>(dt), r * static_cast<float>(dt)); };

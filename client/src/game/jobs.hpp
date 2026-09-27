@@ -43,6 +43,11 @@ class Jobs {
   bool startTaxi(const World& world, const Traffic& traffic, const rj::geo::Vec3d& from);
   bool startDelivery(const World& world, const Traffic& traffic, const rj::geo::Vec3d& from);
   void stop() { kind_ = JobKind::None; }
+  void shiftOrigin(const rj::geo::Rigid3d& X) {
+    pickup_.pos = X.apply(pickup_.pos);
+    dropoff_.pos = X.apply(dropoff_.pos);
+    last_ = X.apply(last_);
+  }
   std::vector<JobEvent> update(double dt, const World& world, const Traffic& traffic, const rj::geo::Vec3d& player, double speed_ms,
                                bool in_taxi, bool in_vehicle, int hour);
   int64_t meterYen(int hour) const;  // taxi fare so far

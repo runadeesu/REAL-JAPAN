@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Feature screenshots on the fictional island (PROJECT: REAL JAPAN).
+# usage: tools/shots_island.sh <exe-dir> <out-dir> [extra args...]
+# Each shot scripts the game to a moment (drive, ride, fly ...) using the test aids
+# (--state drive|ride|ferry|jet|fly, --simspeed) and captures the frame.
+set -uo pipefail
+BIN="$1"; OUT="$2"; shift 2
+mkdir -p "$OUT"
+T="2026-09-26T11:00"
+shot() {  # name, env, args...
+  local name="$1" envs="$2"; shift 2
+  (cd "$BIN" && env $envs LANG=C.UTF-8 LC_ALL=C.UTF-8 timeout 2400 xvfb-run -a -s "-screen 0 1600x900x24" ./RealJapan "$@" \
+    --time "$T" --weather clear --screenshot "$OUT/$name.png" --frames 2 >/dev/null 2>&1) || echo "fail $name"
+}
+# car: driver's seat on the central avenue (mirrors show the real rear view), chase view, side view
+shot drive_cockpit "RJ_DRIVE_FP=1" --state drive --pos 34.58650,140.39640 --yaw 0 --drive "1:0:5,0.4:0:1"
+shot drive_chase "" --state drive --pos 34.58650,140.39640 --yaw 0 --drive "1:0:5,0.4:0.25:1.2"
+shot drive_side "RJ_DRIVE_LOOK=70" --state drive --pos 34.58650,140.39640 --yaw 0 --drive "1:0:3,0.3:0:1"
+# Shinkansen: window seat after departure; loop line
+shot ride_shinkansen "" --state ride --station 6 --ride 85 --simspeed 3
+shot ride_loop "" --state ride --station 0 --ride 40 --simspeed 3
+# ferry: alongside the pier (from the pier), on deck under way
+shot ferry_view "" --state ferryview --station 0
+shot ferry_deck "" --state ferry --station 0 --ride 160 --simspeed 4
+# scheduled flight: window seat during the climb
+shot jet_window "" --state jet --ride 430 --simspeed 10
+# light aircraft: after take-off, chase and cockpit
+shot plane_chase "" --state fly --simspeed 8 --fly-script "1:0:0:15,1:0.5:0:3,1:0.12:0:10"
+shot plane_cockpit "RJ_FLY_COCKPIT=1" --state fly --simspeed 8 --fly-script "1:0:0:15,1:0.5:0:3,1:0.12:0:10"
+# phone apps
+shot phone_work "" --state phone:work
+shot phone_hobby "" --state phone:hobby
+ls "$OUT"

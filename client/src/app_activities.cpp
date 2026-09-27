@@ -581,15 +581,18 @@ void App::drawActivityHud() {
 void App::drawPhoneWork(float cx, float yy, float cw, float bottom) {
   ui_.text(tr("phone.work"), cx, yy, 32, theme::kText);
   yy += 46;
-  auto row = [&](const std::string& title, const std::string& sub, const std::string& btn, bool enabled) {
-    ui_.text(title, cx, yy, 26, theme::kText);
-    ui_.textWrapped(sub, cx, yy + 32, cw - 150, 18, theme::kMuted);
-    const bool hit = ui_.button({cx + cw - 140, yy + 4, 140, 52}, btn, enabled, 22);
-    yy += 96;
+  std::string detail;  // long description of the row under the mouse
+  auto row = [&](const std::string& title, const std::string& sub, const std::string& btn, bool enabled, const std::string& long_desc) {
+    const Rectangle r{cx, yy, cw, 66};
+    if (ui_.hovered(r)) detail = long_desc;
+    ui_.text(title, cx, yy, 24, theme::kText);
+    ui_.text(sub, cx, yy + 32, 16, theme::kMuted);
+    const bool hit = ui_.button({cx + cw - 118, yy + 6, 118, 46}, btn, enabled, 20);
+    yy += 72;
     return hit;
   };
   const bool taxi_on = jobs_.kind() == JobKind::Taxi, del_on = jobs_.kind() == JobKind::Delivery;
-  if (row(tr("job.taxi.name"), tr("job.taxi.desc"), tr(taxi_on ? "job.stop" : "job.start"), true)) {
+  if (row(tr("job.taxi.name"), tr("job.taxi.short"), tr(taxi_on ? "job.stop" : "job.start"), true, tr("job.taxi.desc"))) {
     if (taxi_on) jobs_.stop();
     else if (!(driving_.active() && driving_.car().type == VehicleType::Taxi)) toast(tr("job.taxi.need_taxi"));
     else if (jobs_.startTaxi(world_, traffic_, player_.pos)) {
@@ -597,15 +600,16 @@ void App::drawPhoneWork(float cx, float yy, float cw, float bottom) {
       screen_ = Screen::Game;
     } else toast(tr("job.none_found"));
   }
-  if (row(tr("job.delivery.name"), tr("job.delivery.desc"), tr(del_on ? "job.stop" : "job.start"), true)) {
+  if (row(tr("job.delivery.name"), tr("job.delivery.short"), tr(del_on ? "job.stop" : "job.start"), true, tr("job.delivery.desc"))) {
     if (del_on) jobs_.stop();
     else if (jobs_.startDelivery(world_, traffic_, player_.pos)) {
       toast(tr("job.delivery.started"));
       screen_ = Screen::Game;
     } else toast(tr("job.none_found"));
   }
-  if (row(tr("job.train.name"), tr("job.train.desc"), tr(drive_train_ >= 0 ? "job.running" : "job.start"), drive_train_ < 0)) startTrainDriving();
-  if (row(tr("till.title"), tr("till.desc"), tr("job.start"), !till_.on)) {
+  if (row(tr("job.train.name"), tr("job.train.short"), tr(drive_train_ >= 0 ? "job.running" : "job.start"), drive_train_ < 0, tr("job.train.desc")))
+    startTrainDriving();
+  if (row(tr("till.title"), tr("till.short"), tr("job.start"), !till_.on, tr("till.desc"))) {
     till_ = Till{};
     till_.on = true;
     till_.rng ^= static_cast<uint32_t>(clock_.unixUtc()) | 1u;
@@ -613,10 +617,15 @@ void App::drawPhoneWork(float cx, float yy, float cw, float bottom) {
     screen_ = Screen::Game;
   }
   // other occupations: simple shifts (time passes, pay by the game's income table)
-  ui_.text(tr("job.shift.title"), cx, yy, 24, theme::kWarn);
-  yy += 30;
-  ui_.textWrapped(tr("job.shift.note"), cx, yy, cw, 17, theme::kMuted);
-  yy += 44;
+  ui_.text(tr("job.shift.title"), cx, yy + 4, 22, theme::kWarn);
+  yy += 32;
+  ui_.text(tr("job.shift.short"), cx, yy, 16, theme::kMuted);
+  yy += 26;
+  if (!detail.empty()) {  // hovered job: the full explanation instead of the list
+    ui_.panel({cx - 6, yy - 4, cw + 12, bottom - yy}, Color{10, 12, 18, 240});
+    ui_.textWrapped(detail, cx, yy + 6, cw, 18, theme::kText);
+    return;
+  }
   const auto occ = rj::sim::allOccupations();
   const float list_h = bottom - yy - 10;
   const int rows = std::max(1, static_cast<int>(list_h / 50));
@@ -627,9 +636,9 @@ void App::drawPhoneWork(float cx, float yy, float cw, float bottom) {
     const auto& o = occ[static_cast<size_t>(i)];
     const int64_t hourly = o.monthly_income_jpy / (21 * 8);
     const std::string name = i18n_.code() == "ja" ? std::string(o.name_ja) : std::string(o.name_en);
-    ui_.text(name, cx, yy + 10, 22, theme::kText);
-    ui_.text(i18n_.f("job.shift.hourly", {{"y", yen(hourly)}}), cx + 200, yy + 12, 18, theme::kMuted);
-    if (ui_.button({cx + cw - 140, yy + 2, 140, 42}, tr("job.shift.work"), true, 18)) {
+    ui_.text(name, cx, yy + 4, 20, theme::kText);
+    ui_.text(i18n_.f("job.shift.hourly", {{"y", yen(hourly)}}), cx, yy + 28, 14, theme::kMuted);
+    if (ui_.button({cx + cw - 118, yy + 4, 118, 40}, tr("job.shift.work"), true, 17)) {
       const int hours = 4;
       const int64_t pay = hourly * hours;
       clock_.advanceGame(hours * 3600.0);
@@ -641,49 +650,56 @@ void App::drawPhoneWork(float cx, float yy, float cw, float bottom) {
 }
 
 void App::drawPhoneHobby(float cx, float yy, float cw, float bottom) {
-  (void)bottom;
   ui_.text(tr("phone.hobby"), cx, yy, 32, theme::kText);
-  yy += 50;
+  yy += 46;
+  std::string detail;
+  auto head = [&](const std::string& title, const std::string& sub, const std::string& long_desc) {
+    const Rectangle r{cx, yy, cw, 62};
+    if (ui_.hovered(r)) detail = long_desc;
+    ui_.text(title, cx, yy, 24, theme::kText);
+    ui_.text(sub, cx, yy + 32, 16, theme::kMuted);
+  };
   // photography
-  ui_.text(tr("photo.title"), cx, yy, 26, theme::kText);
-  ui_.textWrapped(i18n_.f("photo.desc", {{"n", std::to_string(photo_spots_.size())}, {"p", std::to_string(photos_taken_)}}), cx, yy + 32, cw - 150, 18, theme::kMuted);
-  if (ui_.button({cx + cw - 140, yy + 4, 140, 52}, tr("photo.open"), true, 22)) {
+  head(tr("photo.title"), i18n_.f("photo.short", {{"n", std::to_string(photo_spots_.size())}, {"p", std::to_string(photos_taken_)}}),
+       i18n_.f("photo.desc", {{"n", std::to_string(photo_spots_.size())}, {"p", std::to_string(photos_taken_)}}));
+  if (ui_.button({cx + cw - 118, yy + 6, 118, 46}, tr("photo.open"), true, 20)) {
     photo_mode_ = true;
     photo_fov_ = settings_.fov;
     screen_ = Screen::Game;
   }
-  yy += 100;
+  yy += 72;
   // fishing log
-  ui_.text(tr("fish.title"), cx, yy, 26, theme::kText);
-  yy += 34;
-  ui_.textWrapped(tr("fish.desc"), cx, yy, cw, 18, theme::kMuted);
-  yy += 50;
+  head(tr("fish.title"), i18n_.f("fish.short", {{"n", std::to_string(fish_count_)}}), tr("fish.desc"));
+  yy += 62;
   int shown = 0;
   for (const auto& [k, cm] : fish_log_) {
     char b[24];
     std::snprintf(b, sizeof b, "%.1f cm", cm);
-    ui_.text(tr(k), cx + 10, yy, 20, theme::kText);
-    ui_.textRight(b, cx + cw - 10, yy, 20, theme::kMuted);
-    yy += 26;
-    if (++shown >= 6) break;
+    ui_.text(tr(k), cx + 10, yy, 18, theme::kText);
+    ui_.textRight(b, cx + cw - 10, yy, 18, theme::kMuted);
+    yy += 24;
+    if (++shown >= 5) break;
   }
   if (fish_log_.empty()) {
-    ui_.text(tr("fish.none"), cx + 10, yy, 20, theme::kMuted);
-    yy += 26;
+    ui_.text(tr("fish.none"), cx + 10, yy, 18, theme::kMuted);
+    yy += 24;
   }
-  yy += 20;
+  yy += 14;
   // shrine / temple
-  ui_.text(tr("worship.title"), cx, yy, 26, theme::kText);
-  yy += 34;
-  ui_.textWrapped(i18n_.f("worship.desc", {{"n", std::to_string(worship_count_)}, {"g", std::to_string(goshuin_.size())},
-                                            {"o", last_omikuji_.empty() ? std::string("-") : tr(last_omikuji_)}}),
-                  cx, yy, cw, 18, theme::kMuted);
-  yy += 80;
+  head(tr("worship.title"), i18n_.f("worship.desc", {{"n", std::to_string(worship_count_)}, {"g", std::to_string(goshuin_.size())},
+                                                      {"o", last_omikuji_.empty() ? std::string("-") : tr(last_omikuji_)}}),
+       tr("worship.long"));
+  yy += 72;
   // walking / running
   char km[32];
   std::snprintf(km, sizeof km, "%.2f", player_.distance_walked / 1000.0);
-  ui_.text(tr("walk.title"), cx, yy, 26, theme::kText);
-  ui_.text(i18n_.f("walk.desc", {{"km", km}}), cx, yy + 34, 20, theme::kMuted);
+  head(tr("walk.title"), i18n_.f("walk.desc", {{"km", km}}), tr("walk.long"));
+  yy += 72;
+  if (!detail.empty()) {
+    const float top = std::min(yy, bottom - 180);
+    ui_.panel({cx - 6, top, cw + 12, bottom - top}, Color{10, 12, 18, 240});
+    ui_.textWrapped(detail, cx, top + 10, cw, 18, theme::kText);
+  }
 }
 
 }  // namespace rjc

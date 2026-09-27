@@ -159,34 +159,131 @@ void underframe(Geo& g, const Spec& s, float y0, float y1) {
   }
 }
 
-void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::pair<float, float>>& doors) {
+// Inner wall panels with the window and door openings (seen when riding).
+void innerWalls(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::pair<float, float>>& windows,
+                const std::vector<std::pair<float, float>>& doors, Color c) {
+  const float zf = s.zFloor + kFloorAbove, x = s.W - 0.045f, door_top = s.zWin1 + 0.12f;
+  auto band = [&](float za, float zb, std::vector<std::pair<float, float>> open) {
+    std::sort(open.begin(), open.end());
+    float y = y0 + 0.05f;
+    std::vector<std::pair<float, float>> solid;
+    for (const auto& o : open) {
+      if (o.first > y) solid.push_back({y, o.first});
+      y = std::max(y, o.second);
+    }
+    if (y < y1 - 0.05f) solid.push_back({y, y1 - 0.05f});
+    for (const auto& q : solid)
+      for (float sx : {-1.0f, 1.0f}) {
+        const float xx = sx * x;
+        if (sx > 0) g.quad({xx, q.second, za}, {xx, q.first, za}, {xx, q.first, zb}, {xx, q.second, zb}, c, kShell);
+        else g.quad({xx, q.first, za}, {xx, q.second, za}, {xx, q.second, zb}, {xx, q.first, zb}, c, kShell);
+      }
+  };
+  std::vector<std::pair<float, float>> wd = windows;
+  wd.insert(wd.end(), doors.begin(), doors.end());
+  band(zf, s.zWin0, doors);
+  band(s.zWin0, s.zWin1, wd);
+  band(s.zWin1, door_top, doors);
+  band(door_top, s.zSide - 0.1f, {});
+  // window reveals (the wall thickness round each opening)
+  const Color rev{206, 206, 202, 255};
+  for (const auto& w : windows)
+    for (float sx : {-1.0f, 1.0f}) {
+      const float xi = sx * x, xo = sx * (s.W - 0.005f);
+      g.quad({xi, w.first, s.zWin0}, {xi, w.second, s.zWin0}, {xo, w.second, s.zWin0}, {xo, w.first, s.zWin0}, rev, kShell);
+      g.quad({xi, w.second, s.zWin1}, {xi, w.first, s.zWin1}, {xo, w.first, s.zWin1}, {xo, w.second, s.zWin1}, rev, kShell);
+    }
+  // door leaves from inside: stainless with a (dark) window
+  for (const auto& d : doors)
+    for (float sx : {-1.0f, 1.0f}) {
+      const float xx = sx * (x - 0.01f);
+      const Color st{176, 178, 182, 255};
+      g.box({xx, (d.first + d.second) * 0.5f, (zf + door_top) * 0.5f}, {0.012f, (d.second - d.first) * 0.5f, (door_top - zf) * 0.5f}, st, kMatMetal);
+      g.box({xx - sx * 0.014f, (d.first + d.second) * 0.5f, (s.zWin0 + s.zWin1) * 0.5f}, {0.004f, (d.second - d.first) * 0.5f - 0.12f, (s.zWin1 - s.zWin0) * 0.5f - 0.05f},
+            Color{30, 34, 38, 255}, kGlass);
+    }
+}
+
+void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::pair<float, float>>& doors,
+              const std::vector<std::pair<float, float>>& windows) {
   const float zf = s.zFloor + kFloorAbove;
-  g.quad({-s.W + 0.05f, y0, zf}, {s.W - 0.05f, y0, zf}, {s.W - 0.05f, y1, zf}, {-s.W + 0.05f, y1, zf}, Color{120, 110, 100, 255}, kShell);
-  g.quad({-s.W + 0.05f, y1, s.zSide - 0.1f}, {s.W - 0.05f, y1, s.zSide - 0.1f}, {s.W - 0.05f, y0, s.zSide - 0.1f}, {-s.W + 0.05f, y0, s.zSide - 0.1f},
-         Color{225, 225, 222, 255}, kShell);  // ceiling
-  for (float x : {-0.5f, 0.5f})  // light strips
-    g.quad({x - 0.08f, y1 - 0.5f, s.zSide - 0.12f}, {x + 0.08f, y1 - 0.5f, s.zSide - 0.12f}, {x + 0.08f, y0 + 0.5f, s.zSide - 0.12f},
-           {x - 0.08f, y0 + 0.5f, s.zSide - 0.12f}, Color{255, 255, 255, 255}, kGlass);
-  if (s.shinkansen) {  // rows of 2+3 seats facing forward
+  g.quad({-s.W + 0.05f, y0, zf}, {s.W - 0.05f, y0, zf}, {s.W - 0.05f, y1, zf}, {-s.W + 0.05f, y1, zf}, s.shinkansen ? Color{90, 84, 80, 255} : Color{120, 116, 110, 255},
+         kShell);
+  // ceiling: flat centre with sloping sides, light strips
+  const float zc = s.zSide - 0.1f, zc2 = s.zSide + 0.12f;
+  g.quad({-0.7f, y1, zc2}, {0.7f, y1, zc2}, {0.7f, y0, zc2}, {-0.7f, y0, zc2}, Color{232, 232, 228, 255}, kShell);
+  for (float sx : {-1.0f, 1.0f}) {
+    if (sx > 0) g.quad({0.7f, y1, zc2}, {s.W - 0.05f, y1, zc}, {s.W - 0.05f, y0, zc}, {0.7f, y0, zc2}, Color{226, 226, 222, 255}, kShell);
+    else g.quad({-(s.W - 0.05f), y1, zc}, {-0.7f, y1, zc2}, {-0.7f, y0, zc2}, {-(s.W - 0.05f), y0, zc}, Color{226, 226, 222, 255}, kShell);
+  }
+  for (float x : {-0.55f, 0.55f})  // light strips (lit diffusers)
+    g.quad({x - 0.07f, y1 - 0.5f, zc2 - 0.015f}, {x + 0.07f, y1 - 0.5f, zc2 - 0.015f}, {x + 0.07f, y0 + 0.5f, zc2 - 0.015f}, {x - 0.07f, y0 + 0.5f, zc2 - 0.015f},
+           Color{255, 255, 250, 255}, kShell);
+  innerWalls(g, s, y0, y1, windows, doors, s.shinkansen ? Color{234, 230, 220, 255} : Color{226, 226, 222, 255});
+  if (s.shinkansen) {
+    // rows of 2+3 reclining seats facing forward: cushion, back, headrest cover, armrests, tray table
+    const Color seat{38, 58, 118, 255}, cover{236, 236, 232, 255}, arm{70, 72, 78, 255};
     for (float y = y0 + 1.5f; y < y1 - 1.0f; y += kShinkansenSeatPitch) {
       for (float x : {-1.35f, -0.9f, 0.35f, 0.82f, 1.29f}) {
-        g.box({x, y, zf + 0.25f}, {0.22f, 0.25f, 0.23f}, Color{40, 60, 120, 255}, kShell);
-        g.box({x, y - 0.26f, zf + 0.7f}, {0.22f, 0.06f, 0.45f}, Color{40, 60, 120, 255}, kShell);
+        g.box({x, y, zf + 0.42f}, {0.21f, 0.24f, 0.06f}, seat, kShell);
+        g.box({x, y, zf + 0.2f}, {0.2f, 0.18f, 0.17f}, Color{50, 52, 58, 255}, kShell);
+        g.box({x, y - 0.27f, zf + 0.85f}, {0.21f, 0.06f, 0.42f}, seat, kShell);
+        g.box({x, y - 0.24f, zf + 1.18f}, {0.18f, 0.035f, 0.09f}, cover, kShell);
+        g.box({x, y - 0.335f, zf + 0.78f}, {0.17f, 0.006f, 0.13f}, Color{150, 150, 152, 255}, kShell);  // folded tray table
       }
+      for (float x : {-1.58f, -1.125f, -0.67f, 0.12f, 0.585f, 1.055f, 1.52f})
+        g.box({x, y - 0.05f, zf + 0.6f}, {0.025f, 0.2f, 0.03f}, arm, kShell);
     }
-  } else {  // long bench seats along the sides between the doors, grab poles
+    // overhead luggage racks
+    for (float sx : {-1.0f, 1.0f}) {
+      g.box({sx * (s.W - 0.32f), (y0 + y1) * 0.5f, zf + 1.78f}, {0.28f, (y1 - y0) * 0.5f - 0.6f, 0.02f}, Color{200, 202, 206, 255}, kMatMetal);
+      g.box({sx * (s.W - 0.6f), (y0 + y1) * 0.5f, zf + 1.74f}, {0.015f, (y1 - y0) * 0.5f - 0.6f, 0.04f}, Color{190, 192, 196, 255}, kMatMetal);
+    }
+    // end partition with a glass sliding door and an information display above it
+    const float ye = y1 - 0.3f;
+    g.quad({-s.W + 0.05f, ye, zf}, {-0.45f, ye, zf}, {-0.45f, ye, zc}, {-s.W + 0.05f, ye, zc}, Color{220, 214, 204, 255}, kShell);
+    g.quad({0.45f, ye, zf}, {s.W - 0.05f, ye, zf}, {s.W - 0.05f, ye, zc}, {0.45f, ye, zc}, Color{220, 214, 204, 255}, kShell);
+    g.quad({-0.45f, ye, zf + 2.0f}, {0.45f, ye, zf + 2.0f}, {0.45f, ye, zc}, {-0.45f, ye, zc}, Color{220, 214, 204, 255}, kShell);
+    g.box({0, ye - 0.02f, zf + 1.0f}, {0.42f, 0.01f, 1.0f}, Color{40, 46, 52, 255}, kGlass);
+    g.box({0, ye - 0.03f, zf + 2.12f}, {0.4f, 0.01f, 0.07f}, Color{255, 160, 40, 255}, kGlass);
+  } else {
+    // long bench seats between the doors, luggage racks, straps, grab poles, displays, hanging ads
     std::vector<float> cuts = {y0 + 0.4f};
     for (const auto& d : doors) cuts.insert(cuts.end(), {d.first - 0.15f, d.second + 0.15f});
     cuts.push_back(y1 - 0.4f);
+    const Color bench{60, 110, 90, 255}, rack{190, 192, 196, 255};
     for (size_t k = 0; k + 1 < cuts.size(); k += 2) {
       const float a = cuts[k], b = cuts[k + 1];
       if (b - a < 0.6f) continue;
       for (float sx : {-1.0f, 1.0f}) {
-        g.box({sx * (s.W - 0.32f), (a + b) / 2, zf + 0.22f}, {0.26f, (b - a) / 2, 0.2f}, Color{60, 110, 90, 255}, kShell);
-        g.box({sx * (s.W - 0.08f), (a + b) / 2, zf + 0.72f}, {0.05f, (b - a) / 2, 0.3f}, Color{60, 110, 90, 255}, kShell);  // backrest
+        g.box({sx * (s.W - 0.32f), (a + b) / 2, zf + 0.42f}, {0.26f, (b - a) / 2, 0.06f}, bench, kShell);
+        g.box({sx * (s.W - 0.36f), (a + b) / 2, zf + 0.2f}, {0.2f, (b - a) / 2, 0.17f}, Color{70, 72, 76, 255}, kShell);
+        g.box({sx * (s.W - 0.1f), (a + b) / 2, zf + 0.72f}, {0.05f, (b - a) / 2, 0.26f}, bench, kShell);  // backrest
+        g.box({sx * (s.W - 0.3f), (a + b) / 2, zf + 1.86f}, {0.24f, (b - a) / 2, 0.012f}, rack, kMatMetal);  // luggage rack
+        g.box({sx * (s.W - 0.08f), a + 0.03f, zf + 0.9f}, {0.3f, 0.02f, 0.5f}, Color{200, 202, 206, 255}, kMatMetal);   // end screens
+        g.box({sx * (s.W - 0.08f), b - 0.03f, zf + 0.9f}, {0.3f, 0.02f, 0.5f}, Color{200, 202, 206, 255}, kMatMetal);
+        // straps on a rail above the seat front
+        g.box({sx * 0.78f, (a + b) / 2, zf + 1.98f}, {0.012f, (b - a) / 2, 0.012f}, rack, kMatMetal);
+        for (float y = a + 0.2f; y < b - 0.1f; y += 0.32f) {
+          g.box({sx * 0.78f, y, zf + 1.86f}, {0.012f, 0.012f, 0.11f}, Color{240, 240, 236, 255}, kShell);
+          g.box({sx * 0.78f, y, zf + 1.72f}, {0.012f, 0.05f, 0.05f}, Color{230, 230, 60, 255}, kShell);
+        }
       }
     }
-    for (float y = y0 + 3.0f; y < y1 - 2.0f; y += 3.5f) g.box({0.6f, y, zf + 1.1f}, {0.02f, 0.02f, 1.1f}, Color{200, 200, 200, 255}, kMatMetal);
+    for (const auto& d : doors) {
+      for (float sx : {-1.0f, 1.0f}) {
+        for (float yy : {d.first - 0.3f, d.second + 0.3f})  // grab poles by the doors
+          g.box({sx * (s.W - 0.6f), yy, (zf + s.zSide) * 0.5f}, {0.018f, 0.018f, (s.zSide - zf) * 0.5f}, Color{205, 205, 208, 255}, kMatMetal);
+        g.box({sx * (s.W - 0.07f), (d.first + d.second) * 0.5f, s.zWin1 + 0.24f}, {0.02f, 0.32f, 0.09f}, Color{20, 22, 26, 255}, kShell);  // display
+        g.box({sx * (s.W - 0.092f), (d.first + d.second) * 0.5f, s.zWin1 + 0.24f}, {0.002f, 0.28f, 0.07f}, Color{255, 170, 60, 255}, kGlass);
+      }
+    }
+    // hanging advertisement sheets along the middle (generic colours, no text)
+    int k = 0;
+    for (float y = y0 + 2.4f; y < y1 - 2.0f; y += 1.7f, ++k) {
+      const Color pc[4] = {{236, 210, 170, 255}, {170, 206, 236, 255}, {236, 180, 190, 255}, {196, 230, 180, 255}};
+      g.box({0, y, zf + 1.83f}, {0.26f, 0.004f, 0.18f}, pc[k % 4], kShell);
+    }
   }
 }
 
@@ -220,7 +317,7 @@ TrainCarModel makeCommuter(bool cab) {
   underframe(g, s, y0, y1);
   // pantograph frame on the roof
   g.box({0, 2.0f, s.zRoof + 0.15f}, {0.9f, 0.6f, 0.03f}, Color{80, 80, 80, 255}, kMatMetal);
-  interior(in, s, y0, y1, doors);
+  interior(in, s, y0, y1, doors, windows);
   TrainCarModel m;
   m.length = s.L;
   m.shell = g.upload();
@@ -273,7 +370,7 @@ TrainCarModel makeShinkansen(bool nose) {
     g.box({0, y1 + Ln - 0.2f, 1.05f}, {0.2f, 0.2f, 0.15f}, Color{255, 250, 235, 255}, kMatSignalLamp);
   }
   underframe(g, s, y0, nose ? y1 + 4.0f : y1);
-  interior(in, s, y0, y1, doors);
+  interior(in, s, y0, y1, doors, windows);
   TrainCarModel m;
   m.length = s.L;
   m.shell = g.upload();

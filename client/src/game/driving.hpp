@@ -65,6 +65,10 @@ class Driving {
     vx_ = vy_ = r_ = 0;
   }
   void drop() { active_ = has_car_ = false; }
+  void shiftOrigin(const rj::geo::Rigid3d& X) {  // floating-origin rebase
+    car_.pos = X.apply(car_.pos);
+    cam_pos_ = X.apply(cam_pos_);
+  }
   void update(double dt, const World& world, const Traffic& traffic, const DriveInput& in, float wetness = 0.0f);
   // chase camera (smoothed) or the driver's eye; look offsets from the mouse
   Camera3D camera(float fov, bool first_person, float look_yaw, float look_pitch) const;

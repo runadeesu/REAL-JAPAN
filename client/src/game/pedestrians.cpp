@@ -459,8 +459,32 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
         }
       }
     }
+    // the player's car: stop if it is coming at you, step aside, never be driven through
+    bool dodging = false;
+    if (hz_on_) {
+      const double fx = std::sin(hz_yaw_), fy = std::cos(hz_yaw_), rx = fy, ry = -fx;
+      const double dx = w.pos.x - hz_.x, dy = w.pos.y - hz_.y;
+      const double along = dx * fx + dy * fy, lat = dx * rx + dy * ry;
+      const double side = lat >= 0 ? 1.0 : -1.0;
+      if (std::fabs(lat) < 2.2 && along > -3.0 && along < 4.0 + hz_v_ * 1.3 && (hz_v_ > 0.4 || (std::fabs(along) < 2.6 && std::fabs(lat) < 1.3))) {
+        step = 0;
+        dodging = true;
+        const double push = std::min(1.0, 2.6 * real_dt);
+        w.dodge.x += rx * side * push;
+        w.dodge.y += ry * side * push;
+        if (std::fabs(along) < 2.5 && std::fabs(lat) < 1.15) {  // inside the car's outline: out of the way at once
+          w.dodge.x += rx * side * (1.2 - std::fabs(lat));
+          w.dodge.y += ry * side * (1.2 - std::fabs(lat));
+        }
+      }
+    }
+    if (!dodging) {
+      const float k = std::max(0.0f, 1.0f - 0.4f * real_dt);
+      w.dodge.x *= k;
+      w.dodge.y *= k;
+    }
     w.dist += step;
-    if (!w.waiting) w.phase += real_dt * 7.5f * (w.speed / 1.4f);
+    if (!w.waiting && !dodging) w.phase += real_dt * 7.5f * (w.speed / 1.4f);
     const auto base = rj::nav::GridNav::pointAt(w.path, w.dist, &w.dir);
     // Spread across the sidewalk: lateral offset, pulled in where it would leave the walkable area.
     int bx, by, ox, oy;
@@ -471,7 +495,7 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
     const float tgt = ok ? w.offset : 0.0f;
     const float rate = 0.9f * real_dt;
     w.off_eff += std::clamp(tgt - w.off_eff, -rate, rate);
-    w.pos = {base.x + perp.x * w.off_eff, base.y + perp.y * w.off_eff};
+    w.pos = {base.x + perp.x * w.off_eff + w.dodge.x, base.y + perp.y * w.off_eff + w.dodge.y};
     const double hy = std::atan2(w.dir.x, w.dir.y);
     w.yaw = static_cast<float>(wrapAngle(w.yaw + wrapAngle(hy - w.yaw) * std::min(1.0, real_dt * 5.0)));
     if (auto h = world.surfaceHeight(w.pos.x, w.pos.y)) w.z = static_cast<float>(*h);

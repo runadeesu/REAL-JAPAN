@@ -57,6 +57,7 @@ struct Walker {
   int age = 30;
   bool waiting = false;   // standing at a red pedestrian signal
   float height_scale = 1.0f;
+  rj::nav::Vec2 dodge{0, 0};  // stepped aside from the player's car (decays back to the route)
 };
 
 class Pedestrians {
@@ -67,6 +68,13 @@ class Pedestrians {
   bool navReady() const { return nav_.valid(); }
   void clear();
 
+  // The player's car: people ahead of it stop and step aside; nobody is driven through.
+  void setHazard(bool on, const rj::geo::Vec3d& p, double yaw, double speed) {
+    hz_on_ = on;
+    hz_ = p;
+    hz_yaw_ = yaw;
+    hz_v_ = speed;
+  }
   void update(TownSim& town, const World& world, const TrafficSignals& signals, const rj::sim::CivilDateTime& now,
               const rj::geo::Vec3d& player, float real_dt, float crowd_factor = 1.0f);
   const std::map<size_t, Walker>& walkers() const { return walkers_; }
@@ -125,6 +133,9 @@ class Pedestrians {
   bool filled_ = false;
   uint64_t rng_ = 0x9e3779b97f4a7c15ULL;
   double rnd();
+  bool hz_on_ = false;
+  rj::geo::Vec3d hz_{};
+  double hz_yaw_ = 0, hz_v_ = 0;
 };
 
 }  // namespace rjc

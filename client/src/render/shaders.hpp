@@ -313,6 +313,9 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   else if (id == 38) {  // train windows / interior lights: dark glass, lit inside while in service
     s.albedo = vec3(0.02, 0.025, 0.03); s.rough = 0.12; s.porosity = 0.0;
     s.emit = vec3(0.85, 0.92, 1.0) * (0.04 + 0.7 * nightFactor);
+    vec3 ec = fragColor.rgb;
+    if (max(ec.r, max(ec.g, ec.b)) - min(ec.r, min(ec.g, ec.b)) > 0.08) s.emit = pow(ec, vec3(2.2)) * 1.6;  // coloured LED displays: always lit
+    else if (ec.r < 0.5) s.emit *= 0.3;                                                                    // dark panes (door windows)
   }
   else if (id == 16) {  // water (river / sea): dark, glossy, moving ripples
     vec2 w1 = texture(texNoise, wuv / 23.0 + vec2(timeSec * 0.011, timeSec * 0.007)).rg;

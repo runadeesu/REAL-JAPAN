@@ -324,8 +324,20 @@ void App::update(float dt) {
 
   // Stream the world around the current viewpoint.
   rj::geo::Vec3d focus = (in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0});
+  const bool had_origin = world_.hasOrigin();
+  const rj::geo::LocalFrame frame_before = had_origin ? world_.origin().frame() : rj::geo::LocalFrame(rj::geo::Geodetic{});
   if (world_.update(focus, settings_.view_distance_m)) {
     if (in_session_) player_.pos = focus;
+    if (had_origin) {  // carry everything held in origin coordinates into the new frame
+      const rj::geo::Rigid3d X = world_.origin().frame().transformFrom(frame_before);
+      driving_.shiftOrigin(X);
+      aviation_.shiftOrigin(X);
+      ferries_.shiftOrigin(X);
+      jobs_.shiftOrigin(X);
+      fish_.bobber = X.apply(fish_.bobber);
+      walk_start_ = X.apply(walk_start_);
+      TraceLog(LOG_INFO, "RJ: origin rebased");
+    }
     facades_.clear();  // facade meshes live in origin coordinates
     traffic_placed_ = false;
   }
@@ -464,9 +476,9 @@ void App::update(float dt) {
             player_.pos = {ap.terminal.x + nx.x / l * 140.0, ap.terminal.y + nx.y / l * 140.0, ap.terminal.z};
             player_.snapToGround(world_);
           }
-          if (st == "ferry" && ferries_.loaded()) {  // test aid: beside the ship at pier --station, board, ride
+          if ((st == "ferry" || st == "ferryview") && ferries_.loaded()) {  // test aid: beside the ship at pier --station (board, ride)
             ferry_test_pending_ = true;
-            ride_test_t_ = 0.0f;
+            ride_test_t_ = st == "ferry" ? 0.0f : -1.0f;
           }
           if (st.rfind("phone", 0) == 0) {
             screen_ = Screen::Phone;
@@ -551,6 +563,12 @@ void App::update(float dt) {
           player_.snapToGround(world_);
           const rj::geo::Vec3d fp = f->pos;
           player_.yaw = static_cast<float>(std::atan2(fp.x - player_.pos.x, fp.y - player_.pos.y));
+          if (opt_.state == "ferryview") {  // stand back along the pier to see the whole ship
+            const double fx = std::sin(f->yaw), fy = std::cos(f->yaw);
+            player_.pos = {player_.pos.x + fx * 45.0, player_.pos.y + fy * 45.0, player_.pos.z};
+            player_.snapToGround(world_);
+            player_.yaw = static_cast<float>(std::atan2(fp.x - player_.pos.x, fp.y - player_.pos.y));
+          }
         }
       }
       if (ride_ferry_ >= 0) {
@@ -636,13 +654,13 @@ void App::update(float dt) {
           plane_in_.elevator = L.elevator;
           plane_in_.aileron = L.aileron;
           plane_in_.brake = false;
-          if ((L.seconds -= std::min(dt, 0.05f)) <= 0) fly_legs_.erase(fly_legs_.begin());
+          if ((L.seconds -= std::min(dt, 0.05f) * static_cast<float>(opt_.sim_speed)) <= 0) fly_legs_.erase(fly_legs_.begin());
           if (frame_ % 20 == 0)
             TraceLog(LOG_INFO, "RJ: fly v %.1f kt alt %.0f m vs %.1f pitch %.1f roll %.1f aoa %.1f ground %d", pl.airspeed() * 1.944,
                      pl.pos().z - aviation_.airport().rwy_a.z, pl.verticalSpeed(), pl.pitchDeg(), pl.rollDeg(), pl.alpha() * RAD2DEG, pl.onGround());
         }
         if (flying_) {
-          pl.update(dt, world_, plane_in_, weather_.now().wind_ms);
+          for (int k = 0; k < opt_.sim_speed; ++k) pl.update(dt, world_, plane_in_, weather_.now().wind_ms);
           player_.pos = pl.pos();
           if (pl.crashed()) {
             if (crash_t_ < 0) {
@@ -726,6 +744,7 @@ void App::update(float dt) {
         const WeatherKind wk = weather_.kind();
         const float crowd = wk == WeatherKind::Thunder ? 0.45f : wk == WeatherKind::HeavyRain ? 0.55f
                             : wk == WeatherKind::Rain ? 0.72f : wk == WeatherKind::LightRain ? 0.85f : 1.0f;
+        peds_.setHazard(driving_.active(), driving_.car().pos, driving_.car().yaw, std::fabs(driving_.car().v));
         peds_.update(town_, world_, signals_, clock_.jst(), player_.pos, dt, crowd);
       }
       if (screen_ == Screen::Game) {
@@ -1095,7 +1114,7 @@ void App::updateFerryActions() {
     ferries_.toShip(*f, player_.pos, sx, sy);
     ferry_x_ = sx > 0 ? C.deck_x - 0.6 : -(C.deck_x - 0.6);
     ferry_y_ = std::clamp(sy, C.deck_y0 + 2.0, C.deck_y1 - 2.0);
-    ferry_look_yaw_ = sx > 0 ? -PI / 2 : PI / 2;  // facing across the deck, away from the pier
+    ferry_look_yaw_ = sx > 0 ? 0.35f : -0.35f;  // looking forward along the side deck, a little out to sea
     ride_ferry_ = f->id;
     toast(i18n_.f("ferry.boarded", {{"fare", std::to_string(fare)}}));
   }
@@ -1273,8 +1292,11 @@ void App::runSelfTest() {
     TraceLog(ok ? LOG_INFO : LOG_ERROR, "RJ: SELFTEST %s %s", ok ? "PASS" : "FAIL", what);
     if (!ok) ++fails;
   };
-  check(world_.residentCount() == world_.knownCount(), "all world cells loaded");
-  check(world_.buildingCount() > 9000, "buildings present (PLATEAU)");
+  const bool fic = world_.meta().fictional;
+  if (fic) check(world_.residentCount() > 0, "world cells streamed around the start (island)");
+  else check(world_.residentCount() == world_.knownCount(), "all world cells loaded");
+  if (fic) check(world_.buildingCount() > 500, "buildings present (generated island)");
+  else check(world_.buildingCount() > 9000, "buildings present (PLATEAU)");
   check(town_.size() > 0, "residents loaded");
   check(peds_.navReady(), "pedestrian navigation grid built");
   newGame();
@@ -1292,8 +1314,35 @@ void App::runSelfTest() {
   check(loadSlot(3), "load slot 3");
   check(std::hypot(player_.pos.x - spawn.x, player_.pos.y - spawn.y) < 0.05, "position restored after load");
   check(ledger_ && ledger_->balance(player_account_) == kStartMoney, "money restored after load");
+  if (fic) {
+    // island: transport systems and the player's activities
+    if (!traffic_placed_ && traffic_.loaded()) placeRoads();
+    check(trains_.loaded() && trains_.lines().size() == 3 && trains_.stations().size() >= 8, "rail lines and stations loaded");
+    check(!trains_.trains().empty(), "trains in service");
+    check(ferries_.loaded() && ferries_.ships().size() == 2, "ferries loaded");
+    check(aviation_.loaded() && aviation_.airport().stands.size() == 6 && aviation_.airliners().size() == 2, "airport, stands and flights loaded");
+    {
+      Driving d;
+      Vehicle v;
+      v.type = VehicleType::Sedan;
+      double hd = 0;
+      v.pos = player_.pos;
+      traffic_.nearestLane(player_.pos, 0.0, v.pos, hd);
+      v.yaw = static_cast<float>(hd);
+      d.enter(v);
+      DriveInput in;
+      in.throttle = 1;
+      for (int k = 0; k < 90; ++k) d.update(1.0 / 60.0, world_, traffic_, in);
+      check(d.car().v > 3.0 && d.rpm() > 1000.0f, "car accelerates (vehicle dynamics)");
+    }
+    {
+      Jobs j;
+      check(j.startDelivery(world_, traffic_, player_.pos), "delivery job found nearby");
+    }
+    check(saveSlot(3) && loadSlot(3), "save / load on the island");
+  }
   // Verified interior: enter through a real entrance, stand on a real floor, walls block.
-  check(!world_.meta().interiors.empty(), "interior listed in slice");
+  if (!fic) check(!world_.meta().interiors.empty(), "interior listed in slice");
   if (!world_.meta().interiors.empty()) {
     const auto& im = world_.meta().interiors.front();
     const bool loaded = world_.forceLoadInterior(im.id);

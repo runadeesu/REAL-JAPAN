@@ -47,7 +47,8 @@ class AircraftModels {
   bool ready_ = false;
 };
 
-// Seat used when riding the jet (model space): left window, over the wing.
-constexpr float kJetSeat[3] = {-1.02f, -2.4f, 0.38f};
+// Seat used when riding the jet (model space): left window seat of the row at y = -2.0 (over the
+// wing); the head is just in front of the seat back, eyes at seated height beside the window.
+constexpr float kJetSeat[3] = {-1.0f, -2.1f, 0.44f};
 
 }  // namespace rjc

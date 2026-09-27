@@ -91,6 +91,7 @@ class LightPlane {
   rj::geo::Vec3d up() const { return u_; }
   Matrix modelMatrix() const;  // raylib space
   Camera3D camera(float fov, bool cockpit, float look_yaw, float look_pitch) const;
+  void shiftOrigin(const rj::geo::Rigid3d& X);
 
  private:
   void step(double h, const World& world, float wind_ms);
@@ -100,6 +101,7 @@ class LightPlane {
   PlaneControls ctl_, cmd_;
   double airspeed_ = 0, alpha_ = 0;
   bool stall_ = false, on_ground_ = true, crashed_ = false;
+  bool snapped_ = false;  // wheels put on the ground once the terrain there is loaded
   float prop_angle_ = 0, rpm_ = 0;
   rj::geo::Vec3d cam_pos_{};
   bool cam_init_ = false;
@@ -121,8 +123,12 @@ class Aviation {
   LightPlane& plane() { return plane_; }
   const LightPlane& plane() const { return plane_; }
   void resetPlane(const World& world);
+  void shiftOrigin(const rj::geo::Rigid3d& X);  // floating-origin rebase (jets and the light aircraft)
 
  private:
+  void refreshHeights(const World& world);
+  bool heights_ok_ = false;
+  double height_retry_ = 0;
   void buildTaxiOut(Airliner& a) const;
   void buildTaxiIn(Airliner& a, double stop_along) const;
   void buildClimb(Airliner& a) const;

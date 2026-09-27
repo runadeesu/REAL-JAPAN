@@ -87,6 +87,7 @@ class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
 
   void resetOrigin(const rj::geo::Geodetic& g);
   const rj::geo::FloatingOrigin& origin() const { return *origin_; }
+  bool hasOrigin() const { return origin_ != nullptr; }
 
   // Per-frame streaming. May rebase the floating origin (player_local is
   // rewritten into the new frame, return value true).

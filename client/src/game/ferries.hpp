@@ -75,6 +75,10 @@ class Ferries {
   int currentPier(const Ferry& f) const { return f.phase == Ferry::Phase::Docked ? (f.dir > 0 ? f.pier_a : f.pier_b) : -1; }
   int destinationPier(const Ferry& f) const { return f.dir > 0 ? f.pier_b : f.pier_a; }
   void fastForwardOffmap(int id);  // the player is aboard while the ship is at the mainland
+  void shiftOrigin(const rj::geo::Rigid3d& X) {
+    for (auto& f : ships_)
+      for (auto& p : f.trail) p = X.apply(p);
+  }
 
  private:
   void pointAt(const Ferry& f, double s, rj::geo::Vec3d& p, double& heading) const;
