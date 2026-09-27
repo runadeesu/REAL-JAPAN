@@ -49,6 +49,7 @@ struct RailSound {  // a train as heard by the listener
   float car_gain[16]{};  // loudness of each car's running gear at the listener
   float motor_gain = 0;  // loudness of the traction equipment (inverter, motors)
   float air_gain = 0;    // aerodynamic noise
+  float curve = 0;       // track curvature (1/m) at the listener: flange squeal in tight curves
   float pan = 0, muffle = 0;
 };
 

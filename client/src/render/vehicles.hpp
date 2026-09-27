@@ -16,6 +16,7 @@ struct VehicleModel {
   Mesh body{};
   Mesh wheel{};                 // right-side wheel (outer face +x), centred at the origin
   Mesh head_lamps{}, tail_lamps{};
+  Mesh indicators[2]{};         // amber turn indicators, front and rear corners: [0] left, [1] right
   float wheel_r = 0.31f;
   float wheel_pos[4][2]{};      // (x right, y forward) per wheel, model space
   // first person

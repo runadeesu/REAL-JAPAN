@@ -630,6 +630,7 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
                 P0 = xf.p([[pp[0], pp[1], -2.0]])[0]
                 _box_d(geos, "concrete", P0, (0.4, 0.4, 4.4))
     # --- elevated rail: deck, barriers, rails, piers (tunnel tubes where the ground is above) ---
+    stations_xy = np.array([(x, y) for _, x, y, _ in list(L.STATIONS) + list(L.SHINKANSEN_STATIONS)], float)
     for ri, R in enumerate(spec.rails):
         shink = spec.rail_kinds[ri] == "shinkansen" if spec.rail_kinds else False
         for i in range(len(R) - 1):
@@ -670,6 +671,7 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
                 B = xf.p([[pb[0], pb[1], b[2] + 0.18]])[0]
                 o = np.array([nrm[0], nrm[1], 0]) * 0.04
                 _dquad(geos, "metal", [A - o, B - o, B + o, A + o])
+            _catenary(geos, xf, a, b, d, nrm, i, hw, shink, stations_xy)
             if i % 4 == 0 and not shapely.contains_xy(carr_p, a[0], a[1]):  # pier every ~24 m, never on a carriageway
                 g = ground_c(*a[:2])
                 top = xf.p([[a[0], a[1], a[2] - 1.4]])[0]
@@ -723,6 +725,86 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
                 col = np.column_stack([shade, shade, shade, np.full(len(V), 255, np.uint8)])
                 geos.setdefault("canopy", DGeo()).add(V, N, None, col, T)
     return ex
+
+
+CONTACT_H = 5.0     # contact wire above the rail (Japanese viaduct lines are typically 5.0 m)
+MESSENGER_H = 5.9   # messenger (catenary) wire, droppers not modelled
+FEEDER_H = 7.2      # feeder wire carried on the mast tops
+MAST_EVERY = 8      # rail polyline points are ~6 m apart: a mast portal about every 50 m
+
+
+def _wire(geos, A, B, w=0.022, col=(52, 50, 48, 255)):
+    """A thin cable from A to B as a crossed pair of ribbons (reads from any side)."""
+    A, B = np.asarray(A, float), np.asarray(B, float)
+    d = B - A
+    ln = np.linalg.norm(d)
+    if ln < 1e-6:
+        return
+    d /= ln
+    side = np.cross(d, [0.0, 0.0, 1.0])
+    sl = np.linalg.norm(side)
+    side = side / sl if sl > 1e-6 else np.array([1.0, 0.0, 0.0])
+    up = np.cross(side, d)
+    for o in (side * w, up * w):
+        _dquad(geos, "metal", [A - o, B - o, B + o, A + o], col)
+        _dquad(geos, "metal", [A + o, B + o, B - o, A - o], col)
+
+
+def _catenary(geos, xf, a, b, d, nrm, i, hw, shink, stations_xy):
+    """Overhead line equipment over both tracks of a viaduct segment: contact and messenger
+    wires (with the contact wire's zig-zag across the pantograph), feeders on the mast tops, and a
+    steel portal (two columns and a beam with drop tubes) about every 50 m, except inside stations
+    where the wires hang from the platform canopies. Generic, not a surveyed installation."""
+    tc = 3.15 if shink else 2.5
+    nn = np.array([nrm[0], nrm[1], 0.0])
+    def zig(k):  # contact wire stagger (m) at polyline point k
+        span = (k % MAST_EVERY) / MAST_EVERY
+        sgn = 1.0 if (k // MAST_EVERY) % 2 == 0 else -1.0
+        return 0.2 * sgn * (1.0 - 2.0 * span)
+    for sg in (-1.0, 1.0):
+        for h, stag in ((CONTACT_H, True), (MESSENGER_H, False)):
+            za, zb = (zig(i), zig(i + 1)) if stag else (0.0, 0.0)
+            pa = a[:2] + nrm * (sg * tc + za)
+            pb = b[:2] + nrm * (sg * tc + zb)
+            A = xf.p([[pa[0], pa[1], a[2] + h]])[0]
+            B = xf.p([[pb[0], pb[1], b[2] + h]])[0]
+            _wire(geos, A, B, 0.012 if stag else 0.014)
+    for sg in (-1.0, 1.0):  # feeders along the mast tops
+        pa, pb = a[:2] + nrm * sg * (hw - 0.35), b[:2] + nrm * sg * (hw - 0.35)
+        _wire(geos, xf.p([[pa[0], pa[1], a[2] + FEEDER_H]])[0], xf.p([[pb[0], pb[1], b[2] + FEEDER_H]])[0], 0.016)
+    if i % MAST_EVERY != 0:
+        return
+    if len(stations_xy) and np.min(np.hypot(stations_xy[:, 0] - a[0], stations_xy[:, 1] - a[1])) < 125.0:
+        return
+    steel = (150, 154, 158, 255)
+    cols = []
+    for sg in (-1.0, 1.0):
+        pc = a[:2] + nrm * sg * (hw - 0.35)
+        P = xf.p([[pc[0], pc[1], a[2]]])[0]
+        _box_d(geos, "metal", P + [0, 0, (FEEDER_H + 0.3) / 2], (0.13, 0.13, (FEEDER_H + 0.3) / 2))
+        cols.append(P)
+    beam_z = MESSENGER_H + 0.55
+    mid = (cols[0] + cols[1]) / 2 + [0, 0, beam_z]
+    half = np.linalg.norm(cols[1][:2] - cols[0][:2]) / 2
+    # beam across the tracks: a box along the cross-track direction (top, bottom and both faces)
+    ang = math.atan2(nrm[1], nrm[0])
+    ex = np.array([math.cos(ang), math.sin(ang), 0.0])
+    ey = np.array([-math.sin(ang), math.cos(ang), 0.0])
+    ez = np.array([0.0, 0.0, 1.0])
+    hx, hy, hz = half, 0.1, 0.16
+    def C(sx, sy, sz):
+        return mid + ex * sx * hx + ey * sy * hy + ez * sz * hz
+    for P4 in ([C(-1, -1, 1), C(1, -1, 1), C(1, 1, 1), C(-1, 1, 1)], [C(-1, 1, -1), C(1, 1, -1), C(1, -1, -1), C(-1, -1, -1)],
+               [C(-1, -1, -1), C(1, -1, -1), C(1, -1, 1), C(-1, -1, 1)], [C(1, 1, -1), C(-1, 1, -1), C(-1, 1, 1), C(1, 1, 1)]):
+        _dquad(geos, "metal", P4, steel)
+    # drop tubes and registration arms over each track
+    for sg in (-1.0, 1.0):
+        pt = a[:2] + nrm * sg * tc
+        top = xf.p([[pt[0], pt[1], a[2] + beam_z - hz]])[0]
+        bot = xf.p([[pt[0], pt[1], a[2] + CONTACT_H + 0.25]])[0]
+        _wire(geos, top, bot, 0.03, steel)
+        arm_end = xf.p([[pt[0] + nrm[0] * zig(i), pt[1] + nrm[1] * zig(i), a[2] + CONTACT_H]])[0]
+        _wire(geos, bot, arm_end, 0.02, steel)
 
 
 def _box_d(geos, mat, c, hs):

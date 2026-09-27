@@ -117,7 +117,9 @@ struct RailVoice {
   Pink pink;
   Biquad rumble, roar, airf, click;
   OnePole m1, m2;
-  Osc carrier, sb_lo, sb_hi, harm, gear;
+  Osc carrier, sb_lo, sb_hi, harm, gear, squeal[2];
+  Smooth squeal_amt;
+  float sq_f[2] = {2900.0f, 4300.0f}, sq_drift = 0;
   int mode = -1;
 
   void setup() {
@@ -127,6 +129,7 @@ struct RailVoice {
     click.highpass(1400, 0.7f, SR);
     for (Smooth* sm : {&v, &traction, &motor, &air, &pan, &muffle, &total}) sm->time(0.08f, SR);
     traction.time(0.25f, SR);
+    squeal_amt.time(0.4f, SR);
   }
 
   // Joint crossings during the next `frames` samples (25 m rails; Shinkansen: long welded rail).
@@ -212,6 +215,15 @@ struct RailVoice {
     }
     const float axle_rps = vn / (kPi * 0.86f);
     y += std::sin(kTau * gear.step(axle_rps * 87.0f, SR)) * 0.03f * mg * std::min(1.0f, vn / 15.0f) * (0.4f + 0.6f * at);
+    // flange squeal: wheels grinding round a tight curve (radius under ~300 m), two unsteady tones
+    const float radius = r.curve > 1e-5f ? 1.0f / r.curve : 1e5f;
+    const float sq = squeal_amt.step(r.shinkansen ? 0.0f : std::clamp((300.0f - radius) / 200.0f, 0.0f, 1.0f) * std::clamp((vn - 2.0f) / 6.0f, 0.0f, 1.0f));
+    if (sq > 1e-3f) {
+      sq_drift += (rng.white() * 30.0f - sq_drift * 0.001f) / SR;
+      float s2 = 0;
+      for (int k = 0; k < 2; ++k) s2 += std::sin(kTau * squeal[k].step(sq_f[k] + sq_drift * (k ? 1.4f : 1.0f), SR)) * (k ? 0.5f : 1.0f);
+      x += s2 * 0.06f * sq * sum_g * (0.6f + 0.4f * std::sin(kTau * 0.7f * static_cast<float>(s)));
+    }
     const float fc = 9000.0f * (1 - mf) + 900.0f * mf;
     m1.cutoff(fc, SR);
     m2.cutoff(fc, SR);

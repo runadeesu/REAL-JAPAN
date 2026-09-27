@@ -146,7 +146,8 @@ void Trains::place(const World& world) {
     if (first < 0) continue;
     t.s = stopMark(t, first);
     t.at_station = first;
-    t.dwell = 60.0;
+    t.dwell = t.dwell0 = 60.0;
+    t.dwell0 = 63.0;  // already open at the start
     t.next_stop = first;
   }
 }
@@ -239,13 +240,12 @@ void Trains::update(double dt) {
       }
       if (gap > 0 && gap - 60.0 < dist) dist = std::max(0.0, gap - 60.0);
     }
-    const double stop_d = t.v * t.v / (2.0 * brake);
     if (dist <= 0.4 && t.v < 1.0) {
       t.v = 0;
-      if (t.next_stop >= 0 && std::fabs((stopMark(t, t.next_stop) - t.s)) < 3.0) {
+      if (t.next_stop >= 0 && std::fabs(distToStop(t)) < 3.0) {  // (distance wraps round the loop line)
         t.at_station = t.next_stop;
         const bool terminal = L.kind != LineKind::Loop;
-        t.dwell = terminal ? 45.0 : 25.0;
+        t.dwell = t.dwell0 = terminal ? 45.0 : 25.0;
       } else if (t.next_stop < 0) {
         // end of the line: reverse (the front becomes the other end); the Shinkansen's far end is
         // off the map (towards the mainland): it waits there before coming back
@@ -257,9 +257,14 @@ void Trains::update(double dt) {
       }
       continue;
     }
-    if (stop_d >= dist - 0.5) t.v = std::max(0.3, t.v - brake * dt);
-    else t.v = std::min(t.vmax, t.v + amax * dt);
-    t.s += t.dir * t.v * dt;
+    // follow the braking curve to the stop mark (or to the safe distance behind the train ahead):
+    // the speed never exceeds what service braking can take off in the distance left, so the
+    // train arrives on the mark instead of sliding past it
+    const double vcap = std::sqrt(2.0 * brake * std::max(0.0, dist - 0.1));
+    if (t.v > vcap) t.v = std::max(vcap, t.v - 1.3 * brake * dt);
+    else t.v = std::min({t.vmax, t.v + amax * dt, std::max(vcap, 0.3)});
+    const double adv = std::min(t.v * dt, std::max(0.0, dist));
+    t.s += t.dir * adv;
     if (L.closed) {
       t.s = std::fmod(t.s, L.length);
       if (t.s < 0) t.s += L.length;
@@ -300,7 +305,7 @@ bool Trains::openDoors(int id, double& stop_error) {
       if (std::fabs(d) > 8.0) return false;
       stop_error = -d;  // + overran, - short of the mark
       t.at_station = t.next_stop;
-      t.dwell = 20.0;
+      t.dwell = t.dwell0 = 20.0;
       return true;
     }
   return false;

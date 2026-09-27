@@ -20,10 +20,14 @@ struct TrainCarModel {
   Mesh shell{};
   Mesh glass{};
   Mesh interior{};
+  // sliding door leaves, [side: 0 left (-x), 1 right (+x)][slides towards: 0 -y, 1 +y], drawn closed
+  // at the origin and moved by up to door_travel along y when the doors open
+  Mesh doors[2][2]{};
+  float door_travel = 0.64f;
   float length = 20.0f;
 };
 
-enum class TrainCar : int { CommuterMid = 0, CommuterCab, ShinkansenMid, ShinkansenNose, ShinkansenPanto, Count };
+enum class TrainCar : int { CommuterMid = 0, CommuterCab, ShinkansenMid, ShinkansenNose, ShinkansenPanto, CommuterPanto, Count };
 
 class TrainModels {
  public:

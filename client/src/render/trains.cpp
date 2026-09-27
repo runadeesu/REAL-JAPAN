@@ -72,10 +72,34 @@ struct Spec {
   bool shinkansen;
 };
 
-// One side wall (x = sx * W) along y in [y0, y1], with window openings in the window band.
+// Door openings run from the sill to this height (about 1.85 m above the floor).
+float doorTop(const Spec& s) { return std::min(s.zFloor + 1.85f, s.zSide - 0.03f); }
+
+// A quad whose normal points along `n` whatever the winding it was given in.
+void quadN(Geo& g, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 n, Color col, int mat) {
+  const Vector3 w = Vector3CrossProduct(Vector3Subtract(b, a), Vector3Subtract(d, a));
+  if (Vector3DotProduct(w, n) >= 0) g.quad(a, b, c, d, col, mat);
+  else g.quad(a, d, c, b, col, mat);
+}
+
+// Spans of [y0, y1] not covered by the (sorted, disjoint) openings.
+std::vector<std::pair<float, float>> solidSpans(float y0, float y1, std::vector<std::pair<float, float>> open) {
+  std::sort(open.begin(), open.end());
+  std::vector<std::pair<float, float>> out;
+  float y = y0;
+  for (const auto& o : open) {
+    if (o.first > y) out.push_back({y, o.first});
+    y = std::max(y, o.second);
+  }
+  if (y < y1) out.push_back({y, y1});
+  return out;
+}
+
+// One side wall (x = sx * W) along y in [y0, y1], with window openings in the window band and door
+// openings from the sill to the door head (the leaves are separate meshes, see doorLeaves).
 void sideWall(Geo& g, Geo& glass, const Spec& s, float sx, float y0, float y1, const std::vector<std::pair<float, float>>& windows,
               const std::vector<std::pair<float, float>>& doors) {
-  const float x = sx * s.W;
+  const float x = sx * s.W, dtop = doorTop(s);
   auto wallq = [&](float ya, float yb, float za, float zb, Color c) {
     if (yb - ya < 1e-3 || zb - za < 1e-3) return;
     if (sx > 0) g.quad({x, ya, za}, {x, yb, za}, {x, yb, zb}, {x, ya, zb}, c, kShell);
@@ -88,35 +112,58 @@ void sideWall(Geo& g, Geo& glass, const Spec& s, float sx, float y0, float y1, c
     wallq(ya, yb, cuts[1], cuts[2], s.band);
     wallq(ya, yb, cuts[2], cuts[3], s.body);
   };
-  // below and above the window band: continuous
-  bandsq(y0, y1, s.zFloor, s.zWin0);
-  wallq(y0, y1, s.zWin1, s.zSide, s.shinkansen ? s.body : s.band2);
-  // window band: piers between openings, doors are full-height panels
+  const Color top = s.shinkansen ? s.body : s.band2;
+  const auto solid = solidSpans(y0, y1, doors);
+  // below the window band and up to the door heads: wall between the door openings
+  for (const auto& q : solid) bandsq(q.first, q.second, s.zFloor, s.zWin0);
+  for (const auto& q : solid) wallq(q.first, q.second, s.zWin1, dtop, top);
+  wallq(y0, y1, dtop, s.zSide, top);
+  // window band: piers between the window and door openings
   std::vector<std::pair<float, float>> open = windows;
-  std::sort(open.begin(), open.end());
-  float y = y0;
-  for (const auto& w : open) {
-    wallq(y, w.first, s.zWin0, s.zWin1, s.body);
-    // glass pane slightly inside the opening (drawn for outside views only)
+  open.insert(open.end(), doors.begin(), doors.end());
+  for (const auto& q : solidSpans(y0, y1, open)) wallq(q.first, q.second, s.zWin0, s.zWin1, s.body);
+  for (const auto& w : windows) {  // glass pane slightly inside the opening (drawn for outside views only)
     if (sx > 0) glass.quad({x - 0.03f, w.first, s.zWin0}, {x - 0.03f, w.second, s.zWin0}, {x - 0.03f, w.second, s.zWin1},
                            {x - 0.03f, w.first, s.zWin1}, Color{255, 255, 255, 255}, kGlass);
     else glass.quad({x + 0.03f, w.second, s.zWin0}, {x + 0.03f, w.first, s.zWin0}, {x + 0.03f, w.first, s.zWin1},
                     {x + 0.03f, w.second, s.zWin1}, Color{255, 255, 255, 255}, kGlass);
-    y = w.second;
   }
-  wallq(y, y1, s.zWin0, s.zWin1, s.body);
-  for (const auto& d : doors) {  // door panels just proud of the side, with a dark window
-    const float xo = x + sx * 0.012f;
-    Color dc{static_cast<unsigned char>(s.body.r * 0.9f), static_cast<unsigned char>(s.body.g * 0.9f),
-             static_cast<unsigned char>(s.body.b * 0.9f), 255};
-    if (sx > 0) {
-      g.quad({xo, d.first, s.zFloor + 0.05f}, {xo, d.second, s.zFloor + 0.05f}, {xo, d.second, s.zWin0}, {xo, d.first, s.zWin0}, dc, kShell);
-      glass.quad({xo, d.first + 0.1f, s.zWin0}, {xo, d.second - 0.1f, s.zWin0}, {xo, d.second - 0.1f, s.zWin1}, {xo, d.first + 0.1f, s.zWin1},
-                 Color{255, 255, 255, 255}, kGlass);
-    } else {
-      g.quad({xo, d.second, s.zFloor + 0.05f}, {xo, d.first, s.zFloor + 0.05f}, {xo, d.first, s.zWin0}, {xo, d.second, s.zWin0}, dc, kShell);
-      glass.quad({xo, d.second - 0.1f, s.zWin0}, {xo, d.first + 0.1f, s.zWin0}, {xo, d.first + 0.1f, s.zWin1}, {xo, d.second - 0.1f, s.zWin1},
-                 Color{255, 255, 255, 255}, kGlass);
+  // door reveals: jambs, head and the step plate across the wall thickness
+  const float xi = sx * (s.W - 0.045f);
+  const Color rev{150, 152, 156, 255};
+  for (const auto& d : doors) {
+    quadN(g, {x, d.first, s.zFloor}, {xi, d.first, s.zFloor}, {xi, d.first, dtop}, {x, d.first, dtop}, {0, 1, 0}, rev, kMatMetal);
+    quadN(g, {x, d.second, s.zFloor}, {xi, d.second, s.zFloor}, {xi, d.second, dtop}, {x, d.second, dtop}, {0, -1, 0}, rev, kMatMetal);
+    quadN(g, {x, d.first, dtop}, {xi, d.first, dtop}, {xi, d.second, dtop}, {x, d.second, dtop}, {0, 0, -1}, rev, kMatMetal);
+    quadN(g, {x + sx * 0.02f, d.first, s.zFloor + kFloorAbove}, {xi, d.first, s.zFloor + kFloorAbove}, {xi, d.second, s.zFloor + kFloorAbove},
+          {x + sx * 0.02f, d.second, s.zFloor + kFloorAbove}, {0, 0, 1}, Color{120, 122, 126, 255}, kMatMetal);
+  }
+}
+
+// Sliding door leaves in the wall cavity: bi-parting pairs (commuter), single leaves (Shinkansen).
+void doorLeaves(Geo (&out)[2][2], const Spec& s, const std::vector<std::pair<float, float>>& doors) {
+  const float dtop = doorTop(s), z0 = s.zFloor + 0.02f;
+  const Color leaf = s.shinkansen ? s.body : Color{184, 186, 190, 255};
+  const int mat = s.shinkansen ? kShell : kMatMetal;
+  for (int side = 0; side < 2; ++side) {
+    const float sx = side == 0 ? -1.0f : 1.0f, xc = sx * (s.W - 0.024f);
+    for (const auto& d : doors) {
+      auto one = [&](Geo& g, float ya, float yb, float lead) {  // lead: y of the leading (meeting) edge
+        const float yc = (ya + yb) * 0.5f, hy = (yb - ya) * 0.5f - 0.004f;
+        g.box({xc, yc, (z0 + dtop) * 0.5f}, {0.012f, hy, (dtop - z0) * 0.5f}, leaf, mat);
+        const float inset = s.shinkansen ? 0.22f : 0.09f;
+        g.box({xc, yc, (s.zWin0 + s.zWin1) * 0.5f + 0.05f}, {0.015f, hy - inset, (s.zWin1 - s.zWin0) * 0.5f - 0.02f}, Color{30, 34, 38, 255}, kGlass);
+        g.box({xc, lead, (z0 + dtop) * 0.5f}, {0.016f, 0.012f, (dtop - z0) * 0.5f - 0.01f}, Color{22, 22, 24, 255}, kDark);  // rubber edge
+        if (s.shinkansen)  // the body stripe carries across the door
+          g.box({xc + sx * 0.013f, yc, (s.bandZ0 + s.bandZ1) * 0.5f}, {0.002f, hy, (s.bandZ1 - s.bandZ0) * 0.5f}, s.band, kShell);
+      };
+      if (s.shinkansen) {
+        one(out[side][1], d.first, d.second, d.first);
+      } else {
+        const float mid = (d.first + d.second) * 0.5f;
+        one(out[side][0], d.first, mid, mid);
+        one(out[side][1], mid, d.second, mid);
+      }
     }
   }
 }
@@ -162,7 +209,7 @@ void underframe(Geo& g, const Spec& s, float y0, float y1) {
 // Inner wall panels with the window and door openings (seen when riding).
 void innerWalls(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::pair<float, float>>& windows,
                 const std::vector<std::pair<float, float>>& doors, Color c) {
-  const float zf = s.zFloor + kFloorAbove, x = s.W - 0.045f, door_top = s.zWin1 + 0.12f;
+  const float zf = s.zFloor + kFloorAbove, x = s.W - 0.045f, door_top = doorTop(s);
   auto band = [&](float za, float zb, std::vector<std::pair<float, float>> open) {
     std::sort(open.begin(), open.end());
     float y = y0 + 0.05f;
@@ -193,15 +240,7 @@ void innerWalls(Geo& g, const Spec& s, float y0, float y1, const std::vector<std
       g.quad({xi, w.first, s.zWin0}, {xi, w.second, s.zWin0}, {xo, w.second, s.zWin0}, {xo, w.first, s.zWin0}, rev, kShell);
       g.quad({xi, w.second, s.zWin1}, {xi, w.first, s.zWin1}, {xo, w.first, s.zWin1}, {xo, w.second, s.zWin1}, rev, kShell);
     }
-  // door leaves from inside: stainless with a (dark) window
-  for (const auto& d : doors)
-    for (float sx : {-1.0f, 1.0f}) {
-      const float xx = sx * (x - 0.01f);
-      const Color st{176, 178, 182, 255};
-      g.box({xx, (d.first + d.second) * 0.5f, (zf + door_top) * 0.5f}, {0.012f, (d.second - d.first) * 0.5f, (door_top - zf) * 0.5f}, st, kMatMetal);
-      g.box({xx - sx * 0.014f, (d.first + d.second) * 0.5f, (s.zWin0 + s.zWin1) * 0.5f}, {0.004f, (d.second - d.first) * 0.5f - 0.12f, (s.zWin1 - s.zWin0) * 0.5f - 0.05f},
-            Color{30, 34, 38, 255}, kGlass);
-    }
+  // (the door leaves themselves are separate meshes that slide open, see doorLeaves)
 }
 
 void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::pair<float, float>>& doors,
@@ -287,7 +326,7 @@ void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::
   }
 }
 
-TrainCarModel makeCommuter(bool cab) {
+TrainCarModel makeCommuter(bool cab, bool panto = false) {
   Spec s{20.0f, 1.45f, 1.1f, 1.95f, 2.8f, 2.95f, 3.38f, 3.62f, 1.18f, {196, 198, 202, 255}, {28, 150, 128, 255}, {196, 198, 202, 255},
          1.36f, 1.5f, false};
   Geo g, glass, in;
@@ -298,7 +337,8 @@ TrainCarModel makeCommuter(bool cab) {
     doors.push_back({yc - 0.65f, yc + 0.65f});
   }
   for (int k = 0; k < 3; ++k) {
-    const float a = doors[static_cast<size_t>(k)].second + 0.35f, b = doors[static_cast<size_t>(k) + 1].first - 0.35f;
+    // (the wall beside each door is the pocket its leaf slides into)
+    const float a = doors[static_cast<size_t>(k)].second + 0.7f, b = doors[static_cast<size_t>(k) + 1].first - 0.7f;
     windows.push_back({a, (a + b) / 2 - 0.08f});
     windows.push_back({(a + b) / 2 + 0.08f, b});
   }
@@ -328,8 +368,22 @@ TrainCarModel makeCommuter(bool cab) {
     endWall(g, s, y1, 1, s.body);
   }
   underframe(g, s, y0, y1);
-  // pantograph frame on the roof
-  g.box({0, 2.0f, s.zRoof + 0.15f}, {0.9f, 0.6f, 0.03f}, Color{80, 80, 80, 255}, kMatMetal);
+  // single-arm pantograph on insulators, raised to the contact wire (5.0 m above the rail)
+  if (panto) {
+    const float py = 2.0f, pz = s.zRoof + 0.12f;
+    const Color pc{90, 92, 96, 255};
+    for (float ix : {-0.6f, 0.6f})
+      for (float iy : {py - 0.45f, py + 0.45f}) g.box({ix, iy, s.zRoof + 0.06f}, {0.05f, 0.05f, 0.07f}, Color{230, 228, 220, 255}, kShell);
+    g.box({0, py, pz + 0.03f}, {0.75f, 0.55f, 0.03f}, Color{80, 80, 80, 255}, kMatMetal);
+    const Vector3 a{0, py - 0.5f, pz + 0.08f}, b{0, py + 0.55f, pz + 0.72f}, c{0, py - 0.05f, 4.97f};
+    auto bar = [&](Vector3 p, Vector3 q) {
+      const Vector3 m{(p.x + q.x) / 2, (p.y + q.y) / 2, (p.z + q.z) / 2};
+      g.box(m, {0.03f, std::fabs(q.y - p.y) / 2 + 0.03f, std::fabs(q.z - p.z) / 2 + 0.03f}, pc, kMatMetal);
+    };
+    bar(a, b);
+    bar(b, c);
+    g.box({0, c.y, c.z + 0.02f}, {0.8f, 0.05f, 0.02f}, Color{60, 60, 62, 255}, kMatMetal);  // pan head
+  }
   const float cab_back = y1 - 1.6f;
   interior(in, s, y0, cab ? cab_back : y1, doors, windows);
   if (cab) {  // driver's cab: partition, desk with the master controller and gauges, seat
@@ -359,6 +413,11 @@ TrainCarModel makeCommuter(bool cab) {
   m.shell = g.upload();
   m.glass = glass.upload();
   m.interior = in.upload();
+  Geo lv[2][2];
+  doorLeaves(lv, s, doors);
+  for (int a = 0; a < 2; ++a)
+    for (int b = 0; b < 2; ++b) m.doors[a][b] = lv[a][b].upload();
+  m.door_travel = 0.64f;
   return m;
 }
 
@@ -369,7 +428,7 @@ TrainCarModel makeShinkansen(bool nose, bool panto = false) {
   const float y0 = -s.L / 2;
   const float y1 = nose ? s.L / 2 - 11.5f : s.L / 2;
   std::vector<std::pair<float, float>> windows, doors = {{y0 + 0.6f, y0 + 1.6f}};
-  for (float y = y0 + 2.4f; y < y1 - 0.9f; y += 1.04f) windows.push_back({y, y + 0.62f});
+  for (float y = y0 + 2.7f; y < y1 - 0.9f; y += 1.04f) windows.push_back({y, y + 0.62f});
   for (int sx = -1; sx <= 1; sx += 2) sideWall(g, glass, s, static_cast<float>(sx), y0, y1, windows, doors);
   roof(g, s, y0, y1);
   endWall(g, s, y0, -1, s.body);
@@ -396,7 +455,7 @@ TrainCarModel makeShinkansen(bool nose, bool panto = false) {
     g.box({0, py, pz + 0.06f}, {0.55f, 1.1f, 0.06f}, Color{120, 122, 126, 255}, kMatMetal);
     for (float sx : {-1.0f, 1.0f}) g.box({sx * 0.95f, py, pz + 0.18f}, {0.03f, 1.6f, 0.2f}, Color{228, 228, 226, 255}, kShell);  // shield
     Geo& h = g;
-    const Vector3 a{0, py - 0.6f, pz + 0.12f}, b{0, py + 0.4f, pz + 0.9f}, c{0, py - 0.2f, pz + 1.6f};
+    const Vector3 a{0, py - 0.6f, pz + 0.12f}, b{0, py + 0.4f, pz + 0.75f}, c{0, py - 0.2f, 4.97f};  // head at the wire
     auto bar = [&](Vector3 p, Vector3 q) {
       const Vector3 m{(p.x + q.x) / 2, (p.y + q.y) / 2, (p.z + q.z) / 2};
       h.box(m, {0.035f, std::fabs(q.y - p.y) / 2 + 0.03f, std::fabs(q.z - p.z) / 2 + 0.03f}, pc, kMatMetal);
@@ -477,6 +536,11 @@ TrainCarModel makeShinkansen(bool nose, bool panto = false) {
   m.shell = g.upload();
   m.glass = glass.upload();
   m.interior = in.upload();
+  Geo lv[2][2];
+  doorLeaves(lv, s, doors);
+  for (int a = 0; a < 2; ++a)
+    for (int b = 0; b < 2; ++b) m.doors[a][b] = lv[a][b].upload();
+  m.door_travel = 0.98f;
   return m;
 }
 
@@ -486,6 +550,7 @@ void TrainModels::build() {
   if (ready_) return;
   m_[static_cast<int>(TrainCar::CommuterMid)] = makeCommuter(false);
   m_[static_cast<int>(TrainCar::CommuterCab)] = makeCommuter(true);
+  m_[static_cast<int>(TrainCar::CommuterPanto)] = makeCommuter(false, true);
   m_[static_cast<int>(TrainCar::ShinkansenMid)] = makeShinkansen(false);
   m_[static_cast<int>(TrainCar::ShinkansenNose)] = makeShinkansen(true);
   m_[static_cast<int>(TrainCar::ShinkansenPanto)] = makeShinkansen(false, true);
@@ -494,9 +559,13 @@ void TrainModels::build() {
 
 void TrainModels::unload() {
   if (!ready_) return;
-  for (auto& m : m_)
+  for (auto& m : m_) {
     for (Mesh* x : {&m.shell, &m.glass, &m.interior})
       if (x->vaoId) UnloadMesh(*x);
+    for (auto& side : m.doors)
+      for (Mesh& x : side)
+        if (x.vaoId) UnloadMesh(x);
+  }
   ready_ = false;
 }
 

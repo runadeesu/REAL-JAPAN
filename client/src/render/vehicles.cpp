@@ -433,7 +433,7 @@ struct CarParams {
 };
 
 VehicleModel makeCar(VehicleType type, const CarParams& p) {
-  Geo body, head, tail;
+  Geo body, head, tail, indl, indr;
   const float hw = p.W * 0.5f, yf = p.L * 0.5f, yr = -p.L * 0.5f;
   const float zb = 0.2f;
   const float znose = p.zbelt - (p.boxy ? 0.06f : 0.16f), ztail = p.zbelt - (p.boxy ? 0.02f : 0.05f);
@@ -493,11 +493,16 @@ VehicleModel makeCar(VehicleType type, const CarParams& p) {
     head.box({sg * (hw - 0.1f), yf - 0.12f, hz + 0.005f}, {0.04f, 0.1f, 0.04f}, c, kMatSignalLamp);
     tail.box({sg * (hw - 0.22f), yr + 0.02f, ztail - 0.12f}, {0.18f, 0.04f, 0.06f}, c, kMatSignalLamp);
     tail.box({sg * (hw - 0.08f), yr + 0.14f, ztail - 0.12f}, {0.035f, 0.12f, 0.055f}, c, kMatSignalLamp);
+    Geo& ind = sg > 0 ? indr : indl;
+    ind.box({sg * (hw - 0.09f), yf - 0.06f, hz - 0.075f}, {0.07f, 0.035f, 0.022f}, c, kMatSignalLamp);
+    ind.box({sg * (hw - 0.2f), yr + 0.025f, ztail - 0.215f}, {0.09f, 0.03f, 0.03f}, c, kMatSignalLamp);
   }
   VehicleModel m;
   m.body = body.upload();
   m.head_lamps = head.upload();
   m.tail_lamps = tail.upload();
+  m.indicators[0] = indl.upload();
+  m.indicators[1] = indr.upload();
   m.wheel_r = p.wheel_r;
   m.wheel = makeWheel(p.wheel_r, p.wheel_r > 0.3f ? 0.215f : 0.175f, p.boxy && !p.taxi && type == VehicleType::Van);
   const float wx = hw - 0.13f;
@@ -514,7 +519,7 @@ VehicleModel makeCar(VehicleType type, const CarParams& p) {
 }
 
 VehicleModel makeBus() {
-  Geo body, head, tail;
+  Geo body, head, tail, indl, indr;
   const float L = 10.5f, W = 2.49f, hw = W * 0.5f, yf = L * 0.5f, yr = -L * 0.5f;
   const float zb = 0.3f, zwin = 1.15f, zwt = 2.55f, zr = 3.05f;
   const float wyf = yf - 2.2f, wyr = yr + 2.6f, wr = 0.48f;
@@ -551,11 +556,17 @@ VehicleModel makeBus() {
   for (float sg : {1.0f, -1.0f}) {
     head.box({sg * (hw - 0.25f), yf - 0.02f, zb + 0.45f}, {0.15f, 0.04f, 0.07f}, c, kMatSignalLamp);
     tail.box({sg * (hw - 0.15f), yr + 0.02f, zb + 0.9f}, {0.1f, 0.04f, 0.25f}, c, kMatSignalLamp);
+    Geo& ind = sg > 0 ? indr : indl;
+    ind.box({sg * (hw - 0.07f), yf - 0.02f, zb + 0.62f}, {0.06f, 0.04f, 0.06f}, c, kMatSignalLamp);
+    ind.box({sg * (hw - 0.15f), yr + 0.02f, zb + 1.28f}, {0.1f, 0.04f, 0.08f}, c, kMatSignalLamp);
+    ind.box({sg * (hw + 0.01f), yf - 1.6f, zb + 0.35f}, {0.015f, 0.08f, 0.03f}, c, kMatSignalLamp);  // side repeater
   }
   VehicleModel m;
   m.body = body.upload();
   m.head_lamps = head.upload();
   m.tail_lamps = tail.upload();
+  m.indicators[0] = indl.upload();
+  m.indicators[1] = indr.upload();
   m.wheel_r = wr;
   m.wheel = makeWheel(wr, 0.28f, true);
   const float wx = hw - 0.25f;
@@ -574,7 +585,7 @@ VehicleModel makeBus() {
 }
 
 VehicleModel makeTruck() {
-  Geo body, head, tail;
+  Geo body, head, tail, indl, indr;
   const float L = 6.2f, W = 1.95f, hw = W * 0.5f, yf = L * 0.5f, yr = -L * 0.5f;
   const float cab_r = yf - 1.75f, wr = 0.38f;
   const float wyf = yf - 1.0f, wyr = yr + 1.4f;
@@ -594,11 +605,16 @@ VehicleModel makeTruck() {
   for (float sg : {1.0f, -1.0f}) {
     head.box({sg * (hw - 0.22f), yf + 0.01f, 0.75f}, {0.13f, 0.04f, 0.06f}, c, kMatSignalLamp);
     tail.box({sg * (hw - 0.18f), yr - 0.02f, 0.7f}, {0.13f, 0.04f, 0.06f}, c, kMatSignalLamp);
+    Geo& ind = sg > 0 ? indr : indl;
+    ind.box({sg * (hw - 0.05f), yf + 0.01f, 0.87f}, {0.05f, 0.04f, 0.04f}, c, kMatSignalLamp);
+    ind.box({sg * (hw - 0.05f), yr - 0.02f, 0.84f}, {0.05f, 0.04f, 0.04f}, c, kMatSignalLamp);
   }
   VehicleModel m;
   m.body = body.upload();
   m.head_lamps = head.upload();
   m.tail_lamps = tail.upload();
+  m.indicators[0] = indl.upload();
+  m.indicators[1] = indr.upload();
   m.wheel_r = wr;
   m.wheel = makeWheel(wr, 0.23f, true);
   const float wx = hw - 0.2f;
@@ -634,7 +650,8 @@ void VehicleModels::build() {
 void VehicleModels::unload() {
   if (!ready_) return;
   for (auto& m : models_)
-    for (Mesh* x : {&m.body, &m.wheel, &m.head_lamps, &m.tail_lamps, &m.cockpit, &m.bonnet, &m.steering, &m.gauges, &m.needle})
+    for (Mesh* x : {&m.body, &m.wheel, &m.head_lamps, &m.tail_lamps, &m.indicators[0], &m.indicators[1], &m.cockpit, &m.bonnet, &m.steering, &m.gauges,
+                    &m.needle})
       if (x->vaoId) {
         UnloadMesh(*x);
         *x = Mesh{};

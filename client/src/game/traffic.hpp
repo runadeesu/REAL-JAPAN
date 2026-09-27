@@ -44,6 +44,8 @@ struct Vehicle {
   float steer = 0;       // front road-wheel angle (positive: right)
   float wheel_dist = 0;  // distance rolled (wheel rotation)
   bool reversing = false;
+  int blink = 0;          // turn indicator: -1 left, 1 right (before and through a turn at a junction)
+  float blink_t = 0;      // keeps blinking a moment after the turn
 };
 
 class Traffic {
@@ -96,6 +98,7 @@ class Traffic {
  private:
   void samplePose(const Edge& e, int dir, int lane, double s, rj::geo::Vec3d& p, double& heading) const;
   double headingAtEnd(const Edge& e, int dir) const;
+  double headingAtStart(const Edge& e, int dir) const;
   void chooseNext(Vehicle& v);
   bool spawnOne(const rj::geo::Vec3d& player, double rmin, double rmax);
   void assignSignals(const TrafficSignals& signals);

@@ -239,6 +239,16 @@ void App::updateSound(float dt) {
       snd_train_v_[t.id] = t.v;
       return a;
     };
+    auto trainCurve = [&](const Train& t, int car) {  // |d heading / ds| between neighbouring cars
+      const int k0 = std::max(0, car - 1), k1 = std::min(t.cars - 1, car + 1);
+      if (k1 <= k0) return 0.0f;
+      rj::geo::Vec3d p0, p1;
+      float y0, y1, pt;
+      trains_.carPose(t, k0, p0, y0, pt);
+      trains_.carPose(t, k1, p1, y1, pt);
+      const double ds = std::max(1.0, std::hypot(p1.x - p0.x, p1.y - p0.y));
+      return static_cast<float>(std::fabs(std::remainder(static_cast<double>(y1 - y0), 2.0 * PI)) / ds);
+    };
     auto traction = [&](const Train& t, float acc) {
       if (t.manual) return t.notch > 0 ? t.notch / 5.0f : (t.notch < 0 && t.v > 0.3 ? std::max(-1.0f, t.notch / 7.0f) : 0.0f);
       if (t.at_station >= 0 || t.v < 0.05) return 0.0f;
@@ -263,6 +273,7 @@ void App::updateSound(float dt) {
       }
       r.motor_gain = shink ? 0.35f : 0.7f;
       r.air_gain = shink ? 0.6f : 0.12f;
+      r.curve = trainCurve(*t, ride_car_);
       r.muffle = drive_train_ >= 0 ? 0.4f : 0.5f;
     }
     // other trains nearby (platform, street under the viaduct)
@@ -321,6 +332,7 @@ void App::updateSound(float dt) {
       r.air_gain = shink ? static_cast<float>(1.0 / (1.0 + dmin / 40.0)) : 0.0f;
       r.pan = panOf(ear, pmin);
       r.muffle = muffle;
+      r.curve = trainCurve(t, t.cars / 2);
     }
     // station sounds: departure melody, door chime, door engines; the chime on board
     const int here = ride_train_ >= 0 ? (trains_.train(ride_train_) ? trains_.train(ride_train_)->at_station : -1) : platform_station;

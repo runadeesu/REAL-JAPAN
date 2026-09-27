@@ -972,9 +972,17 @@ void App::updateRideTest() {
   if (opt_.state == "trainjob" && ride_train_ >= 0 && drive_train_ < 0) {  // take the controls once aboard
     if (const Train* t = trains_.train(ride_train_); t && t->at_station >= 0) startTrainDriving();
   }
-  if (frame_ % 60 == 0)
+  if (frame_ % 60 == 0) {
     TraceLog(LOG_INFO, "RJ: ride test t %.1f train %d ferry %d jet %d prompt '%s' pos %.1f %.1f %.1f", ride_test_t_, ride_train_, ride_ferry_, ride_jet_,
              prompt_.c_str(), player_.pos.x, player_.pos.y, player_.pos.z);
+    if (opt_.station >= 0 && trains_.loaded() && ride_train_ < 0) {
+      const Station& sn = trains_.stations()[static_cast<size_t>(opt_.station)];
+      for (const auto& t : trains_.trains())
+        if (t.line == sn.line)
+          TraceLog(LOG_INFO, "RJ:   train %d dir %d s %.0f (station at %.0f) v %.1f at %d next %d dwell %.0f", t.id, t.dir, t.s, sn.s, t.v, t.at_station,
+                   t.next_stop, t.dwell);
+    }
+  }
   if (ride_train_ >= 0 || ride_ferry_ >= 0 || ride_jet_ >= 0) {
     ride_test_t_ += std::min(GetFrameTime(), 0.1f) * static_cast<float>(opt_.sim_speed);
     if (!opt_.alight && ride_test_t_ >= opt_.ride) ride_test_done_ = true;
@@ -1722,7 +1730,7 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v0.3.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional island)" : " buildings (PLATEAU)"),
+  ui_.textRight("v0.4.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional island)" : " buildings (PLATEAU)"),
                  vw - 30, 1040, 20, theme::kMuted);
 }
 

@@ -149,6 +149,13 @@ double Traffic::headingAtEnd(const Edge& e, int dir) const {
   return std::atan2(B.x - A.x, B.y - A.y);
 }
 
+double Traffic::headingAtStart(const Edge& e, int dir) const {
+  const size_t n = e.pts.size();
+  const auto& A = dir == 0 ? e.pts[0] : e.pts[n - 1];
+  const auto& B = dir == 0 ? e.pts[1] : e.pts[n - 2];
+  return std::atan2(B.x - A.x, B.y - A.y);
+}
+
 void Traffic::chooseNext(Vehicle& v) {
   const Edge& e = edges_[static_cast<size_t>(v.edge)];
   const int node = v.dir == 0 ? e.b : e.a;
@@ -415,6 +422,18 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
       chooseNext(v);
     }
     const Edge& e = edges_[static_cast<size_t>(v.edge)];
+    // indicate a turn at the next junction from about 30 m before it (the law asks for 30 m)
+    int want = 0;
+    if (v.next_edge >= 0 && e.length - v.s < 32.0) {
+      const double turn = std::remainder(headingAtStart(edges_[static_cast<size_t>(v.next_edge)], v.next_dir) - headingAtEnd(e, v.dir), 2.0 * M_PI);
+      want = turn > 0.6 ? 1 : (turn < -0.6 ? -1 : 0);
+    }
+    if (want != 0) {
+      v.blink = want;
+      v.blink_t = 1.2f;
+    } else if ((v.blink_t -= static_cast<float>(dt)) <= 0.0f) {
+      v.blink = 0;
+    }
     rj::geo::Vec3d p;
     double hd;
     samplePose(e, v.dir, v.lane, v.s, p, hd);

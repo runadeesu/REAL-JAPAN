@@ -869,7 +869,7 @@ void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_tr
       const bool end = k == 0 || k == t.cars - 1;
       const bool reversed = k == t.cars - 1 && k > 0;  // the rear cab faces backwards
       const TrainCarModel& m = train_models_.get(shink ? (end ? TrainCar::ShinkansenNose : (k % 4 == 2 ? TrainCar::ShinkansenPanto : TrainCar::ShinkansenMid))
-                                                       : (end ? TrainCar::CommuterCab : TrainCar::CommuterMid));
+                                                       : (end ? TrainCar::CommuterCab : (k % 3 == 1 ? TrainCar::CommuterPanto : TrainCar::CommuterMid)));
       const float y = reversed ? yaw + PI : yaw;
       const float pt = reversed ? -pitch : pitch;
       const Vector3 rp = enuToRl(p);
@@ -877,7 +877,21 @@ void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_tr
       DrawMesh(m.shell, mat_, M);
       const bool riding = t.id == ride_train && k == ride_car;
       if (!riding && m.glass.vaoId) DrawMesh(m.glass, mat_, M);
-      if (riding && m.interior.vaoId) {
+      // doors: the platform is on the left of the direction of travel (the rear cab car is
+      // turned round, so its left is the model's right); leaves slide along the car (model y =
+      // raylib -z)
+      const float open = Trains::doorOpen(t);
+      const int open_side = reversed ? 1 : 0;
+      for (int side = 0; side < 2; ++side)
+        for (int dir = 0; dir < 2; ++dir) {
+          const Mesh& dm = m.doors[side][dir];
+          if (!dm.vaoId) continue;
+          const float d = side == open_side ? open * m.door_travel * (dir ? 1.0f : -1.0f) : 0.0f;
+          DrawMesh(dm, mat_, d != 0.0f ? MatrixMultiply(MatrixTranslate(0, 0, -d), M) : M);
+        }
+      // the lit interior of the car ridden, and of nearby cars standing with their doors open
+      const bool near_open = open > 0.0f && std::hypot(p.x - c.x, p.y - c.y) < 45.0;
+      if ((riding || near_open) && m.interior.vaoId) {
         set3(lit_, "selfLight", kCabinLight);
         DrawMesh(m.interior, mat_, M);
         set3(lit_, "selfLight", Vector3{0, 0, 0});
@@ -1007,6 +1021,12 @@ void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const L
     const float tail_k = (v.braking ? 5.0f : 0.0f) + 0.25f + 1.6f * night;
     drawMeshMat(m.head_lamps, M, kMatSignalLamp, WHITE, head);
     drawMeshMat(m.tail_lamps, M, kMatSignalLamp, WHITE, Vector3Scale(Vector3{1.0f, 0.05f, 0.03f}, tail_k));
+    // turn indicators: amber, about 85 flashes a minute while turning; dim lens otherwise
+    const bool flash = std::fmod(GetTime() + v.id * 0.13, 0.7) < 0.35;
+    for (int k = 0; k < 2; ++k) {
+      const bool on = flash && v.blink == (k == 0 ? -1 : 1);
+      drawMeshMat(m.indicators[k], M, kMatSignalLamp, WHITE, on ? Vector3{6.0f, 2.6f, 0.2f} : Vector3{0.12f, 0.06f, 0.01f});
+    }
   }
   rlEnableBackfaceCulling();
 }
