@@ -567,6 +567,19 @@ void App::update(float dt) {
           boards_t_ = 1.0f;
           updateDepartureBoards();
         }
+        if (const Train* t = ride_train_ >= 0 && drive_train_ < 0 && ui_.hasFont() ? trains_.train(ride_train_) : nullptr) {
+          // the car's displays: the station at a stop, otherwise the next one (Japanese / English in turn)
+          const int si = t->at_station >= 0 ? t->at_station : t->next_stop;
+          if (si >= 0) {
+            const Station& st = trains_.stations()[static_cast<size_t>(si)];
+            const StationReading* r = stationReading(st.name);
+            const bool en = std::fmod(render_time_, 8.0f) >= 4.0f && r;
+            const std::string base = stationBaseName(st.name);
+            const std::string text = t->at_station >= 0 ? (en ? std::string(r->roman) : base)
+                                                        : (en ? "Next  " + std::string(r->roman) : "次は　" + base);
+            renderer_.setCarDisplay(text, ui_.font());
+          }
+        }
       }
       if (ride_place_pending_ && traffic_placed_) {
         ride_place_pending_ = false;
@@ -1603,6 +1616,7 @@ void App::drawWorldView(const Camera3D& cam) {
     renderer_.drawTrains(trains_, cam, ride_train_, ride_car_);
     renderer_.drawStationSigns(trains_, cam);
     renderer_.drawDepartureBoards(trains_, cam, render_time_);
+    if (ride_train_ >= 0 && drive_train_ < 0) renderer_.drawCarDisplay(trains_, ride_train_, ride_car_);
     if (in_session_ && screen_ != Screen::Title) renderer_.drawCrowd(crowd_.people());
     renderer_.drawShips(ferries_, cam, lighting_);
     Renderer::FlightView fv;

@@ -254,6 +254,8 @@ void Renderer::shutdown() {
   signs_.clear();
   for (auto& b : boards_) UnloadRenderTexture(b.rt);
   boards_.clear();
+  if (car_display_.id) UnloadRenderTexture(car_display_);
+  car_display_ = RenderTexture2D{};
   signs_built_ = false;
   for (Mesh* m : {&plane_, &ocean_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_}) UnloadMesh(*m);
   for (auto& s : shadow_)
@@ -1248,6 +1250,78 @@ void Renderer::drawDepartureBoards(const Trains& trains, const Camera3D& cam, fl
     rlDrawRenderBatchActive();
   }
   rlSetTexture(0);
+  rlColorMask(true, true, true, true);
+  rlEnableBackfaceCulling();
+}
+
+void Renderer::setCarDisplay(const std::string& text, const Font& font) {
+  constexpr int W = 768, H = 96;
+  if (!car_display_.id) {
+    car_display_ = LoadRenderTexture(W, H);
+    SetTextureFilter(car_display_.texture, TEXTURE_FILTER_BILINEAR);
+  }
+  if (text == car_display_key_) return;
+  car_display_key_ = text;
+  BeginTextureMode(car_display_);
+  ClearBackground(Color{6, 6, 8, 255});
+  float size = 58.0f;
+  Vector2 m = MeasureTextEx(font, text.c_str(), size, 1.0f);
+  if (m.x > W - 24) {
+    size *= (W - 24) / m.x;
+    m = MeasureTextEx(font, text.c_str(), size, 1.0f);
+  }
+  DrawTextEx(font, text.c_str(), Vector2{(W - m.x) * 0.5f, (H - m.y) * 0.5f}, size, 1.0f, Color{255, 150, 40, 255});
+  for (int y = 0; y < H; y += 4) DrawRectangle(0, y, W, 1, Color{0, 0, 0, 140});
+  for (int x = 0; x < W; x += 4) DrawRectangle(x, 0, 1, H, Color{0, 0, 0, 100});
+  EndTextureMode();
+}
+
+void Renderer::drawCarDisplay(const Trains& trains, int ride_train, int ride_car) {
+  const Train* t = ride_train >= 0 ? trains.train(ride_train) : nullptr;
+  if (!t || !car_display_.id || car_display_key_.empty()) return;
+  const bool shink = trains.lines()[static_cast<size_t>(t->line)].kind == LineKind::Shinkansen;
+  rj::geo::Vec3d p;
+  float yaw, pitch;
+  trains.carPose(*t, ride_car, p, yaw, pitch);
+  const bool reversed = ride_car == t->cars - 1 && ride_car > 0;  // the rear cab is turned round
+  if (reversed) yaw += PI, pitch = -pitch;
+  const double fx = std::sin(yaw), fy = std::cos(yaw), rx = fy, ry = -fx, tp = std::tan(pitch);
+  auto W = [&](double x, double y, double z) {  // car model -> raylib
+    return enuToRl({p.x + rx * x + fx * y, p.y + ry * x + fy * y, p.z + z + tp * y});
+  };
+  rlDrawRenderBatchActive();
+  rlColorMask(true, true, true, false);
+  rlDisableBackfaceCulling();
+  rlSetTexture(car_display_.texture.id);
+  rlBegin(RL_QUADS);
+  rlColor4ub(255, 255, 255, 255);
+  // quad: centre (x, y, z), text +u along (ux, uy) in the car's plane, half size (hw, hh)
+  auto Q = [&](double x, double y, double z, double ux, double uy, double hw, double hh) {
+    const Vector3 a = W(x - ux * hw, y - uy * hw, z - hh), b = W(x + ux * hw, y + uy * hw, z - hh), c = W(x + ux * hw, y + uy * hw, z + hh),
+                  d = W(x - ux * hw, y - uy * hw, z + hh);
+    rlTexCoord2f(0, 0);
+    rlVertex3f(a.x, a.y, a.z);
+    rlTexCoord2f(1, 0);
+    rlVertex3f(b.x, b.y, b.z);
+    rlTexCoord2f(1, 1);
+    rlVertex3f(c.x, c.y, c.z);
+    rlTexCoord2f(0, 1);
+    rlVertex3f(d.x, d.y, d.z);
+  };
+  if (shink) {
+    const bool nose = ride_car == 0 || ride_car == t->cars - 1;
+    const double ye = (nose ? 12.5 - 11.5 : 12.5) - 0.3 - 0.042;
+    Q(0.0, ye, 1.15 + 2.12, 1.0, 0.0, 0.38, 0.065);  // on the end wall, facing the seats
+  } else {
+    for (int d = 0; d < 4; ++d) {
+      const double yc = -10.0 + 2.45 + d * 5.03;
+      Q(1.354, yc, 2.8 + 0.24, 0.0, -1.0, 0.27, 0.066);  // right wall: reads towards the back of the car
+      Q(-1.354, yc, 2.8 + 0.24, 0.0, 1.0, 0.27, 0.066);
+    }
+  }
+  rlEnd();
+  rlSetTexture(0);
+  rlDrawRenderBatchActive();
   rlColorMask(true, true, true, true);
   rlEnableBackfaceCulling();
 }

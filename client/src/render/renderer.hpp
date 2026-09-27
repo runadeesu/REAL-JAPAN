@@ -122,6 +122,10 @@ class Renderer {
   void setDepartureBoard(int station, int side, const std::string& type, const std::string& dest, const std::string& when,
                          const std::string& notice, const Font& font);
   void drawDepartureBoards(const Trains& trains, const Camera3D& cam, float time_s);
+  // information displays inside the car ridden (commuter: over every door; Shinkansen: on the end
+  // wall): the next or current station
+  void setCarDisplay(const std::string& text, const Font& font);
+  void drawCarDisplay(const Trains& trains, int ride_train, int ride_car);
   void drawShips(const Ferries& ferries, const Camera3D& cam, const Lighting& L);
   // Aircraft: scheduled jets (ride_jet: drawn from the cabin) and the light aircraft (cockpit
   // instruments when flown from the seat).
@@ -172,6 +176,8 @@ class Renderer {
     float notice_w = 0;  // width of the notice line (scrolls when wider than the board)
   };
   std::vector<DepartureBoard> boards_;
+  RenderTexture2D car_display_{};
+  std::string car_display_key_;
   Mesh ocean_{};
   TrainModels train_models_;
   ShipModels ship_models_;

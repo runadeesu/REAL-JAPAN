@@ -159,8 +159,8 @@ Mesh buildPose(BodyVariant var, float phase, bool walk, int pose = 0) {
   auto tor = [&](float z, float yaw) { return Vector3Add(pelvis, rotZ(Vector3{0, 0, z}, yaw)); };
   if (skirt && sit) {
     // seated: the skirt lies over the thighs
-    loftBone(g, tor(0.08f, 0), Vector3Add(pelvis, Vector3{0, 0.4f, -0.04f}), Vector3{1, 0, 0},
-             {{0.0f, 0.15f, 0.12f}, {0.4f, 0.19f, 0.12f}, {1.0f, 0.21f, 0.08f}}, kMatBottom, 14, true, true);
+    loftBone(g, tor(0.06f, 0), Vector3Add(pelvis, Vector3{0, 0.36f, -0.03f}), Vector3{1, 0, 0},
+             {{0.0f, 0.15f, 0.11f}, {0.5f, 0.16f, 0.09f}, {1.0f, 0.15f, 0.05f}}, kMatBottom, 14, true, true);
   } else if (skirt) {
     // skirt: cone from the waist to the knee line
     loftBone(g, tor(0.08f, 0), tor(-0.42f, 0), Vector3{1, 0, 0},
@@ -192,9 +192,9 @@ Mesh buildPose(BodyVariant var, float phase, bool walk, int pose = 0) {
     if (strap && side > 0) swing = 2.3f, elbow = 0.05f;   // right arm raised forward to a strap (hand ~1.8 m up, 0.4 m ahead)
     const Vector3 sh = tor(0.45f, chest_yaw);
     const Vector3 shoulder = Vector3Add(sh, rotZ(Vector3{0.19f * side, 0, 0}, chest_yaw));
-    const Vector3 upper = rotX(Vector3{0.02f * side, 0, -0.29f}, swing);
+    const Vector3 upper = rotX(Vector3{(sit ? -0.03f : 0.02f) * side, 0, -0.29f}, swing);
     const Vector3 elbowP = Vector3Add(shoulder, upper);
-    const Vector3 fore = rotX(Vector3{0.01f * side, 0, -0.26f}, swing + elbow);
+    const Vector3 fore = rotX(Vector3{(sit ? -0.1f : 0.01f) * side, 0, -0.26f}, swing + elbow);  // seated: hands in the lap
     const Vector3 wrist = Vector3Add(elbowP, fore);
     const Vector3 xs{1, 0, 0};
     loftBone(g, shoulder, elbowP, xs, {{0.0f, 0.052f, 0.05f}, {1.0f, 0.042f, 0.04f}}, kMatTop, 9, true, false);
