@@ -931,6 +931,11 @@ Camera3D App::rideCamera() const {
   rj::geo::Vec3d p;
   float yaw, pitch;
   trains_.carPose(*t, ride_car_, p, yaw, pitch);
+  // (the rear cab car is drawn turned round: sit in its seats as modelled)
+  if (ride_car_ == t->cars - 1 && ride_car_ > 0) {
+    yaw += PI;
+    pitch = -pitch;
+  }
   // seated: Shinkansen window seat (left, facing forward), commuter long bench seat (left, facing across)
   const double fx = std::sin(yaw), fy = std::cos(yaw), rx = fy, ry = -fx;
   double sx, sy, sz;
