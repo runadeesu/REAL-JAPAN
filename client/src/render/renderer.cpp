@@ -1111,6 +1111,7 @@ void Renderer::buildStationSigns(const Trains& trains, const Font& font) {
     signs_.push_back(rt);
   }
   signs_built_ = true;
+  TraceLog(LOG_INFO, "RJ: station name boards built (%zu)", signs_.size());
 }
 
 void Renderer::drawStationSigns(const Trains& trains, const Camera3D& cam) {
@@ -1147,6 +1148,30 @@ void Renderer::drawStationSigns(const Trains& trains, const Camera3D& cam) {
             rlVertex3f(q.x, q.y, q.z);
           };
           // render-texture rows run bottom-up: v = 1 at the top of the board
+          rlTexCoord2f(0, 0);
+          V(-0.8, -0.25);
+          rlTexCoord2f(1, 0);
+          V(0.8, -0.25);
+          rlTexCoord2f(1, 1);
+          V(0.8, 0.25);
+          rlTexCoord2f(0, 1);
+          V(-0.8, 0.25);
+        }
+      }
+      // and boards hung across the platform (read by people walking along it)
+      for (double u : {-plat_len * 0.18, plat_len * 0.18}) {
+        rj::geo::Vec3d p;
+        double h;
+        trains.poseAt(s.line, s.s + u, p, h);
+        const double fx = std::sin(h), fy = std::cos(h), rx = fy, ry = -fx;
+        const rj::geo::Vec3d ctr{p.x + rx * side * off, p.y + ry * side * off, s.pos.z + 2.6};
+        if (std::hypot(ctr.x - c.x, ctr.y - c.y) > 150.0) continue;
+        for (int face = 0; face < 2; ++face) {
+          const double fs = face == 0 ? 1.0 : -1.0, o = fs * 0.012;
+          auto V = [&](double a, double b) {  // text +u to the right of someone facing this face
+            const Vector3 q = enuToRl({ctr.x + fx * o - fs * rx * a, ctr.y + fy * o - fs * ry * a, ctr.z + b});
+            rlVertex3f(q.x, q.y, q.z);
+          };
           rlTexCoord2f(0, 0);
           V(-0.8, -0.25);
           rlTexCoord2f(1, 0);
