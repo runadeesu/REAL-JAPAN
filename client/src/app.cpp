@@ -2458,7 +2458,7 @@ void App::drawPhone() {
       yy += 50;
       drawMap({cx, yy, cw, cw}, map_half_extent_, true);
       yy += cw + 20;
-      ui_.textWrapped(tr("phone.map_hint"), cx, yy, cw, 20, theme::kMuted);
+      ui_.textWrapped(tr(world_.meta().fictional ? "phone.map_hint_fictional" : "phone.map_hint"), cx, yy, cw, 20, theme::kMuted);
       back();
       break;
     }

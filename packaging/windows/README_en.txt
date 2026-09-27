@@ -12,7 +12,7 @@ Two worlds are included:
 
 HOW TO START
   1. Extract the ZIP anywhere (e.g. your Desktop). If the download comes in several parts
-     (-part1.zip ... -part5.zip), extract all of them to the same place (they all fill the
+     (-part1.zip ... -part15.zip), extract all of them to the same place (they all fill the
      same RealJapan-0.5.0-win64 folder); with a part missing the game says that world data
      is missing.
   2. Double-click RealJapan.exe. No installer or extra runtime (DLL) is needed.

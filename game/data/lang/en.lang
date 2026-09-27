@@ -111,6 +111,7 @@ phone.home = Home
 phone.not_impl = Not implemented
 phone.not_impl_list = Phone · Messages · Camera · SNS · Music · Jobs · Shopping · Delivery · Taxi · Transit · Flights · Hotels
 phone.map_hint = Map generated from real data (PLATEAU roads & buildings)
+phone.map_hint_fictional = Map of the fictional country (procedurally generated); not a real place
 phone.map_you = You
 phone.clock_date = {w}, {y}-{m}-{d}
 phone.clock_holiday = National holiday: {name}

@@ -60,8 +60,8 @@ card at the end of a ride.
 * `rail.txt` (lines with names, stations, readings), `transport.txt` (airports, piers, ferry routes),
   `roads.rjroad`, `residents.csv`, `client.txt` (cells, place names, readings, POIs).
 
-Figures of this build: main island about 1,380 km², 1,507 cells, 196,657 generated buildings,
-about 390 MB of cell data (cook: about 33 minutes on 4 processes).
+Figures of this build: main island about 1,380 km², 1,507 cells, 196,452 generated buildings,
+about 390 MB of cell data (cook: about 30 minutes on 4 processes).
 
 ## Not implemented (honest list)
 

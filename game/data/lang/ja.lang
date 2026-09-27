@@ -111,6 +111,7 @@ phone.home = ホーム
 phone.not_impl = 未実装
 phone.not_impl_list = 電話・メッセージ・カメラ・SNS・音楽・求人・ショッピング・デリバリー・タクシー・乗換・航空券・ホテル
 phone.map_hint = 実データ（PLATEAU 道路・建物）から生成した地図
+phone.map_hint_fictional = 架空の国（手続き生成）の地図。実在の場所ではありません
 phone.map_you = 現在地
 phone.clock_date = {y}年{m}月{d}日（{w}）
 phone.clock_holiday = 祝日：{name}

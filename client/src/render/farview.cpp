@@ -108,6 +108,29 @@ bool FarView::load(const std::filesystem::path& dir) {
 
 void FarView::build() {
   if (!loaded_ || built_) return;
+  // Forest in the colour map stands a crown's height above the ground, as the streamed cells'
+  // canopy does (no cliff where a loaded forest cell meets the far view).
+  std::vector<float> canopy(static_cast<size_t>(nx_) * ny_, 0.0f);
+  if (color_img_.data && color_img_.width >= 2 * nx_ - 1 && color_img_.height >= 2 * ny_ - 1) {
+    for (int r = 0; r < ny_; ++r)
+      for (int c = 0; c < nx_; ++c) {
+        const Color k = GetImageColor(color_img_, 2 * c, 2 * r);
+        const float d = std::sqrt(static_cast<float>((k.r - 40) * (k.r - 40) + (k.g - 58) * (k.g - 58) + (k.b - 32) * (k.b - 32))) / 255.0f;
+        const float t = std::clamp((d - 0.04f) / 0.06f, 0.0f, 1.0f);
+        canopy[static_cast<size_t>(r) * nx_ + c] = 15.0f * (1.0f - t * t * (3.0f - 2.0f * t));
+      }
+    // two 3 x 3 box passes: forest edges ramp over about 100 m instead of stepping from vertex to vertex
+    for (int pass = 0; pass < 2; ++pass) {
+      std::vector<float> src = canopy;
+      for (int r = 1; r + 1 < ny_; ++r)
+        for (int c = 1; c + 1 < nx_; ++c) {
+          float sum = 0.0f;
+          for (int dr = -1; dr <= 1; ++dr)
+            for (int dc = -1; dc <= 1; ++dc) sum += src[static_cast<size_t>(r + dr) * nx_ + (c + dc)];
+          canopy[static_cast<size_t>(r) * nx_ + c] = sum / 9.0f;
+        }
+    }
+  }
   color_ = LoadTextureFromImage(color_img_);
   GenTextureMipmaps(&color_);
   SetTextureFilter(color_, TEXTURE_FILTER_TRILINEAR);
@@ -148,7 +171,7 @@ void FarView::build() {
         for (int j = 0; j < n; ++j) {
           const int r = r_n + i * kStep, c = c_w + j * kStep;
           const double la = lat1_ - r * dlat, lo = lon0_ + c * dlon;
-          const float h = heightAt(r, c);
+          const float h = heightAt(r, c) + canopy[static_cast<size_t>(std::clamp(r, 0, ny_ - 1)) * nx_ + std::clamp(c, 0, nx_ - 1)];
           // smooth normal from the full-resolution samples
           const float dzdx = (heightAt(r, c + 1) - heightAt(r, c - 1)) / static_cast<float>(2.0 * mx);
           const float dzdy = (heightAt(r - 1, c) - heightAt(r + 1, c)) / static_cast<float>(2.0 * my);
