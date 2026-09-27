@@ -135,8 +135,10 @@ class Renderer {
   struct CockpitView {
     float kmh = 0, rpm = 0, steer = 0;  // steer: road-wheel angle (rad)
   };
+  // extra: the player's car (driven or parked); extra_driven: the player sits in it (drawn at the
+  // wheel in the chase view). Traffic near the camera has a driver at the (right-hand) wheel.
   void drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L, const Vehicle* extra = nullptr,
-                    const CockpitView* cockpit = nullptr);
+                    const CockpitView* cockpit = nullptr, bool extra_driven = false);
   void vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out, const Vehicle* extra = nullptr) const;
   void drawRain(const Camera3D& cam, const Lighting& L, float time_s);
   void endScene(const Camera3D& cam, const Lighting& L, float time_s);

@@ -1599,7 +1599,7 @@ void App::drawWorldView(const Camera3D& cam) {
       cv.rpm = driving_.rpm();
       cv.steer = driving_.steerAngle();
     }
-    renderer_.drawVehicles(traffic_, cam, lighting_, driving_.hasCar() ? &driving_.car() : nullptr, cockpit ? &cv : nullptr);
+    renderer_.drawVehicles(traffic_, cam, lighting_, driving_.hasCar() ? &driving_.car() : nullptr, cockpit ? &cv : nullptr, driving_.active());
     renderer_.drawTrains(trains_, cam, ride_train_, ride_car_);
     renderer_.drawStationSigns(trains_, cam);
     renderer_.drawDepartureBoards(trains_, cam, render_time_);

@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "raymath.h"
+#include "game/driving.hpp"
 #include "game/station_names.hpp"
 #include "render/foliage.hpp"
 #include "render/shaders.hpp"
@@ -957,7 +958,8 @@ void Renderer::vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::
   if (extra) out.push_back({&vehicles_.get(extra->type).body, vehicleMatrix(*extra)});
 }
 
-void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L, const Vehicle* extra, const CockpitView* cockpit) {
+void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L, const Vehicle* extra, const CockpitView* cockpit,
+                            bool extra_driven) {
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   rlDisableBackfaceCulling();
   std::vector<const Vehicle*> list;
@@ -1020,6 +1022,21 @@ void Renderer::drawVehicles(const Traffic& traffic, const Camera3D& cam, const L
       if (wp[1] > 0) W = MatrixMultiply(W, MatrixRotateY(-v.steer));
       W = MatrixMultiply(W, MatrixTranslate(wp[0], m.wheel_r, -wp[1]));
       drawMeshMat(m.wheel, MatrixMultiply(W, Mw), -1, WHITE);
+    }
+    // the driver (right-hand drive): seated behind the wheel, visible through the windows
+    if ((vp != extra || extra_driven) && humans_.ready() && std::hypot(v.pos.x - c.x, v.pos.y - c.y) < 70.0) {
+      static const Color shirts[] = {{235, 235, 232, 255}, {40, 52, 84, 255}, {30, 30, 32, 255}, {128, 130, 134, 255}, {150, 180, 210, 255},
+                                     {118, 40, 44, 255},   {196, 180, 150, 255}};
+      static const Color skins[] = {{236, 204, 176, 255}, {222, 186, 150, 255}, {204, 166, 132, 255}};
+      static const Color hairs[] = {{22, 18, 16, 255}, {30, 24, 20, 255}, {58, 40, 28, 255}, {150, 150, 150, 255}};
+      const uint32_t h = static_cast<uint32_t>(v.id) * 2654435761u + (vp == extra ? 7u : 0u);
+      const bool uniform = v.type == VehicleType::Bus || v.type == VehicleType::Taxi;  // bus and taxi drivers wear uniforms
+      const Color top = uniform ? Color{40, 50, 78, 255} : shirts[(h >> 5) % 7];
+      const DriverSeat ds = driverSeat(v.type);
+      // eye (ds) -> seated figure's origin: hips 0.18 m behind the eye, eyes ~1.3 m above the origin
+      const Matrix P = MatrixMultiply(MatrixTranslate(ds.side, ds.up - 1.3f, -(ds.fwd - 0.18f)), M);
+      drawHuman(humans_.still(static_cast<BodyVariant>((h >> 11) % static_cast<int>(BodyVariant::Count)), StillPose::Sit), P, top,
+                Color{38, 40, 48, 255}, skins[(h >> 15) % 3], hairs[(h >> 19) % 4]);
     }
     // lamps
     const float night = L.night;
