@@ -275,6 +275,8 @@ class App {
   Camera3D listen_cam_{};
   bool listen_game_ = false;
   void updateSound(float dt);
+  void updateDepartureBoards();  // LED boards on the platforms near the camera (app_sound.cpp)
+  float boards_t_ = 0.0f;
   rj::geo::Vec3d snd_ear_prev_{};
   bool snd_ear_ok_ = false;
   int snd_car_keys_[4] = {-1, -1, -1, -1};

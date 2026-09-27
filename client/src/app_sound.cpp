@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "app.hpp"
+#include "game/station_names.hpp"
 #include "world/coords.hpp"
 
 namespace rjc {
@@ -69,6 +70,56 @@ void assignSlots(int (&slots)[N], const std::vector<int>& keys, int (&out)[N]) {
 }
 
 }  // namespace
+
+void App::updateDepartureBoards() {
+  // Next train on each platform near the camera: its type and destination, how soon (in real
+  // minutes: the trains run in real time while the game clock is compressed, so no clock times)
+  // and a notice line. Headway operation (no timetable) - the estimate assumes ~13 m/s average.
+  const rj::geo::Vec3d cam = rlToEnu(listen_cam_.position);
+  const auto& sts = trains_.stations();
+  for (size_t si = 0; si < sts.size(); ++si) {
+    const Station& st = sts[si];
+    if (std::hypot(st.pos.x - cam.x, st.pos.y - cam.y) > 250.0) continue;
+    const auto& L = trains_.lines()[static_cast<size_t>(st.line)];
+    for (int side : {-1, 1}) {
+      const int dir = side < 0 ? 1 : -1;  // trains keep left: dir +1 uses the platform left of the line
+      const Train* best = nullptr;
+      double best_d = 1e30;
+      for (const auto& t : trains_.trains()) {
+        if (t.line != st.line || t.dir != dir || t.offmap) continue;
+        double d = t.at_station == static_cast<int>(si) ? 0.0 : (st.s - t.s) * dir;
+        if (L.closed) {
+          d = std::fmod(d, L.length);
+          if (d < 0) d += L.length;
+        } else if (d < 0) {
+          continue;
+        }
+        if (d < best_d) {
+          best_d = d;
+          best = &t;
+        }
+      }
+      std::string type, dest, when, notice;
+      if (best) {
+        type = tr(L.kind == LineKind::Shinkansen ? "board.shinkansen" : "board.local");
+        dest = trains_.destination(*best);
+        if (dest == "loop+") dest = tr("rail.dest.outer");
+        else if (dest == "loop-") dest = tr("rail.dest.inner");
+        else if (dest == "mainland") dest = tr("rail.dest.mainland");
+        else dest = stationBaseName(dest);
+        if (best->at_station == static_cast<int>(si)) {
+          when = tr("board.here");
+          notice = best->dwell < 6.0 ? tr("board.closing") : (best->dwell < 20.0 ? tr("board.departing") : std::string());
+        } else {
+          const double eta = best_d / 13.0;
+          when = i18n_.f("board.in_min", {{"n", std::to_string(std::max(1, static_cast<int>(std::ceil(eta / 60.0))))}});
+          notice = best_d < 500.0 ? tr("board.arriving") : std::string();
+        }
+      }
+      renderer_.setDepartureBoard(static_cast<int>(si), side, type, dest, when, notice, ui_.font());
+    }
+  }
+}
 
 void App::updateSound(float dt) {
   if (!audio_.active()) return;

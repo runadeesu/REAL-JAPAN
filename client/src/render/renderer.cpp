@@ -251,6 +251,8 @@ void Renderer::shutdown() {
   freeTarget(mirror_);
   for (auto& rt : signs_) UnloadRenderTexture(rt);
   signs_.clear();
+  for (auto& b : boards_) UnloadRenderTexture(b.rt);
+  boards_.clear();
   signs_built_ = false;
   for (Mesh* m : {&plane_, &ocean_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_}) UnloadMesh(*m);
   for (auto& s : shadow_)
@@ -1136,6 +1138,94 @@ void Renderer::drawStationSigns(const Trains& trains, const Camera3D& cam) {
           V(-0.8, 0.25);
         }
       }
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+  }
+  rlSetTexture(0);
+  rlColorMask(true, true, true, true);
+  rlEnableBackfaceCulling();
+}
+
+void Renderer::setDepartureBoard(int station, int side, const std::string& type, const std::string& dest, const std::string& when,
+                                 const std::string& notice, const Font& font) {
+  constexpr int W = 512, H = 128;
+  DepartureBoard* b = nullptr;
+  for (auto& x : boards_)
+    if (x.station == station && x.side == side) b = &x;
+  if (!b) {
+    boards_.push_back({station, side, "", LoadRenderTexture(W * 2, H), 0.0f});  // twice as wide: the notice line scrolls
+    b = &boards_.back();
+    SetTextureFilter(b->rt.texture, TEXTURE_FILTER_BILINEAR);
+  }
+  const std::string key = type + "|" + dest + "|" + when + "|" + notice;
+  if (key == b->key) return;
+  b->key = key;
+  BeginTextureMode(b->rt);
+  ClearBackground(Color{8, 8, 10, 255});
+  const Color amber{255, 150, 40, 255}, green{80, 230, 110, 255}, white{235, 235, 225, 255};
+  DrawTextEx(font, type.c_str(), Vector2{14, 10}, 44, 1.0f, green);
+  DrawTextEx(font, dest.c_str(), Vector2{150, 10}, 44, 1.0f, amber);
+  const Vector2 wm = MeasureTextEx(font, when.c_str(), 40, 1.0f);
+  DrawTextEx(font, when.c_str(), Vector2{W - 14 - wm.x, 12}, 40, 1.0f, amber);
+  // the notice line is drawn once at the left of the double-width texture; drawing scrolls it
+  const Vector2 nm = MeasureTextEx(font, notice.c_str(), 34, 1.0f);
+  b->notice_w = nm.x;
+  DrawTextEx(font, notice.c_str(), Vector2{14, 72}, 34, 1.0f, white);
+  // LED dot matrix: dark gaps between the rows and columns of dots
+  for (int y = 0; y < H; y += 4) DrawRectangle(0, y, W * 2, 1, Color{0, 0, 0, 150});
+  for (int x = 0; x < W * 2; x += 4) DrawRectangle(x, 0, 1, H, Color{0, 0, 0, 110});
+  EndTextureMode();
+}
+
+void Renderer::drawDepartureBoards(const Trains& trains, const Camera3D& cam, float time_s) {
+  if (boards_.empty()) return;
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  rlDrawRenderBatchActive();
+  rlColorMask(true, true, true, false);
+  rlDisableBackfaceCulling();
+  for (const auto& b : boards_) {
+    if (b.station < 0 || b.station >= static_cast<int>(trains.stations().size())) continue;
+    const Station& s = trains.stations()[static_cast<size_t>(b.station)];
+    const auto kind = trains.lines()[static_cast<size_t>(s.line)].kind;
+    rj::geo::Vec3d p;
+    double h;
+    trains.poseAt(s.line, s.s + 8.0, p, h);
+    const double fx = std::sin(h), fy = std::cos(h), rx = fy, ry = -fx, lat = b.side * Trains::platformOffset(kind);
+    const rj::geo::Vec3d ctr{p.x + rx * lat, p.y + ry * lat, s.pos.z + 2.75};
+    if (std::hypot(ctr.x - c.x, ctr.y - c.y) > 120.0) continue;
+    // the top line is fixed, the notice line scrolls when it is longer than the board
+    const float scroll = b.notice_w > 480.0f ? std::fmod(time_s * 90.0f, b.notice_w + 520.0f) - 480.0f : 0.0f;
+    const float u1 = 0.5f;  // the visible half of the double-width texture
+    const float us = std::max(0.0f, scroll) / 1024.0f;
+    rlSetTexture(b.rt.texture.id);
+    rlBegin(RL_QUADS);
+    rlColor4ub(255, 255, 255, 255);
+    for (int face = 0; face < 2; ++face) {  // two faces, one towards each end of the platform
+      const double fs = face == 0 ? 1.0 : -1.0;
+      const double ux = -fs * rx, uy = -fs * ry;  // text +u: to the right of someone facing this face
+      const double o = fs * 0.02;
+      auto V = [&](double a, double z) {
+        const Vector3 q = enuToRl({ctr.x + fx * o + ux * a, ctr.y + fy * o + uy * a, ctr.z + z});
+        rlVertex3f(q.x, q.y, q.z);
+      };
+      // top line (rows 0..64 of the texture: v 1 .. 0.5), notice line (v 0.5 .. 0) with scrolling
+      rlTexCoord2f(0, 0.5f);
+      V(-0.9, 0.0);
+      rlTexCoord2f(u1, 0.5f);
+      V(0.9, 0.0);
+      rlTexCoord2f(u1, 1.0f);
+      V(0.9, 0.225);
+      rlTexCoord2f(0, 1.0f);
+      V(-0.9, 0.225);
+      rlTexCoord2f(us, 0.0f);
+      V(-0.9, -0.225);
+      rlTexCoord2f(us + u1, 0.0f);
+      V(0.9, -0.225);
+      rlTexCoord2f(us + u1, 0.5f);
+      V(0.9, 0.0);
+      rlTexCoord2f(us, 0.5f);
+      V(-0.9, 0.0);
     }
     rlEnd();
     rlDrawRenderBatchActive();

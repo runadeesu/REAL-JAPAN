@@ -117,6 +117,11 @@ class Renderer {
   bool stationSignsBuilt() const { return signs_built_; }
   void buildStationSigns(const Trains& trains, const Font& font);
   void drawStationSigns(const Trains& trains, const Camera3D& cam);
+  // LED departure boards hung over each platform (next train, how soon, a scrolling notice);
+  // re-rendered only when the text changes (call outside the scene pass)
+  void setDepartureBoard(int station, int side, const std::string& type, const std::string& dest, const std::string& when,
+                         const std::string& notice, const Font& font);
+  void drawDepartureBoards(const Trains& trains, const Camera3D& cam, float time_s);
   void drawShips(const Ferries& ferries, const Camera3D& cam, const Lighting& L);
   // Aircraft: scheduled jets (ride_jet: drawn from the cabin) and the light aircraft (cockpit
   // instruments when flown from the seat).
@@ -158,6 +163,13 @@ class Renderer {
   HumanModels humans_;
   std::vector<RenderTexture2D> signs_;  // per station
   bool signs_built_ = false;
+  struct DepartureBoard {
+    int station = -1, side = 0;
+    std::string key;  // text currently shown
+    RenderTexture2D rt{};
+    float notice_w = 0;  // width of the notice line (scrolls when wider than the board)
+  };
+  std::vector<DepartureBoard> boards_;
   Mesh ocean_{};
   TrainModels train_models_;
   ShipModels ship_models_;

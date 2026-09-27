@@ -563,6 +563,10 @@ void App::update(float dt) {
         crowd_.update(render_time_, trains_, cam, drive_train_ >= 0 ? -1 : ride_train_, ride_car_, cam, jt.hour,
                       wd == 0 || wd == 6 || rj::sim::isHoliday(jt.date));
         if (const Airliner* a = ride_jet_ >= 0 ? aviation_.airliner(ride_jet_) : nullptr; a && a->phase != Airliner::Phase::Offmap) crowd_.jetCabin(*a);
+        if ((boards_t_ -= dt) <= 0.0f && ui_.hasFont()) {
+          boards_t_ = 1.0f;
+          updateDepartureBoards();
+        }
       }
       if (ride_place_pending_ && traffic_placed_) {
         ride_place_pending_ = false;
@@ -1490,6 +1494,22 @@ std::vector<PointLight> App::collectLights(const Camera3D& cam) const {
     const double dx = p.x - c.x, dy = p.y - c.y;
     cand.push_back({dx * dx + dy * dy + 400.0, {enuToRl(p), 9.0f, Vector3Scale(Vector3{1.0f, 0.93f, 0.82f}, 7.0f * std::max(k, 0.25f) * lighting_.occupancy.z)}});
   }
+  // station platforms: lamps under the canopies along both platforms (cool white LED)
+  if (trains_.loaded())
+    for (const auto& st : trains_.stations()) {
+      if (std::hypot(st.pos.x - c.x, st.pos.y - c.y) > 220.0) continue;
+      const auto kind = trains_.lines()[static_cast<size_t>(st.line)].kind;
+      const double off = Trains::platformOffset(kind), len = kind == LineKind::Shinkansen ? 320.0 : 200.0;
+      for (double side : {-1.0, 1.0})
+        for (double u = -len * 0.36; u <= len * 0.37; u += len * 0.18) {
+          rj::geo::Vec3d p;
+          double h;
+          trains_.poseAt(st.line, st.s + u, p, h);
+          const rj::geo::Vec3d q{p.x + std::cos(h) * side * off, p.y - std::sin(h) * side * off, st.pos.z + 3.1};
+          const double dx = q.x - c.x, dy = q.y - c.y;
+          cand.push_back({(dx * dx + dy * dy) * 0.5, {enuToRl(q), 16.0f, Vector3Scale(Vector3{0.95f, 0.98f, 1.0f}, 20.0f * k)}});
+        }
+    }
   // headlights: the player's car throws light on the road ahead; nearby traffic too
   auto beam = [&](const Vehicle& v, double ahead, float range, float power, double prio) {
     const rj::geo::Vec3d p{v.pos.x + std::sin(v.yaw) * ahead, v.pos.y + std::cos(v.yaw) * ahead, v.pos.z + 0.9};
@@ -1582,6 +1602,7 @@ void App::drawWorldView(const Camera3D& cam) {
     renderer_.drawVehicles(traffic_, cam, lighting_, driving_.hasCar() ? &driving_.car() : nullptr, cockpit ? &cv : nullptr);
     renderer_.drawTrains(trains_, cam, ride_train_, ride_car_);
     renderer_.drawStationSigns(trains_, cam);
+    renderer_.drawDepartureBoards(trains_, cam, render_time_);
     if (in_session_ && screen_ != Screen::Title) renderer_.drawCrowd(crowd_.people());
     renderer_.drawShips(ferries_, cam, lighting_);
     Renderer::FlightView fv;
