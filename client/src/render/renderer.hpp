@@ -111,6 +111,12 @@ class Renderer {
   // ride_train / ride_car: the car the player sits in (drawn without glass, with its interior)
   void drawTrains(const Trains& trains, const Camera3D& cam, int ride_train, int ride_car);
   void drawCrowd(const std::vector<CrowdPerson>& people);
+  // Station name boards on the platforms (generic design: the name, its reading and romanisation,
+  // the neighbouring stations on a band in the line colour). Built once into render textures with
+  // the UI font (call outside the scene pass).
+  bool stationSignsBuilt() const { return signs_built_; }
+  void buildStationSigns(const Trains& trains, const Font& font);
+  void drawStationSigns(const Trains& trains, const Camera3D& cam);
   void drawShips(const Ferries& ferries, const Camera3D& cam, const Lighting& L);
   // Aircraft: scheduled jets (ride_jet: drawn from the cabin) and the light aircraft (cockpit
   // instruments when flown from the seat).
@@ -150,6 +156,8 @@ class Renderer {
   Texture2D leaf_tex_{};
   VehicleModels vehicles_;
   HumanModels humans_;
+  std::vector<RenderTexture2D> signs_;  // per station
+  bool signs_built_ = false;
   Mesh ocean_{};
   TrainModels train_models_;
   ShipModels ship_models_;

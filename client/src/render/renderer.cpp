@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "raymath.h"
+#include "game/station_names.hpp"
 #include "render/foliage.hpp"
 #include "render/shaders.hpp"
 #include "rlgl.h"
@@ -248,6 +249,9 @@ void Renderer::shutdown() {
   if (!ready_) return;
   releaseTargets();
   freeTarget(mirror_);
+  for (auto& rt : signs_) UnloadRenderTexture(rt);
+  signs_.clear();
+  signs_built_ = false;
   for (Mesh* m : {&plane_, &ocean_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_}) UnloadMesh(*m);
   for (auto& s : shadow_)
     if (s.id) {
@@ -1042,6 +1046,105 @@ void Renderer::drawHuman(const Mesh& m, const Matrix& model, Color top, Color bo
   triangles_ += m.triangleCount;
 }
 
+void Renderer::buildStationSigns(const Trains& trains, const Font& font) {
+  if (signs_built_ || !trains.loaded()) return;
+  const auto& st = trains.stations();
+  constexpr int W = 640, H = 200;
+  for (size_t i = 0; i < st.size(); ++i) {
+    const Station& s = st[i];
+    const auto kind = trains.lines()[static_cast<size_t>(s.line)].kind;
+    const Color band = kind == LineKind::Shinkansen ? Color{26, 64, 160, 255} : kind == LineKind::Branch ? Color{224, 118, 30, 255} : Color{28, 150, 128, 255};
+    // neighbours: the stations before and after this one along the line
+    int prev = -1, next = -1;
+    double dp = 1e30, dn = 1e30;
+    const double len = trains.lines()[static_cast<size_t>(s.line)].length;
+    const bool closed = trains.lines()[static_cast<size_t>(s.line)].closed;
+    for (size_t j = 0; j < st.size(); ++j) {
+      if (j == i || st[j].line != s.line) continue;
+      double d = st[j].s - s.s;
+      if (closed) d = std::remainder(d, len);
+      if (d > 0 && d < dn) dn = d, next = static_cast<int>(j);
+      if (d < 0 && -d < dp) dp = -d, prev = static_cast<int>(j);
+    }
+    RenderTexture2D rt = LoadRenderTexture(W, H);
+    SetTextureFilter(rt.texture, TEXTURE_FILTER_BILINEAR);
+    BeginTextureMode(rt);
+    ClearBackground(Color{246, 246, 244, 255});
+    const std::string base = stationBaseName(s.name);
+    const StationReading* rd = stationReading(s.name);
+    auto centred = [&](const std::string& t, float y, float size, Color c) {
+      const Vector2 m = MeasureTextEx(font, t.c_str(), size, 1.0f);
+      DrawTextEx(font, t.c_str(), Vector2{(W - m.x) * 0.5f, y}, size, 1.0f, c);
+    };
+    centred(base, 10, 74, Color{28, 28, 30, 255});
+    if (rd) centred(rd->kana, 90, 28, Color{40, 40, 44, 255});
+    DrawRectangle(0, 126, W, H - 126, band);
+    if (rd) centred(rd->roman, 131, 24, WHITE);
+    if (prev >= 0) DrawTextEx(font, ("← " + stationBaseName(st[static_cast<size_t>(prev)].name)).c_str(), Vector2{14, 162}, 26, 1.0f, WHITE);
+    if (next >= 0) {
+      const std::string t = stationBaseName(st[static_cast<size_t>(next)].name) + " →";
+      const Vector2 m = MeasureTextEx(font, t.c_str(), 26, 1.0f);
+      DrawTextEx(font, t.c_str(), Vector2{W - 14 - m.x, 162}, 26, 1.0f, WHITE);
+    }
+    EndTextureMode();
+    signs_.push_back(rt);
+  }
+  signs_built_ = true;
+}
+
+void Renderer::drawStationSigns(const Trains& trains, const Camera3D& cam) {
+  if (!signs_built_) return;
+  const rj::geo::Vec3d c = rlToEnu(cam.position);
+  const auto& st = trains.stations();
+  rlDrawRenderBatchActive();
+  rlColorMask(true, true, true, false);  // keep the scene's reflection mask (alpha) untouched
+  rlDisableBackfaceCulling();
+  for (size_t i = 0; i < st.size() && i < signs_.size(); ++i) {
+    const Station& s = st[i];
+    if (std::hypot(s.pos.x - c.x, s.pos.y - c.y) > 260.0) continue;
+    const auto kind = trains.lines()[static_cast<size_t>(s.line)].kind;
+    const double off = Trains::platformOffset(kind), plat_len = kind == LineKind::Shinkansen ? 320.0 : 200.0;
+    rlSetTexture(signs_[i].texture.id);
+    rlBegin(RL_QUADS);
+    rlColor4ub(232, 232, 232, 255);
+    for (double side : {-1.0, 1.0}) {  // both platforms (right = +)
+      for (double u = -plat_len * 0.35; u <= plat_len * 0.36; u += plat_len * 0.35) {
+        rj::geo::Vec3d p;
+        double h;
+        trains.poseAt(s.line, s.s + u, p, h);
+        const double fx = std::sin(h), fy = std::cos(h), rx = fy, ry = -fx;
+        const double lat = side * (off - 2.5 + 1.3);  // 1.3 m back from the platform edge
+        const rj::geo::Vec3d ctr{p.x + rx * lat, p.y + ry * lat, s.pos.z + 2.45};
+        if (std::hypot(ctr.x - c.x, ctr.y - c.y) > 150.0) continue;
+        // the face towards the track reads left to right for someone looking from the track;
+        // the back face (towards the platform) is printed the same way round for its viewers
+        for (int face = 0; face < 2; ++face) {
+          const double o = (face == 0 ? -side : side) * 0.012;  // the two faces 2.4 cm apart
+          const double ux = face == 0 ? -side * fx : side * fx, uy = face == 0 ? -side * fy : side * fy;  // text +u
+          auto V = [&](double a, double b) {  // a: -0.8..0.8 along u, b: -0.25..0.25 up
+            const Vector3 q = enuToRl({ctr.x + rx * o + ux * a, ctr.y + ry * o + uy * a, ctr.z + b});
+            rlVertex3f(q.x, q.y, q.z);
+          };
+          // render-texture rows run bottom-up: v = 1 at the top of the board
+          rlTexCoord2f(0, 0);
+          V(-0.8, -0.25);
+          rlTexCoord2f(1, 0);
+          V(0.8, -0.25);
+          rlTexCoord2f(1, 1);
+          V(0.8, 0.25);
+          rlTexCoord2f(0, 1);
+          V(-0.8, 0.25);
+        }
+      }
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+  }
+  rlSetTexture(0);
+  rlColorMask(true, true, true, true);
+  rlEnableBackfaceCulling();
+}
+
 void Renderer::drawCrowd(const std::vector<CrowdPerson>& people) {
   if (people.empty()) return;
   setI(lit_, "materialOverride", -1);
@@ -1059,7 +1162,10 @@ void Renderer::drawCrowd(const std::vector<CrowdPerson>& people) {
     const BodyVariant v = static_cast<BodyVariant>(p.variant % static_cast<int>(BodyVariant::Count));
     const Mesh& m = p.pose == 2 ? humans_.still(v, StillPose::Sit) : p.pose == 3 ? humans_.still(v, StillPose::Strap) : humans_.frame(v, p.phase, p.pose == 0);
     const Vector3 feet = enuToRl(p.pos);
-    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(p.scale, p.scale, p.scale), MatrixRotateY(-p.yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
+    Matrix R = MatrixRotateY(-p.face);
+    if (p.pitch != 0.0f || p.roll != 0.0f) R = MatrixMultiply(MatrixMultiply(R, MatrixRotateZ(-p.roll)), MatrixRotateX(p.pitch));  // with the vehicle
+    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixScale(p.scale, p.scale, p.scale), R), MatrixRotateY(-p.yaw)),
+                                    MatrixTranslate(feet.x, feet.y, feet.z));
     drawHuman(m, M, p.top, p.bottom, p.skin, p.hair);
   }
   if (lit_inside) set3(lit_, "selfLight", Vector3{0, 0, 0});

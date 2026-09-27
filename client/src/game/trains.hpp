@@ -67,6 +67,11 @@ class Trains {
   const Train* train(int id) const;
   // car pose (origin ENU, compass yaw, pitch) of car k (0 = leading car)
   void carPose(const Train& t, int k, rj::geo::Vec3d& pos, float& yaw, float& pitch) const;
+  // point on a line at distance s (wraps on the loop) and the line's compass heading there
+  void poseAt(int line, double s, rj::geo::Vec3d& pos, double& heading) const {
+    double g;
+    pointAt(lines_[static_cast<size_t>(line)], s, pos, heading, g);
+  }
   int stationNear(const rj::geo::Vec3d& p, double r) const;  // by platform centre, any height
   int trainStoppedAt(int station) const;                      // train id or -1
   std::string destination(const Train& t) const;

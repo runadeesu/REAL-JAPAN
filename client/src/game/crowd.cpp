@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <cmath>
 
+#include "game/aircraft.hpp"
 #include "game/trains.hpp"
+#include "raymath.h"
+#include "render/aircraft.hpp"
+#include "world/coords.hpp"
 
 namespace rjc {
 namespace {
@@ -217,6 +221,30 @@ void Crowd::platformQueues(double now, const Trains& trains, int si, const V3& c
     }
     if (at) departed_[side_key] = now;  // (while a train stands here the queue is boarding)
   }
+}
+
+void Crowd::jetCabin(const Airliner& a) {
+  // 2 + 2 seats in rows 0.8 m apart from y = -9.2 m (as modelled), cabin floor at z = -0.72 m
+  const Vector3 p = enuToRl(a.pos);
+  const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-a.roll), MatrixRotateX(a.pitch)), MatrixRotateY(-a.yaw)),
+                                  MatrixTranslate(p.x, p.y, p.z));
+  int i = 0;
+  for (float ry = -9.8f + 0.6f; ry < 10.8f - 0.6f; ry += 0.8f)
+    for (float x : {-1.0f, -0.55f, 0.55f, 1.0f}) {
+      const uint64_t h = mix(static_cast<uint64_t>(a.id) * 7121 + static_cast<uint64_t>(++i));
+      if (std::fabs(x - kJetSeat[0]) < 0.1f && std::fabs(ry - (kJetSeat[1] + 0.1f)) < 0.3f) continue;  // the player's seat
+      if (u01(h) > 0.78) continue;
+      const Vector3 w = Vector3Transform(Vector3{x, -0.72f, -(ry - 0.05f)}, M);  // model (x, y, z) -> raylib (x, z, -y)
+      CrowdPerson c;
+      c.pos = rlToEnu(w);
+      c.yaw = a.yaw;
+      c.pitch = a.pitch;
+      c.roll = a.roll;
+      c.pose = 2;
+      c.inside = true;
+      style(c, h, false);
+      people_.push_back(c);
+    }
 }
 
 void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_train, int ride_car, const V3& eye, int hour, bool weekend) {

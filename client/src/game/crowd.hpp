@@ -1,12 +1,13 @@
 #pragma once
-// Railway passengers near the camera (procedural people; how full the trains and platforms are is
-// a game assumption by time of day, not ridership data):
+// Passengers near the camera (procedural people; how full the trains and platforms are is a game
+// assumption by time of day, not ridership data):
 //  * in the train cars the player can see into (the car ridden, and cars standing at a platform
 //    with their doors open): people on the seats and, when it is busy, standing holding straps;
 //    they change at each stop
 //  * on platforms: short queues at the door positions (as marked on Japanese platforms), who
 //    board one by one when the doors open and re-form after the train has gone; passengers who
 //    got off walk away along the platform
+//  * in the scheduled flight's cabin while the player is aboard: most seats taken
 
 #include <cstdint>
 #include <map>
@@ -27,7 +28,8 @@ struct CrowdPerson {
   int variant = 0;     // body variant
   Color top{}, bottom{}, skin{}, hair{};
   float scale = 1;
-  bool inside = false;  // in a train car (lit by the car's lights)
+  bool inside = false;  // in a train car / cabin (lit by its lights)
+  float face = 0, pitch = 0, roll = 0;  // in a tilting vehicle: facing relative to it, its pitch and roll (yaw = its heading)
 };
 
 class Crowd {
@@ -37,6 +39,8 @@ class Crowd {
   void update(double now, const Trains& trains, const rj::geo::Vec3d& cam, int ride_train, int ride_car, const rj::geo::Vec3d& eye, int hour,
               bool weekend);
   const std::vector<CrowdPerson>& people() const { return people_; }
+  // passengers in the airliner the player flies in (call after update): most seats taken, not the player's
+  void jetCabin(const struct Airliner& a);
 
  private:
   void carPassengers(const Trains& trains, int train_index, int k, bool ridden, const rj::geo::Vec3d& eye, float busy);

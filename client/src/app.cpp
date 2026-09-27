@@ -6,6 +6,7 @@
 #include <ctime>
 #include <set>
 
+#include "game/station_names.hpp"
 #include "platform/paths.hpp"
 #include "raymath.h"
 #include "rj/env/solar.hpp"
@@ -95,6 +96,10 @@ bool App::boot() {
   for (int c = 32; c < 127; ++c) cps.insert(c);
   i18n_.collectAllCodepoints(data / "lang", cps);
   for (const auto& p : world_.meta().pois) collectCodepoints(p.name, cps);
+  for (const auto& st : trains_.stations()) {  // station name boards: names and readings
+    collectCodepoints(st.name, cps);
+    if (const StationReading* r = stationReading(st.name)) collectCodepoints(r->kana, cps);
+  }
   for (const auto& s : world_.meta().sources) collectCodepoints(s.attribution, cps);
   collectCodepoints(world_.meta().name_ja + "°×・…→←↑↓〜「」（）、。！？：年月日時分秒円¥•–—", cps);
   if (!ui_.loadFont(data / "fonts" / "BIZUDPGothic-Regular.ttf", cps, 44)) {
@@ -550,12 +555,14 @@ void App::update(float dt) {
         if (ferries_.loaded()) ferries_.update(std::min(dt, 0.1f), render_time_ + k * 0.1f, lighting_.wind);
         if (aviation_.loaded()) aviation_.update(std::min(dt, 0.1f), world_);
       }
+      if (trains_.loaded() && traffic_placed_ && !renderer_.stationSignsBuilt() && ui_.hasFont()) renderer_.buildStationSigns(trains_, ui_.font());
       if (trains_.loaded()) {
         const auto jt = jst();
         const int wd = rj::sim::weekday(jt.date);
         const rj::geo::Vec3d cam = rlToEnu(listen_cam_.position);
         crowd_.update(render_time_, trains_, cam, drive_train_ >= 0 ? -1 : ride_train_, ride_car_, cam, jt.hour,
                       wd == 0 || wd == 6 || rj::sim::isHoliday(jt.date));
+        if (const Airliner* a = ride_jet_ >= 0 ? aviation_.airliner(ride_jet_) : nullptr; a && a->phase != Airliner::Phase::Offmap) crowd_.jetCabin(*a);
       }
       if (ride_place_pending_ && traffic_placed_) {
         ride_place_pending_ = false;
@@ -1574,6 +1581,7 @@ void App::drawWorldView(const Camera3D& cam) {
     }
     renderer_.drawVehicles(traffic_, cam, lighting_, driving_.hasCar() ? &driving_.car() : nullptr, cockpit ? &cv : nullptr);
     renderer_.drawTrains(trains_, cam, ride_train_, ride_car_);
+    renderer_.drawStationSigns(trains_, cam);
     if (in_session_ && screen_ != Screen::Title) renderer_.drawCrowd(crowd_.people());
     renderer_.drawShips(ferries_, cam, lighting_);
     Renderer::FlightView fv;
