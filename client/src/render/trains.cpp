@@ -248,8 +248,9 @@ void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::
   const float zf = s.zFloor + kFloorAbove;
   g.quad({-s.W + 0.05f, y0, zf}, {s.W - 0.05f, y0, zf}, {s.W - 0.05f, y1, zf}, {-s.W + 0.05f, y1, zf}, s.shinkansen ? Color{90, 84, 80, 255} : Color{120, 116, 110, 255},
          kShell);
-  // ceiling: flat centre with sloping sides, light strips
-  const float zc = s.zSide - 0.1f, zc2 = s.zSide + 0.12f;
+  // ceiling: flat centre with sloping sides, light strips (commuter: the curve starts at the top of
+  // the side wall, leaving the band over the doors for the information displays)
+  const float zc = s.shinkansen ? s.zSide - 0.1f : s.zSide, zc2 = s.shinkansen ? s.zSide + 0.12f : s.zRoof - 0.25f;
   g.quad({-0.7f, y1, zc2}, {0.7f, y1, zc2}, {0.7f, y0, zc2}, {-0.7f, y0, zc2}, Color{232, 232, 228, 255}, kShell);
   for (float sx : {-1.0f, 1.0f}) {
     if (sx > 0) g.quad({0.7f, y1, zc2}, {s.W - 0.05f, y1, zc}, {s.W - 0.05f, y0, zc}, {0.7f, y0, zc2}, Color{226, 226, 222, 255}, kShell);
@@ -313,8 +314,9 @@ void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::
       for (float sx : {-1.0f, 1.0f}) {
         for (float yy : {d.first - 0.3f, d.second + 0.3f})  // grab poles by the doors
           g.box({sx * (s.W - 0.6f), yy, (zf + s.zSide) * 0.5f}, {0.018f, 0.018f, (s.zSide - zf) * 0.5f}, Color{205, 205, 208, 255}, kMatMetal);
-        g.box({sx * (s.W - 0.07f), (d.first + d.second) * 0.5f, s.zWin1 + 0.24f}, {0.02f, 0.32f, 0.09f}, Color{20, 22, 26, 255}, kShell);  // display
-        g.box({sx * (s.W - 0.092f), (d.first + d.second) * 0.5f, s.zWin1 + 0.24f}, {0.002f, 0.28f, 0.07f}, Color{255, 170, 60, 255}, kGlass);
+        const float dz = doorTop(s) + 0.07f;  // information display over the door
+        g.box({sx * (s.W - 0.07f), (d.first + d.second) * 0.5f, dz}, {0.02f, 0.31f, 0.055f}, Color{20, 22, 26, 255}, kShell);
+        g.box({sx * (s.W - 0.092f), (d.first + d.second) * 0.5f, dz}, {0.002f, 0.28f, 0.045f}, Color{255, 170, 60, 255}, kGlass);
       }
     }
     // hanging advertisement sheets along the middle (generic colours, no text)
@@ -327,7 +329,7 @@ void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::
 }
 
 TrainCarModel makeCommuter(bool cab, bool panto = false) {
-  Spec s{20.0f, 1.45f, 1.1f, 1.95f, 2.8f, 2.95f, 3.38f, 3.62f, 1.18f, {196, 198, 202, 255}, {28, 150, 128, 255}, {196, 198, 202, 255},
+  Spec s{20.0f, 1.45f, 1.1f, 1.95f, 2.8f, 3.1f, 3.45f, 3.65f, 1.18f, {196, 198, 202, 255}, {28, 150, 128, 255}, {196, 198, 202, 255},
          1.36f, 1.5f, false};
   Geo g, glass, in;
   const float y0 = -s.L / 2, y1 = s.L / 2;

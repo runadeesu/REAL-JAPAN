@@ -1344,6 +1344,7 @@ void App::updateTransportActions() {
           ride_train_ = tid;
           ride_look_yaw_ = kind == LineKind::Shinkansen ? -0.85f : 1.5708f;  // out of the window / across the car
           ride_look_pitch_ = -0.05f;
+          if (const char* e = std::getenv("RJ_RIDE_LOOK")) std::sscanf(e, "%f,%f", &ride_look_yaw_, &ride_look_pitch_);  // test aid (radians)
           toast(i18n_.f("rail.boarded", {{"line", lineName(t->line)}, {"fare", std::to_string(fare)}}));
         }
       }

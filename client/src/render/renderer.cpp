@@ -1299,6 +1299,12 @@ void Renderer::setCarDisplay(const std::string& text, const Font& font) {
   for (int y = 0; y < H; y += 4) DrawRectangle(0, y, W, 1, Color{0, 0, 0, 140});
   for (int x = 0; x < W; x += 4) DrawRectangle(x, 0, 1, H, Color{0, 0, 0, 100});
   EndTextureMode();
+  if (std::getenv("RJ_DEBUG_DISPLAY")) {
+    Image im = LoadImageFromTexture(car_display_.texture);
+    ExportImage(im, "car_display.png");
+    UnloadImage(im);
+    TraceLog(LOG_INFO, "RJ: car display '%s' (font %d glyphs, size %.0f)", text.c_str(), font.glyphCount, size);
+  }
 }
 
 void Renderer::drawCarDisplay(const Trains& trains, int ride_train, int ride_car) {
@@ -1340,8 +1346,8 @@ void Renderer::drawCarDisplay(const Trains& trains, int ride_train, int ride_car
   } else {
     for (int d = 0; d < 4; ++d) {
       const double yc = -10.0 + 2.45 + d * 5.03;
-      Q(1.354, yc, 2.8 + 0.24, 0.0, -1.0, 0.27, 0.066);  // right wall: reads towards the back of the car
-      Q(-1.354, yc, 2.8 + 0.24, 0.0, 1.0, 0.27, 0.066);
+      Q(1.354, yc, 2.95 + 0.07, 0.0, -1.0, 0.27, 0.044);  // over the door (door top 2.95 m); right wall reads towards the back
+      Q(-1.354, yc, 2.95 + 0.07, 0.0, 1.0, 0.27, 0.044);
     }
   }
   rlEnd();
