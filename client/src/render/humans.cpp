@@ -176,6 +176,15 @@ Mesh buildPose(BodyVariant var, float phase, bool walk, int pose = 0) {
   loftBone(g, neck0, neck1, Vector3{1, 0, 0}, {{0.0f, 0.055f, 0.055f}, {1.0f, 0.05f, 0.05f}}, kMatSkinId, 8, false, false);
   const Vector3 head{neck1.x, neck1.y + 0.01f, neck1.z + 0.11f};
   ellipsoid(g, head, {0.078f, 0.095f, 0.112f}, kMatSkinId, 12, 8);
+  // face: eyes and brows (hair colour), nose, mouth, ears - simple shapes on the head
+  auto H = [&](float x, float y, float z) { return Vector3Add(head, rotZ(Vector3{x, y, z}, chest_yaw)); };
+  for (int side = -1; side <= 1; side += 2) {
+    ellipsoid(g, H(0.03f * side, 0.084f, 0.014f), {0.011f, 0.006f, 0.007f}, kMatHair, 6, 4);
+    ellipsoid(g, H(0.032f * side, 0.081f, 0.04f), {0.017f, 0.005f, 0.004f}, kMatHair, 6, 3);
+    ellipsoid(g, H(0.077f * side, 0.0f, 0.0f), {0.012f, 0.02f, 0.03f}, kMatSkinId, 6, 4);
+  }
+  ellipsoid(g, H(0.0f, 0.093f, -0.008f), {0.011f, 0.014f, 0.022f}, kMatSkinId, 6, 4);
+  ellipsoid(g, H(0.0f, 0.085f, -0.047f), {0.017f, 0.004f, 0.0035f}, kMatHair, 6, 3);
   if (long_hair) {
     ellipsoid(g, {head.x, head.y - 0.012f, head.z + 0.012f}, {0.087f, 0.1f, 0.118f}, kMatHair, 12, 8, -0.15f);
     loftBone(g, {head.x, head.y - 0.05f, head.z}, {head.x, head.y - 0.07f, head.z - 0.2f}, Vector3{1, 0, 0},
