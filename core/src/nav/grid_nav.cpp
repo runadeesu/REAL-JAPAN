@@ -28,7 +28,8 @@ bool GridNav::toCell(const Vec2& p, int& cx, int& cy) const {
 
 Vec2 GridNav::cellCenter(int cx, int cy) const { return {ox_ + (cx + 0.5) * cell_, oy_ + (cy + 0.5) * cell_}; }
 
-void GridNav::blockPolygon(const std::vector<Vec2>& poly) {
+template <class F>
+void GridNav::scanPolygon(const std::vector<Vec2>& poly, F&& f) const {
   if (poly.size() < 3) return;
   double y0 = 1e300, y1 = -1e300;
   for (const auto& p : poly) {
@@ -49,9 +50,52 @@ void GridNav::blockPolygon(const std::vector<Vec2>& poly) {
     for (size_t k = 0; k + 1 < xs.size(); k += 2) {
       const int cx0 = std::max(0, static_cast<int>(std::ceil((xs[k] - ox_) / cell_ - 0.5)));
       const int cx1 = std::min(w_ - 1, static_cast<int>(std::floor((xs[k + 1] - ox_) / cell_ - 0.5)));
-      for (int cx = cx0; cx <= cx1; ++cx) blocked_[static_cast<size_t>(cy) * w_ + cx] = 1;
+      for (int cx = cx0; cx <= cx1; ++cx) f(static_cast<size_t>(cy) * w_ + cx);
     }
   }
+}
+
+void GridNav::blockPolygon(const std::vector<Vec2>& poly) {
+  scanPolygon(poly, [&](size_t i) { blocked_[i] = 1; });
+}
+
+std::vector<size_t> GridNav::cellsInPolygon(const std::vector<Vec2>& poly) const {
+  std::vector<size_t> out;
+  scanPolygon(poly, [&](size_t i) { out.push_back(i); });
+  return out;
+}
+
+void GridNav::setCost(int cx, int cy, uint8_t c) {
+  if (cx < 0 || cy < 0 || cx >= w_ || cy >= h_) return;
+  if (cost_.empty()) cost_.assign(blocked_.size(), kBaseCost);
+  cost_[static_cast<size_t>(cy) * w_ + cx] = std::max(c, kBaseCost);
+}
+
+uint8_t GridNav::cost(int cx, int cy) const {
+  if (cost_.empty() || cx < 0 || cy < 0 || cx >= w_ || cy >= h_) return kBaseCost;
+  return cost_[static_cast<size_t>(cy) * w_ + cx];
+}
+
+void GridNav::costPolygon(const std::vector<Vec2>& poly, uint8_t c) {
+  if (cost_.empty()) cost_.assign(blocked_.size(), kBaseCost);
+  const uint8_t v = std::max(c, kBaseCost);
+  scanPolygon(poly, [&](size_t i) { cost_[i] = v; });
+}
+
+void GridNav::costSegment(const Vec2& a, const Vec2& b, double radius, uint8_t c) {
+  if (cost_.empty()) cost_.assign(blocked_.size(), kBaseCost);
+  const uint8_t v = std::max(c, kBaseCost);
+  const int x0 = std::max(0, static_cast<int>(std::floor((std::min(a.x, b.x) - radius - ox_) / cell_)));
+  const int x1 = std::min(w_ - 1, static_cast<int>(std::floor((std::max(a.x, b.x) + radius - ox_) / cell_)));
+  const int y0 = std::max(0, static_cast<int>(std::floor((std::min(a.y, b.y) - radius - oy_) / cell_)));
+  const int y1 = std::min(h_ - 1, static_cast<int>(std::floor((std::max(a.y, b.y) + radius - oy_) / cell_)));
+  const double vx = b.x - a.x, vy = b.y - a.y, l2 = vx * vx + vy * vy;
+  for (int cy = y0; cy <= y1; ++cy)
+    for (int cx = x0; cx <= x1; ++cx) {
+      const Vec2 p = cellCenter(cx, cy);
+      const double t = l2 > 0 ? std::clamp(((p.x - a.x) * vx + (p.y - a.y) * vy) / l2, 0.0, 1.0) : 0.0;
+      if (std::hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy)) <= radius) cost_[static_cast<size_t>(cy) * w_ + cx] = v;
+    }
 }
 
 void GridNav::computeComponents() {
@@ -103,13 +147,14 @@ std::optional<Vec2> GridNav::nearestFree(const Vec2& p, int max_r) const {
   return std::nullopt;
 }
 
-bool GridNav::lineOfSight(const Vec2& a, const Vec2& b) const {
+bool GridNav::lineOfSight(const Vec2& a, const Vec2& b, uint8_t max_cost) const {
   const double len = std::hypot(b.x - a.x, b.y - a.y);
   const int steps = std::max(1, static_cast<int>(std::ceil(len / (cell_ * 0.4))));
   for (int i = 0; i <= steps; ++i) {
     const double t = static_cast<double>(i) / steps;
     int cx, cy;
     if (!toCell({a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t}, cx, cy) || blocked(cx, cy)) return false;
+    if (cost(cx, cy) > max_cost) return false;
   }
   return true;
 }
@@ -154,7 +199,8 @@ std::optional<std::vector<Vec2>> GridNav::findPath(const Vec2& from, const Vec2&
       if (blocked(nx, ny)) continue;
       if (k >= 4 && (blocked(cx + DX[k], cy) || blocked(cx, cy + DY[k]))) continue;  // no corner cutting
       const size_t ni = idx(nx, ny);
-      const float ng = gcost[static_cast<size_t>(cur)] + (k >= 4 ? 1.41421356f : 1.0f);
+      const float step = (k >= 4 ? 1.41421356f : 1.0f) * static_cast<float>(cost(cx, cy) + cost(nx, ny)) / (2.0f * kBaseCost);
+      const float ng = gcost[static_cast<size_t>(cur)] + step;
       if (ng < gcost[ni]) {
         gcost[ni] = ng;
         parent[ni] = cur;
@@ -164,17 +210,28 @@ std::optional<std::vector<Vec2>> GridNav::findPath(const Vec2& from, const Vec2&
   }
   if (!found) return std::nullopt;
   std::vector<Vec2> raw;
-  for (int32_t c = static_cast<int32_t>(idx(gx, gy)); c != -1; c = parent[static_cast<size_t>(c)])
+  std::vector<uint8_t> rawc;
+  for (int32_t c = static_cast<int32_t>(idx(gx, gy)); c != -1; c = parent[static_cast<size_t>(c)]) {
     raw.push_back(cellCenter(c % w_, c / w_));
+    rawc.push_back(cost(c % w_, c / w_));
+  }
   std::reverse(raw.begin(), raw.end());
-  // String pulling: keep only turning points that are needed for line of sight.
+  std::reverse(rawc.begin(), rawc.end());
+  // String pulling: keep only turning points that are needed for line of sight, and never
+  // shortcut through cells dearer than the ones the search chose (sidewalk -> crossing).
   std::vector<Vec2> out{raw.front()};
   size_t anchor = 0;
-  for (size_t i = 2; i < raw.size(); ++i)
-    if (!lineOfSight(raw[anchor], raw[i])) {
+  uint8_t cap = rawc.front();
+  for (size_t i = 1; i < raw.size(); ++i) {
+    const uint8_t capi = std::max(cap, rawc[i]);
+    if (i >= 2 && !lineOfSight(raw[anchor], raw[i], capi)) {
       out.push_back(raw[i - 1]);
       anchor = i - 1;
+      cap = std::max(rawc[i - 1], rawc[i]);
+    } else {
+      cap = capi;
     }
+  }
   if (raw.size() > 1) out.push_back(raw.back());
   return out;
 }

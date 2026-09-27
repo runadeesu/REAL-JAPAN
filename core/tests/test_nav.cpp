@@ -50,3 +50,28 @@ RJ_TEST(grid_nav_never_snaps_into_enclosed_pockets) {
   const auto p = g.findPath({30, 30}, {5, 5});  // start inside the courtyard
   RJ_CHECK(p.has_value());
 }
+
+RJ_TEST(grid_nav_keeps_to_sidewalks_and_crossings) {
+  // A 20 m wide carriageway (x 40..60) with a 4 m crossing at y 78..82; sidewalks on both sides.
+  GridNav g(100, 100, 1.0, 0.0, 0.0);
+  g.costPolygon({{40, 0}, {60, 0}, {60, 100}, {40, 100}}, 60);
+  g.costPolygon({{40, 78}, {60, 78}, {60, 82}, {40, 82}}, GridNav::kBaseCost);
+  int cx, cy;
+  RJ_CHECK(g.toCell({50, 20}, cx, cy) && g.cost(cx, cy) == 60);
+  RJ_CHECK(g.toCell({50, 80}, cx, cy) && g.cost(cx, cy) == GridNav::kBaseCost);
+  const auto p = g.findPath({20, 20}, {80, 20});
+  RJ_CHECK(p.has_value());
+  if (p) {
+    // Walks up to the crossing and back rather than straight across (60 m straight, ~140 m via the crossing).
+    RJ_CHECK(GridNav::pathLength(*p) > 120.0);
+    for (double d = 0; d < GridNav::pathLength(*p); d += 0.5) {
+      const Vec2 q = GridNav::pointAt(*p, d);
+      if (q.x > 41 && q.x < 59) RJ_CHECK(q.y > 76.5 && q.y < 83.5);  // on the carriageway only at the crossing
+    }
+  }
+  // A narrow shared street (cost 12) is still crossed directly.
+  GridNav h(100, 100, 1.0, 0.0, 0.0);
+  h.costSegment({50, 0}, {50, 100}, 2.0, 12);
+  const auto q = h.findPath({20, 20}, {80, 20});
+  RJ_CHECK(q.has_value() && GridNav::pathLength(*q) < 62.0);
+}

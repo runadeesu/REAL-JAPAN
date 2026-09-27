@@ -168,6 +168,8 @@ npc.age = age {n}
 npc.walking_to = Walking → next: "{next}"
 npc.schedule = Scheduled trip: {a}–{b}
 npc.fictional = A fictional resident (not a real person). Home and destination are real buildings; the daily plan is simulated.
+npc.visitor_title = Visitor (statistically generated)
+npc.visitor_note = Generated from the time of day, the real buildings around (use and floor area) and the real station entrances. Not a real person and not measured people-flow data.
 
 interior.enter = E: Enter the underground mall ({name}, official 3D interior)
 interior.exit = E: Go up to the street
@@ -191,4 +193,5 @@ weather.fog = Fog
 weather.windy = Strong wind
 hud.controls_short = WASD move · Shift run · E interact/enter · Tab phone · F3 developer overlay · Esc menu
 hud.perf = {fps} fps · {dc} draws · {tri} M tris · exposure {exp}
+hud.life = pedestrians {peds} (visitors {vis}, activity {act}) · vehicles {cars} · crossings {xw} ({est} estimated)
 hud.wet = road wetness {n}%

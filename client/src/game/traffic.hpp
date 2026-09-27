@@ -53,7 +53,6 @@ class Traffic {
   double networkKm() const;
   static float lengthOf(VehicleType t);
 
- private:
   struct Edge {
     int a, b;
     float width;
@@ -64,13 +63,24 @@ class Traffic {
     int lanes = 1;                    // per direction
     double lane_w = 3.0;
     double v0 = 11.0;
+    float stop[2] = {-1.0f, -1.0f};   // stop-line distance from node a / node b (-1: default)
   };
   struct Node {
     rj::geo::Geodetic geo;
     rj::geo::Vec3d pos;
     std::vector<int> edges;
     int signal_group = -1;  // nearest real signal group (vehicle heads within 30 m)
+    int est_group = -1;     // estimated signal group (RoadMarkings) when no real heads are near
   };
+  const std::vector<Node>& nodes() const { return nodes_; }
+  const std::vector<Edge>& edges() const { return edges_; }
+  // Signal groups are assigned lazily in update(); markings need them up front.
+  void assignSignalGroups(const TrafficSignals& signals) { assignSignals(signals); }
+  void setStopDistance(int edge, bool at_b, float d) { edges_[static_cast<size_t>(edge)].stop[at_b ? 1 : 0] = d; }
+  void setEstimatedGroup(int node, int group) { nodes_[static_cast<size_t>(node)].est_group = group; }
+  void clearRoadMarkingState();  // stop distances and estimated groups (before markings are rebuilt)
+
+ private:
   void samplePose(const Edge& e, int dir, int lane, double s, rj::geo::Vec3d& p, double& heading) const;
   double headingAtEnd(const Edge& e, int dir) const;
   void chooseNext(Vehicle& v);

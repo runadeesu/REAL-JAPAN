@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "raylib.h"
@@ -59,6 +60,7 @@ struct LoadedCell {
   std::vector<float> walk;                 // raised walkable triangles (9 floats each)
   std::unordered_map<int64_t, std::vector<uint32_t>> walk_hash;  // 4 m buckets -> triangle index
   std::vector<float> cross;                // crosswalk triangles
+  std::unordered_set<int64_t> mark_hash;   // 2 m buckets holding surveyed road markings
   struct Light {
     rj::geo::Vec3d pos;
     float range;
@@ -92,6 +94,8 @@ class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
   // Walkable surface: raised sidewalks / traffic islands (real PLATEAU areas) where present, else terrain.
   std::optional<double> surfaceHeight(double x, double y) const;
   bool onCrosswalk(double x, double y) const;
+  // Surveyed PLATEAU road markings (frn 1000-1299) within ~radius of (x, y).
+  bool hasSurveyedMarking(double x, double y, double radius) const;
   bool pointInBuilding(double x, double y) const;  // inside any PLATEAU footprint
   void collide(rj::geo::Vec3d& p, double radius) const;
   struct Hit {

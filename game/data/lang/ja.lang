@@ -168,6 +168,8 @@ npc.age = {n}歳
 npc.walking_to = 徒歩で移動中 → 次は「{next}」
 npc.schedule = 予定：{a}〜{b} に移動
 npc.fictional = 架空の住民です（実在の人物ではありません）。自宅・目的地は実在の建物、1日の予定はシミュレーションで生成しています。
+npc.visitor_title = 来街者（統計的に生成）
+npc.visitor_note = 時間帯と周辺の実在建物（用途・床面積）、実在の駅出入口から統計的に生成した来街者です。実在の人物でも、実測の人流データでもありません。
 
 interior.enter = E：地下街に入る（{name}・内部は公的3Dモデル）
 interior.exit = E：地上に出る
@@ -191,4 +193,5 @@ weather.fog = 霧
 weather.windy = 強風
 hud.controls_short = WASD 移動 · Shift 走る · E 調べる/入る · Tab スマホ · F3 開発者表示 · Esc メニュー
 hud.perf = {fps} fps · 描画 {dc} 回 · {tri} M三角形 · 露出 {exp}
+hud.life = 歩行者 {peds}（来街者 {vis}・活動度 {act}）· 車両 {cars} · 横断歩道 {xw}（推定 {est}）
 hud.wet = 路面の濡れ {n}%

@@ -84,6 +84,7 @@ struct CellDetailCpu {
   std::vector<Chunk> chunks;
   std::vector<float> walk;   // walkable triangles (cell ENU), 9 floats each
   std::vector<float> cross;  // crosswalk triangles (cell ENU)
+  std::vector<float> marks;  // centroids (x, y) of surveyed road-marking triangles (cell ENU)
   std::vector<StreetLight> lights;
   std::vector<SignalHead> signals;
   Image ao{};  // ground contact occlusion (grey), same UV as the ground texture

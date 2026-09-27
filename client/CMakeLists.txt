@@ -56,6 +56,7 @@ set(RJ_SOURCES
   src/game/pedestrians.cpp
   src/game/weather.cpp
   src/game/traffic_signals.cpp
+  src/game/road_markings.cpp
   src/game/traffic.cpp
   src/ui/ui.cpp
 )

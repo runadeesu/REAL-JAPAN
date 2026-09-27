@@ -269,6 +269,19 @@ void App::applyLaunchOverrides() {
     clock_ = rj::sim::GameClock(rj::sim::GameClock::unixFromJst(d, hh, mm), settings_.time_scale);
 }
 
+void App::placeRoads() {
+  signals_.rebuild(world_);
+  if (traffic_.loaded()) {
+    traffic_.place(world_);
+    traffic_.assignSignalGroups(signals_);
+    markings_.build(traffic_, signals_, world_);
+    traffic_placed_ = true;
+    peds_.buildNav(world_, &traffic_, &markings_);
+  } else {
+    peds_.buildNav(world_);
+  }
+}
+
 // ---------------------------------------------------------------------------
 void App::update(float dt) {
   ui_.beginFrame();
@@ -288,10 +301,7 @@ void App::update(float dt) {
   if (frame_ % 60 == 0) signals_.rebuild(world_);
   signals_.update(GetTime());
   if (in_session_ && screen_ != Screen::Loading && traffic_.loaded()) {
-    if (!traffic_placed_ && world_.residentCount() > 0) {
-      traffic_.place(world_);
-      traffic_placed_ = true;
-    }
+    if (!traffic_placed_ && world_.residentCount() > 0) placeRoads();
     if (traffic_placed_ && screen_ != Screen::Pause && screen_ != Screen::Settings)
       traffic_.update(dt, world_, signals_, player_.pos, clock_.jst().hour);
     if (frame_ % 30 == 0 && std::getenv("RJ_DEBUG")) {
@@ -315,7 +325,7 @@ void App::update(float dt) {
   if (screen_ == Screen::Loading) {
     if (world_.residentCount() >= world_.knownCount() || (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > 600)) {
       player_.snapToGround(world_);
-      peds_.buildNav(world_);
+      placeRoads();
       screen_ = Screen::Title;
       if (opt_.selftest) {
         runSelfTest();
@@ -434,7 +444,13 @@ void App::update(float dt) {
         TraceLog(LOG_DEBUG, "RJ: walk pos %.2f %.2f z %.2f grounded %d (from start %.2f %.2f %.2f)", player_.pos.x, player_.pos.y,
                  player_.pos.z, player_.grounded, player_.pos.x - walk_start_.x, player_.pos.y - walk_start_.y,
                  player_.pos.z - walk_start_.z);
-      peds_.update(town_, world_, clock_.jst(), player_.pos, dt);
+      {
+        // Fewer people out in bad weather (game assumption).
+        const WeatherKind wk = weather_.kind();
+        const float crowd = wk == WeatherKind::Thunder ? 0.45f : wk == WeatherKind::HeavyRain ? 0.55f
+                            : wk == WeatherKind::Rain ? 0.72f : wk == WeatherKind::LightRain ? 0.85f : 1.0f;
+        peds_.update(town_, world_, signals_, clock_.jst(), player_.pos, dt, crowd);
+      }
       if (screen_ == Screen::Game) {
         updateInteriorAction();
         if (inside_id_.empty()) {
@@ -685,6 +701,7 @@ void App::drawWorldView(const Camera3D& cam) {
   renderer_.setLights(collectLights(cam));
   BeginMode3D(cam);
   renderer_.drawWorld(cam, world_, settings_.photo_textures, !in);
+  if (!deep) renderer_.drawMarkings(markings_);
   static const bool no_facades = std::getenv("RJ_NO_FACADES") != nullptr;      // debug isolation
   static const bool no_int_out = std::getenv("RJ_NO_INTERIOR_OUT") != nullptr;
   if (!deep) {
@@ -1043,6 +1060,13 @@ void App::drawHud() {
                              "  ·  " + tr(std::string("weather.") + weatherKey(weather_.kind())) +
                              (weather_.wetness() > 0.02f ? "  ·  " + i18n_.f("hud.wet", {{"n", std::to_string(static_cast<int>(weather_.wetness() * 100))}}) : "");
     ui_.text(perf, 40, 196, 22, theme::kMuted);
+    const std::string life = i18n_.f("hud.life", {{"peds", std::to_string(peds_.walkers().size())},
+                                                   {"vis", std::to_string(peds_.visitorCount())},
+                                                   {"act", fixed(peds_.activity(), 2)},
+                                                   {"cars", std::to_string(traffic_.vehicles().size())},
+                                                   {"xw", std::to_string(markings_.crossings().size())},
+                                                   {"est", std::to_string(markings_.estimatedCrossings())}});
+    ui_.text(life, 40, 224, 22, theme::kMuted);
   }
   // Crosshair.
   if (screen_ == Screen::Game && player_.camera_mode == 0) {
@@ -1124,6 +1148,15 @@ void App::drawInteriorInfo() {
 
 void App::drawWalkerInfo() {
   const Walker& w = *hover_walker_;
+  if (w.visitor) {
+    const float w_ = 560, x = ui_.vw() - w_ - 30, y = 20;
+    ui_.panel({x, y, w_, 200});
+    float yy = y + 18;
+    ui_.text(tr("npc.visitor_title"), x + 22, yy, 22, theme::kMuted);
+    yy += 40;
+    ui_.textWrapped(tr("npc.visitor_note"), x + 22, yy, w_ - 44, 20, theme::kWarn);
+    return;
+  }
   const auto& n = town_.npc(w.npc);
   const auto* occ = rj::sim::occupationById(n.occupation_id);
   const float w_ = 560, x = ui_.vw() - w_ - 30, y = 20;

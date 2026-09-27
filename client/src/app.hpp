@@ -14,6 +14,7 @@
 #include "game/player.hpp"
 #include "game/town_sim.hpp"
 #include "game/traffic.hpp"
+#include "game/road_markings.hpp"
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
 #include "i18n/i18n.hpp"
@@ -141,7 +142,9 @@ class App {
   FacadeDetail facades_;
   TrafficSignals signals_;
   Traffic traffic_;
+  RoadMarkings markings_;
   bool traffic_placed_ = false;
+  void placeRoads();  // road graph, signal groups, markings and the walk network in the current origin
   int64_t weather_prev_unix_ = 0;
   float render_time_ = 0.0f;
   std::vector<PointLight> collectLights(const Camera3D& cam) const;

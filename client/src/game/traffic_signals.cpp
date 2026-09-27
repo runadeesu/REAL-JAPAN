@@ -1,5 +1,6 @@
 #include "game/traffic_signals.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <string>
@@ -16,9 +17,23 @@ void TrafficSignals::rebuild(const World& world) {
       const std::string key = code + ":" + std::to_string(s.group);
       auto it = ids.find(key);
       const int gid = it == ids.end() ? (ids[key] = static_cast<int>(ids.size())) : it->second;
-      heads_.push_back({s.pos, s.facing_yaw, s.length, s.kind, gid, s.phase});
+      heads_.push_back({s.pos, s.facing_yaw, s.length, s.kind, gid, s.phase, false});
     }
   ngroups_ = static_cast<int>(ids.size());
+  heads_.insert(heads_.end(), est_.begin(), est_.end());
+}
+
+void TrafficSignals::addEstimatedHead(const Head& h) {
+  Head e = h;
+  e.estimated = true;
+  est_.push_back(e);
+  heads_.push_back(e);
+}
+
+void TrafficSignals::clearEstimated() {
+  est_.clear();
+  n_est_groups_ = 0;
+  heads_.erase(std::remove_if(heads_.begin(), heads_.end(), [](const Head& h) { return h.estimated; }), heads_.end());
 }
 
 double TrafficSignals::local(int group) const {
@@ -42,6 +57,21 @@ PedLamp TrafficSignals::pedestrian(int group, int phase) const {
   if (t >= w0 && t < w1) return PedLamp::Walk;
   if (t >= w1 && t < w1 + 8.0) return PedLamp::Flash;
   return PedLamp::Stop;
+}
+
+int TrafficSignals::phaseForAxis(int group, double h) const {
+  // Angle between axes (mod 180 deg) to the nearest head of the group; perpendicular -> the other phase.
+  double best = 10.0;
+  int phase = 0;
+  for (const auto& hd : heads_) {
+    if (hd.group != group) continue;
+    const double d = std::fabs(std::remainder(static_cast<double>(hd.facing) - h, 3.14159265358979323846));
+    if (d < best) {
+      best = d;
+      phase = hd.phase;
+    }
+  }
+  return best < 3.14159265358979323846 / 4 ? phase : 1 - phase;
 }
 
 bool TrafficSignals::flashOn() const { return std::fmod(t_, 1.0) < 0.5; }

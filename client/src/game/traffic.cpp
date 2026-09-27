@@ -190,12 +190,18 @@ void Traffic::chooseNext(Vehicle& v) {
   }
 }
 
+void Traffic::clearRoadMarkingState() {
+  for (auto& n : nodes_) n.est_group = -1;
+  for (auto& e : edges_) e.stop[0] = e.stop[1] = -1.0f;
+}
+
 void Traffic::assignSignals(const TrafficSignals& signals) {
   for (auto& n : nodes_) {
-    n.signal_group = -1;
+    n.signal_group = n.est_group;
+    if (n.est_group >= 0) continue;
     double best = 32.0;
     for (const auto& h : signals.heads()) {
-      if (h.kind != 0) continue;
+      if (h.kind != 0 || h.estimated) continue;
       const double d = std::hypot(h.pos.x - n.pos.x, h.pos.y - n.pos.y);
       if (d < best) {
         best = d;
@@ -338,7 +344,9 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
     // Junction control: real signals, otherwise slow down and yield.
     const int node = v.dir == 0 ? e.b : e.a;
     const Node& N = nodes_[static_cast<size_t>(node)];
-    const double stop_at = std::max(0.0, e.length - std::min(9.0, e.length * 0.4));
+    const float stop_d = e.stop[v.dir == 0 ? 1 : 0];  // stop line (estimated markings) or a default
+    // IDM keeps s0 (2.2 m) to the stop point: place it just past the line so the bumper stops at it.
+    const double stop_at = std::max(0.0, e.length - (stop_d > 0 ? stop_d - 1.9 : std::min(9.0, e.length * 0.4)));
     if (N.signal_group >= 0) {
       const double h = headingAtEnd(e, v.dir);
       // phase of the head facing this approach (anti-parallel to the travel direction)

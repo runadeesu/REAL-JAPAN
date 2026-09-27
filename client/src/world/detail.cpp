@@ -119,6 +119,10 @@ bool parseDetail(const std::vector<unsigned char>& file, CellDetailCpu& out, std
       for (uint32_t t = 0; t + 2 < ni; t += 3)
         for (int e = 0; e < 3; ++e)
           for (int a = 0; a < 3; ++a) out.walk.push_back(c.pos[c.idx[t + e] * 3u + a]);
+    if (c.mat == kMatMarking)
+      for (uint32_t t = 0; t + 2 < ni; t += 3)
+        for (int a = 0; a < 2; ++a)
+          out.marks.push_back((c.pos[c.idx[t] * 3u + a] + c.pos[c.idx[t + 1] * 3u + a] + c.pos[c.idx[t + 2] * 3u + a]) / 3.0f);
     out.chunks.push_back(std::move(c));
   }
   auto tris = [&](std::vector<float>& dst) {

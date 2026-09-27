@@ -289,6 +289,12 @@ void World::placeCell(LoadedCell& c) {
     c.cross[v + 1] = static_cast<float>(p.y);
     c.cross[v + 2] = static_cast<float>(p.z);
   }
+  c.mark_hash.clear();
+  for (size_t v = 0; v + 1 < det.marks.size(); v += 2) {
+    const float m[3] = {det.marks[v], det.marks[v + 1], 0.0f};
+    const auto p = toO(m);
+    c.mark_hash.insert(bucketKey(static_cast<int>(std::floor(p.x / 2.0)), static_cast<int>(std::floor(p.y / 2.0))));
+  }
   c.lights.clear();
   for (const auto& l : det.lights) c.lights.push_back({toO(l.pos), l.range});
   c.signals.clear();
@@ -441,6 +447,18 @@ bool World::onCrosswalk(double x, double y) const {
   for (const auto& [code, c] : loaded_)
     for (size_t t = 0; t + 8 < c->cross.size(); t += 9)
       if (triZ(&c->cross[t], x, y)) return true;
+  return false;
+}
+
+bool World::hasSurveyedMarking(double x, double y, double radius) const {
+  const int r = static_cast<int>(std::ceil(radius / 2.0));
+  const int bx = static_cast<int>(std::floor(x / 2.0)), by = static_cast<int>(std::floor(y / 2.0));
+  for (const auto& [code, c] : loaded_) {
+    if (c->mark_hash.empty()) continue;
+    for (int dy = -r; dy <= r; ++dy)
+      for (int dx = -r; dx <= r; ++dx)
+        if (c->mark_hash.count(bucketKey(bx + dx, by + dy))) return true;
+  }
   return false;
 }
 

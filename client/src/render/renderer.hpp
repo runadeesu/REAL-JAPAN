@@ -7,13 +7,15 @@
 //   * two-cascade PCF sun shadows (near 70 m sharp + far 460 m)
 //   * up to 24 nearby artificial lights (real PLATEAU street-light heads, shops)
 //   * wet surfaces, puddles and ripples driven by the weather simulation
-//   * post chain: SSAO, bloom, auto exposure, colour temperature / grading, FXAA
-// NOT implemented (honest list): ray-traced GI/reflections, screen-space reflections,
-// volumetric light shafts, virtual texturing. See docs/STATUS.md.
+//   * post chain: SSAO, screen-space reflections, bloom, auto exposure, colour temperature /
+//     grading, FXAA
+// NOT implemented (honest list): ray-traced GI/reflections, volumetric light shafts, virtual
+// texturing, motion blur. See docs/STATUS.md.
 
 #include <vector>
 
 #include "game/pedestrians.hpp"
+#include "game/road_markings.hpp"
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
 #include "raylib.h"
@@ -90,6 +92,7 @@ class Renderer {
   void drawPedestrians(const Pedestrians& peds);
   void drawInterior(const Interior& in);
   void drawFacades(const FacadeDetail& f);
+  void drawMarkings(const RoadMarkings& m);
   void drawSignals(const TrafficSignals& ts, const Camera3D& cam);
   void drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L);
   void vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out) const;

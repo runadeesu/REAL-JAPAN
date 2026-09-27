@@ -606,6 +606,22 @@ void Renderer::drawFacades(const FacadeDetail& f) {
   rlEnableBackfaceCulling();
 }
 
+void Renderer::drawMarkings(const RoadMarkings& rm) {
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", -1);
+  rlDisableBackfaceCulling();
+  const Matrix id = MatrixIdentity();
+  rm.forEachMesh([&](const Mesh& m) {
+    DrawMesh(m, mat_, id);
+    ++draw_calls_;
+    triangles_ += m.triangleCount;
+  });
+  rlEnableBackfaceCulling();
+}
+
 void Renderer::drawSignals(const TrafficSignals& ts, const Camera3D& cam) {
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   const Vector3 kGreen{0.0f, 0.95f, 0.62f}, kYellow{1.0f, 0.62f, 0.0f}, kRed{1.0f, 0.07f, 0.03f};
@@ -708,8 +724,7 @@ void Renderer::drawPedestrians(const Pedestrians& peds) {
   for (const auto& [id, w] : peds.walkers()) {
     const float s = w.height_scale;
     const Vector3 feet = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z)});
-    const float yaw = std::atan2(static_cast<float>(w.dir.x), static_cast<float>(w.dir.y));
-    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), MatrixRotateY(-yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
+    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), MatrixRotateY(-w.yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
     const Mesh& m = humans_.frame(static_cast<BodyVariant>(w.variant % static_cast<int>(BodyVariant::Count)), w.phase, w.waiting);
     drawHuman(m, M, w.shirt, w.pants, w.skin, w.hair);
   }

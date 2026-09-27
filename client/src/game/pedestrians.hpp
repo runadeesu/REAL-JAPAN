@@ -1,17 +1,26 @@
 #pragma once
-// Residents on foot, drawn in 3D.
+// People on foot, drawn in 3D. Two populations share routing and rendering:
 //
-// Who walks, from where to where, and when comes from each resident's daily
-// plan (rjcore schedules). The route is found with A* on a walkability grid
-// built from the real building footprints. When a walker first appears its
-// position along the route is the one implied by the schedule; after that it
-// walks at a real pace (1.4 m/s) so that game-time compression does not make
-// people sprint. These are the simulated residents, not random spawns.
+//  * Residents: who walks, from where to where, and when comes from each resident's daily plan
+//    (rjcore schedules; fictional people living in real buildings). When a walker first appears
+//    its position along the route is the one implied by the schedule.
+//  * Visitors (来街者): the crowd of a commercial district is mostly people who do not live there.
+//    They are generated STATISTICALLY — a game assumption, not measured people-flow data: an
+//    hourly profile scaled by the floor area of the real buildings around the player (PLATEAU
+//    usage codes: commercial, business, hotels, shop-houses) and by the real station entrances.
+//    Each visitor walks from a real entrance / building door to another.
+//
+// Routes use A* on a walkability grid built from real building footprints, with traversal costs:
+// sidewalks and crossings are cheap, carriageways dear (narrow shared streets only slightly), so
+// people keep to the sidewalks and cross at the crossings. At signalised crossings they wait for
+// the pedestrian green. Everyone walks at a real pace (about 1.4 m/s) regardless of game time.
 
+#include <cstdint>
 #include <future>
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "raylib.h"
@@ -23,51 +32,79 @@
 namespace rjc {
 
 class World;
+class Traffic;
+class TrafficSignals;
+class RoadMarkings;
 
 struct Walker {
   size_t npc = 0;
+  bool visitor = false;  // statistical visitor (no resident record)
   WalkTrip trip;
   std::vector<rj::nav::Vec2> path;
   double length = 0;
   double dist = 0;
   rj::nav::Vec2 pos, dir{0, 1};
   float z = 0;
+  float yaw = 0;  // compass radians, smoothed through route corners
   float phase = 0;
+  float speed = 1.4f;                         // m/s
+  float offset = 0, off_eff = 0;              // lateral offset from the route centre line (m)
+  float wait_back = 0.8f;                     // how far before a crossing they stop on red
+  std::vector<std::pair<float, int>> xings;   // (route distance entering a crossing, crossing id)
+  size_t next_x = 0;
   Color shirt{}, pants{}, skin{}, hair{};
   int variant = 0;        // body variant (appearance only): trousers / long hair / skirt
-  bool waiting = false;   // standing (e.g. at a red pedestrian signal)
+  int age = 30;
+  bool waiting = false;   // standing at a red pedestrian signal
   float height_scale = 1.0f;
 };
 
 class Pedestrians {
  public:
   ~Pedestrians();
-  void buildNav(const World& world);
+  // traffic / markings may be null (no road graph): then every free cell costs the same.
+  void buildNav(const World& world, const Traffic* traffic = nullptr, const RoadMarkings* markings = nullptr);
   bool navReady() const { return nav_.valid(); }
   void clear();
 
-  void update(TownSim& town, const World& world, const rj::sim::CivilDateTime& now,
-              const rj::geo::Vec3d& player, float real_dt);
+  void update(TownSim& town, const World& world, const TrafficSignals& signals, const rj::sim::CivilDateTime& now,
+              const rj::geo::Vec3d& player, float real_dt, float crowd_factor = 1.0f);
   const std::map<size_t, Walker>& walkers() const { return walkers_; }
   const Walker* pick(const rj::geo::Vec3d& eye, const rj::geo::Vec3d& dir, double max_dist) const;
+  size_t visitorCount() const { return n_visitors_; }
+  size_t sourceCount() const { return sources_.size(); }
+  float activity() const { return activity_; }
 
   static constexpr double kVisibleRadius = 450.0;
-  static constexpr size_t kMaxWalkers = 140;
+  static constexpr size_t kMaxWalkers = 140;    // residents
+  static constexpr size_t kMaxVisitors = 520;
+  static constexpr size_t kVisitorIdBase = size_t{1} << 40;
 
  private:
   struct Job {
     size_t npc;
     WalkTrip trip;
     rj::nav::Vec2 from, to;
+    bool visitor = false;
+    bool mid_route = false;  // initial fill: start somewhere along the route
   };
   struct Result {
-    size_t npc;
-    WalkTrip trip;
+    Job job;
     std::optional<std::vector<rj::nav::Vec2>> path;
   };
+  struct Source {
+    rj::nav::Vec2 door;
+    float weight;
+    bool station;
+  };
   void startJobs();
+  void buildSources(const World& world);
+  void spawnVisitors(const rj::nav::Vec2& me, int hour, float crowd_factor, float real_dt);
+  void markCrossings(Walker& w) const;
 
   rj::nav::GridNav nav_;
+  std::vector<int16_t> cross_id_;  // per nav cell: crossing index or -1
+  const RoadMarkings* markings_ = nullptr;
   std::map<size_t, Walker> walkers_;
   std::map<size_t, int> pending_;  // npc -> trip start minute being routed
   std::map<size_t, int> failed_;   // npc -> trip start minute that had no route
@@ -76,6 +113,18 @@ class Pedestrians {
   int last_minute_ = -1;
   rj::sim::CivilDate last_date_{0, 0, 0};
   std::vector<WalkTrip> trips_;
+  // visitors
+  std::vector<Source> sources_;
+  std::vector<int> near_src_;        // sources within reach of the player
+  std::vector<float> near_cum_;      // cumulative weights of near_src_
+  rj::nav::Vec2 near_at_{1e30, 1e30};
+  float activity_ = 0.0f;
+  float spawn_acc_ = 0.0f;
+  size_t n_visitors_ = 0, visitors_pending_ = 0;
+  size_t next_visitor_ = kVisitorIdBase;
+  bool filled_ = false;
+  uint64_t rng_ = 0x9e3779b97f4a7c15ULL;
+  double rnd();
 };
 
 }  // namespace rjc
