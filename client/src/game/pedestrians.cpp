@@ -130,6 +130,31 @@ void Pedestrians::buildNav(const World& world, const Traffic* traffic, const Roa
       }
       nav_.blockPolygon(poly);
     }
+  // Wide carriageways are not crossed mid-block: people cross at the junctions (and at marked
+  // crossings, freed below); the junction areas at both ends of each road stay walkable.
+  if (traffic)
+    for (const auto& e : traffic->edges()) {
+      if (e.width < 9.0f || e.pts.size() < 2) continue;
+      const double keep = std::max(18.0, e.width * 0.9), r = e.width * 0.5 - 0.3;
+      std::vector<double> cum(e.pts.size(), 0.0);
+      for (size_t k = 1; k < e.pts.size(); ++k) cum[k] = cum[k - 1] + std::hypot(e.pts[k].x - e.pts[k - 1].x, e.pts[k].y - e.pts[k - 1].y);
+      const double L = cum.back();
+      if (L < 2.0 * keep + 4.0) continue;
+      for (size_t k = 1; k < e.pts.size(); ++k) {
+        const double s0 = std::max(cum[k - 1], keep), s1 = std::min(cum[k], L - keep);
+        if (s1 <= s0) continue;
+        const double seg = std::max(1e-6, cum[k] - cum[k - 1]);
+        auto at = [&](double s) {
+          const double t = (s - cum[k - 1]) / seg;
+          return rj::nav::Vec2{e.pts[k - 1].x + (e.pts[k].x - e.pts[k - 1].x) * t, e.pts[k - 1].y + (e.pts[k].y - e.pts[k - 1].y) * t};
+        };
+        nav_.blockSegment(at(s0), at(s1), r);
+      }
+    }
+  if (markings)  // marked crossings are always passable (also mid-block ones on real roads)
+    for (const auto& xc : markings->crossings())
+      for (const auto& poly : xc.polys)
+        for (size_t ci : nav_.cellsInPolygon(poly)) nav_.setBlocked(static_cast<int>(ci % nav_.width()), static_cast<int>(ci / nav_.width()), false);
   nav_.computeComponents();
   // Carriageways (real LOD2 road areas via the road graph) are dear to walk on; narrow streets
   // without sidewalks are shared space in Japan and cost only a little more than a sidewalk.
@@ -466,8 +491,10 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
       const double dx = w.pos.x - hz_.x, dy = w.pos.y - hz_.y;
       const double along = dx * fx + dy * fy, lat = dx * rx + dy * ry;
       const double side = lat >= 0 ? 1.0 : -1.0;
+      int wx, wy;
+      const bool on_road = nav_.toCell(w.pos, wx, wy) && nav_.cost(wx, wy) > 20;  // (people on a crossing hurry on)
       if (std::fabs(lat) < 2.2 && along > -3.0 && along < 4.0 + hz_v_ * 1.3 && (hz_v_ > 0.4 || (std::fabs(along) < 2.6 && std::fabs(lat) < 1.3))) {
-        step = 0;
+        step = on_road ? step * 1.6 : 0.0;
         dodging = true;
         const double push = std::min(1.0, 2.6 * real_dt);
         w.dodge.x += rx * side * push;

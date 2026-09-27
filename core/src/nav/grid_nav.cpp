@@ -98,6 +98,20 @@ void GridNav::costSegment(const Vec2& a, const Vec2& b, double radius, uint8_t c
     }
 }
 
+void GridNav::blockSegment(const Vec2& a, const Vec2& b, double radius, bool block) {
+  const int x0 = std::max(0, static_cast<int>(std::floor((std::min(a.x, b.x) - radius - ox_) / cell_)));
+  const int x1 = std::min(w_ - 1, static_cast<int>(std::floor((std::max(a.x, b.x) + radius - ox_) / cell_)));
+  const int y0 = std::max(0, static_cast<int>(std::floor((std::min(a.y, b.y) - radius - oy_) / cell_)));
+  const int y1 = std::min(h_ - 1, static_cast<int>(std::floor((std::max(a.y, b.y) + radius - oy_) / cell_)));
+  const double vx = b.x - a.x, vy = b.y - a.y, l2 = vx * vx + vy * vy;
+  for (int cy = y0; cy <= y1; ++cy)
+    for (int cx = x0; cx <= x1; ++cx) {
+      const Vec2 p = cellCenter(cx, cy);
+      const double t = l2 > 0 ? std::clamp(((p.x - a.x) * vx + (p.y - a.y) * vy) / l2, 0.0, 1.0) : 0.0;
+      if (std::hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy)) <= radius) blocked_[static_cast<size_t>(cy) * w_ + cx] = block ? 1 : 0;
+    }
+}
+
 void GridNav::computeComponents() {
   const size_t n = static_cast<size_t>(w_) * static_cast<size_t>(h_);
   comp_.assign(n, -1);

@@ -74,4 +74,14 @@ RJ_TEST(grid_nav_keeps_to_sidewalks_and_crossings) {
   h.costSegment({50, 0}, {50, 100}, 2.0, 12);
   const auto q = h.findPath({20, 20}, {80, 20});
   RJ_CHECK(q.has_value() && GridNav::pathLength(*q) < 62.0);
+  // A wide road blocked mid-block except at a junction (y 90..100): the route goes round by it.
+  GridNav k(100, 100, 1.0, 0.0, 0.0);
+  k.blockSegment({50, 0}, {50, 88}, 9.0);
+  RJ_CHECK(k.toCell({50, 40}, cx, cy) && k.blocked(cx, cy));
+  RJ_CHECK(k.toCell({30, 40}, cx, cy) && !k.blocked(cx, cy));
+  const auto r = k.findPath({20, 20}, {80, 20});
+  RJ_CHECK(r.has_value() && GridNav::pathLength(*r) > 150.0);
+  k.blockSegment({40, 20}, {60, 20}, 1.5, false);  // a mid-block crossing frees a passage
+  const auto r2 = k.findPath({20, 20}, {80, 20});
+  RJ_CHECK(r2.has_value() && GridNav::pathLength(*r2) < 70.0);
 }

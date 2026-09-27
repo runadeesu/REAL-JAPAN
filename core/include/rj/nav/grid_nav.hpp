@@ -42,6 +42,8 @@ class GridNav {
   std::vector<size_t> cellsInPolygon(const std::vector<Vec2>& poly) const;
   // Cells whose centre lies within `radius` of segment ab.
   void costSegment(const Vec2& a, const Vec2& b, double radius, uint8_t c);
+  // Block (or free) the cells whose centre lies within `radius` of segment ab.
+  void blockSegment(const Vec2& a, const Vec2& b, double radius, bool block = true);
 
   // Label 4-connected free regions; the largest one (the street network) becomes
   // the only valid snap target, so routes never start in an enclosed pocket
