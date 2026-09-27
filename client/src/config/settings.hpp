@@ -28,6 +28,7 @@ struct Settings {
   bool post_fx = true;         // SSAO + bloom + auto exposure + FXAA
   bool head_bob = true;        // natural head movement while walking (can be turned off)
   bool dev_overlay = false;    // developer HUD (coordinates, mesh, building data, perf); F3 toggles
+  int volume = 80;             // master sound volume 0..100
 
   static const std::vector<std::pair<int, int>>& resolutions();
   static const std::vector<int>& timeScales();

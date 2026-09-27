@@ -40,6 +40,7 @@ rjc::LaunchOptions parseArgs(int argc, char** argv) {
     else if (a == "--alight") o.alight = true;
     else if (a == "--simspeed") o.sim_speed = std::max(1, std::atoi(next().c_str()));
     else if (a == "--fly-script") o.fly_script = next();
+    else if (a == "--audio-wav") o.audio_wav = next();
     else if (a == "--pos") {
       const std::string v = next();
       if (std::sscanf(v.c_str(), "%lf,%lf", &o.lat, &o.lon) == 2) o.has_pos = true;

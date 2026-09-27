@@ -181,6 +181,7 @@ interior.depth = 地表から {d} m（T.P. {h} m）
 interior.note = 床・壁・天井・階段は公的データのとおり。店舗名・内装・看板はデータに無いため再現していません（無地で表示）。
 settings.post_fx = 画質処理（SSAO・ブルーム・自動露出・アンチエイリアス）
 settings.head_bob = 歩行時の頭の揺れ
+settings.volume = 音量（音はすべてプログラムで合成）
 weather.clear = 快晴
 weather.fair = 晴れ
 weather.thin_cloud = 薄曇り

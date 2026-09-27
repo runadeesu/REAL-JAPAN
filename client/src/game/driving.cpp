@@ -242,6 +242,7 @@ void Driving::collide(const World& world, const Traffic& traffic, const rj::geo:
   double wx = fx * vx_ + rx * vy_, wy = fy * vx_ + ry * vy_;
   const double vn = wx * nx + wy * ny;
   if (vn < 0) {
+    impact_ = std::max(impact_, static_cast<float>(-vn));
     wx -= 1.25 * vn * nx;
     wy -= 1.25 * vn * ny;
     const double tx = wx - (wx * nx + wy * ny) * nx, ty = wy - (wx * nx + wy * ny) * ny;
@@ -256,6 +257,7 @@ void Driving::collide(const World& world, const Traffic& traffic, const rj::geo:
 
 void Driving::update(double dt, const World& world, const Traffic& traffic, const DriveInput& in, float wetness) {
   if (!has_car_) return;
+  throttle_ = active_ ? in.throttle : 0.0f;
   dt = std::min(dt, 0.05);
   if (!active_) {  // parked
     car_.v = 0;

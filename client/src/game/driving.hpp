@@ -56,6 +56,12 @@ class Driving {
   float roll() const { return static_cast<float>(roll_); }
   float bodyPitch() const { return static_cast<float>(pitch_body_); }
   float slip() const { return static_cast<float>(slip_); }          // 0..1 how hard the tyres are sliding
+  float throttle() const { return throttle_; }                       // last pedal input (engine load for the sound)
+  float takeImpact() {                                               // strongest collision since the last call (m/s)
+    const float i = impact_;
+    impact_ = 0;
+    return i;
+  }
   void enter(const Vehicle& v);           // take the wheel
   void enterParked() { active_ = has_car_; }
   rj::geo::Vec3d exitPosition() const;   // driver's door (right-hand drive)
@@ -91,6 +97,7 @@ class Driving {
   double shift_t_ = 0;
   double roll_ = 0, roll_v_ = 0, pitch_body_ = 0, pitch_v_ = 0;
   double slip_ = 0;
+  float throttle_ = 0, impact_ = 0;
   rj::geo::Vec3d cam_pos_{};
   double cam_yaw_ = 0;
   bool cam_init_ = false;

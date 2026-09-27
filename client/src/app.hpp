@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "audio/audio.hpp"
 #include "config/settings.hpp"
 #include "game/aircraft.hpp"
 #include "game/driving.hpp"
@@ -59,6 +60,7 @@ struct LaunchOptions {
   bool alight = false;    // test aid: after --ride, alight at the next stop
   int sim_speed = 1;      // test aid: transport simulation steps per frame (trains, ferries, aircraft)
   std::string fly_script; // test aid (--state fly): "throttle:elevator:aileron:seconds,..."
+  std::string audio_wav;  // test aid: render the game's sound offline into this WAV file
 };
 
 class App {
@@ -265,6 +267,27 @@ class App {
   int64_t weather_prev_unix_ = 0;
   float render_time_ = 0.0f;
   std::vector<PointLight> collectLights(const Camera3D& cam) const;
+
+  // sound (app_sound.cpp): the scene heard at the camera, and events detected from the simulation
+  Audio audio_;
+  Camera3D listen_cam_{};
+  bool listen_game_ = false;
+  void updateSound(float dt);
+  rj::geo::Vec3d snd_ear_prev_{};
+  bool snd_ear_ok_ = false;
+  int snd_car_keys_[4] = {-1, -1, -1, -1};
+  int snd_rail_keys_[2] = {-1, -1};
+  std::map<int, double> snd_dwell_;      // train id -> remaining stop time last frame
+  std::map<int, int> snd_at_;            // train id -> station it stood at last frame
+  std::map<int, double> snd_train_v_;    // train id -> speed last frame
+  std::map<int, float> snd_train_acc_;   // train id -> smoothed acceleration
+  std::map<int, int> snd_ferry_phase_;
+  int snd_jet_phase_ = -1;
+  float snd_jet_gear_ = 1.0f;
+  float snd_chime_t_ = -1.0f;            // on-board chime countdown after leaving a station
+  float snd_horn_t_ = 0.0f;
+  bool snd_crashed_ = false;
+  float snd_sea_ = 0.0f;
 };
 
 }  // namespace rjc

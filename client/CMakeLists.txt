@@ -21,7 +21,7 @@ set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 set(PLATFORM "Desktop" CACHE STRING "" FORCE)
 set(OPENGL_VERSION "3.3" CACHE STRING "" FORCE)
-set(USE_AUDIO OFF CACHE BOOL "" FORCE)  # no audio content yet
+set(USE_AUDIO ON CACHE BOOL "" FORCE)  # procedural sound (src/audio), no audio files
 if(NOT EXISTS "${RJ_ROOT}/third_party/raylib/CMakeLists.txt")
   message(FATAL_ERROR "raylib not found. Run tools/fetch_deps.sh first.")
 endif()
@@ -64,10 +64,12 @@ set(RJ_SOURCES
   src/game/aircraft.cpp
   src/game/jobs.cpp
   src/app_activities.cpp
+  src/app_sound.cpp
   src/render/aircraft.cpp
   src/render/trains.cpp
   src/game/traffic.cpp
   src/ui/ui.cpp
+  src/audio/audio.cpp
 )
 if(WIN32)
   list(APPEND RJ_SOURCES res/realjapan.rc)
@@ -84,6 +86,11 @@ if(MINGW)
   target_link_options(RealJapan PRIVATE -static -static-libgcc -static-libstdc++ $<$<CONFIG:Release>:-s>)
   target_link_libraries(rjcore_tests PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
+
+# Offline renders of the sound engine (tuning aid): cmake --build <dir> --target rj_audio_demo
+add_executable(rj_audio_demo EXCLUDE_FROM_ALL tools/audio_demo.cpp src/audio/audio.cpp)
+target_include_directories(rj_audio_demo PRIVATE src)
+target_link_libraries(rj_audio_demo PRIVATE raylib)
 
 # Stage game data next to the executable for development runs.
 add_custom_target(stage_data ALL

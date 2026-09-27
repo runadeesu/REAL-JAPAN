@@ -20,6 +20,10 @@ constexpr int kSlotAO = 5, kSlotNoise = 6, kSlotAsphalt = 7, kSlotAsphaltN = 8, 
 
 float g_near = 0.3f, g_far = 3000.0f;
 
+// Interior lighting of vehicles the player rides in (neutral LED strips in trains, warmer cabin
+// lighting in the jet); added to the sky ambient, which the shell's shadow leaves too dark inside.
+const Vector3 kCabinLight{0.85f, 0.85f, 0.80f}, kJetCabinLight{0.72f, 0.68f, 0.60f};
+
 Vector3 lerp3(Vector3 a, Vector3 b, float t) { return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t}; }
 Vector3 mul3(Vector3 a, Vector3 b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
 float smooth(float e0, float e1, float x) {
@@ -404,6 +408,7 @@ void Renderer::applyFrameUniforms(const Camera3D& cam, const Lighting& L, float 
   setI(lit_, "useTexture", 0);
   setI(lit_, "materialOverride", -1);
   set3(lit_, "emissiveTint", Vector3{0, 0, 0});
+  set3(lit_, "selfLight", Vector3{0, 0, 0});
 }
 
 void Renderer::beginScene(const RenderOptions& o, const Lighting& L, const Camera3D& cam, float time_s) {
@@ -791,7 +796,11 @@ void Renderer::drawAircraft(const Aviation& av, const Camera3D& cam, const Light
     const Vector3 p = enuToRl(a.pos);
     const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-a.roll), MatrixRotateX(a.pitch)), MatrixRotateY(-a.yaw)),
                                     MatrixTranslate(p.x, p.y, p.z));
-    if (a.id == ride_jet) drawMeshMat(J.cabin, M, -1, WHITE);
+    if (a.id == ride_jet) {
+      set3(lit_, "selfLight", kJetCabinLight);
+      drawMeshMat(J.cabin, M, -1, WHITE);
+      set3(lit_, "selfLight", Vector3{0, 0, 0});
+    }
     else drawMeshMat(J.fuselage, M, -1, WHITE);
     drawMeshMat(J.wings, M, -1, WHITE);
     if (a.gear > 0.3f) drawMeshMat(J.gear, M, -1, WHITE);
@@ -868,7 +877,11 @@ void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_tr
       DrawMesh(m.shell, mat_, M);
       const bool riding = t.id == ride_train && k == ride_car;
       if (!riding && m.glass.vaoId) DrawMesh(m.glass, mat_, M);
-      if (riding && m.interior.vaoId) DrawMesh(m.interior, mat_, M);
+      if (riding && m.interior.vaoId) {
+        set3(lit_, "selfLight", kCabinLight);
+        DrawMesh(m.interior, mat_, M);
+        set3(lit_, "selfLight", Vector3{0, 0, 0});
+      }
       draw_calls_ += 2;
       triangles_ += m.shell.triangleCount;
     }

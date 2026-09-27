@@ -115,6 +115,7 @@ uniform float wetness;
 uniform float nightFactor;    // 0 day .. 1 night (artificial lights on)
 uniform float timeSec;
 uniform float indoor;         // 1 = underground interior (no sky reflection)
+uniform vec3 selfLight;       // per-draw interior lighting (ceiling lights of a train / cabin interior)
 uniform int numLights;
 uniform vec4 lightPosR[32];   // xyz, range (Renderer::kMaxLights)
 uniform vec3 lightCol[32];
@@ -729,6 +730,8 @@ void main() {
     float D = a2 / (PI * pow(NdH * NdH * (a2 - 1.0) + 1.0, 2.0));
     col += (kdiff + F0 * D * 0.25) * lightCol[i] * nl * att;
   }
+  // Interior lighting (lit vehicle interiors): ceiling light strips, strongest on upward faces.
+  col += kdiff * selfLight * s.ao * (0.6 + 0.4 * n.y);
   col += s.emit;
   // Light from inside, through glass (less at grazing angles where the reflection dominates).
   col += s.transmit * (1.0 - (0.04 + 0.96 * pow(1.0 - NdV, 5.0)));

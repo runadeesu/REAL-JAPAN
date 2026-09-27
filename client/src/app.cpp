@@ -37,6 +37,7 @@ int App::run() {
     }
     const float dt = GetFrameTime();
     update(dt);
+    updateSound(dt);
     BeginDrawing();
     draw();
     drawToast(dt);
@@ -131,10 +132,12 @@ bool App::boot() {
   player_.pos = {0, 0, 0};
   player_.yaw = static_cast<float>(m.spawn_heading * DEG2RAD);
   clock_ = rj::sim::GameClock(static_cast<int64_t>(std::time(nullptr)), settings_.time_scale);
+  audio_.init(opt_.audio_wav.empty() ? std::filesystem::path{} : std::filesystem::path(opt_.audio_wav));
   return true;
 }
 
 void App::shutdown() {
+  audio_.shutdown();
   world_.unloadAll();
   renderer_.shutdown();
   ui_.unload();
@@ -927,12 +930,21 @@ void App::placeRideTest() {
   const double hd = sn.heading * DEG2RAD;
   const double sx = std::cos(hd), sy = -std::sin(hd);
   const auto kind = trains_.lines()[static_cast<size_t>(sn.line)].kind;
-  double side = 1.0;  // the platform of the first train that stops here (dir +1: left of the heading)
-  for (const auto& t : trains_.trains())
-    if (t.line == sn.line) {
-      side = t.dir > 0 ? -1.0 : 1.0;
-      if (t.at_station == opt_.station) break;
+  double side = 1.0;  // the platform of the next train to stop here (dir +1: left of the heading)
+  {
+    const auto& L = trains_.lines()[static_cast<size_t>(sn.line)];
+    double soonest = 1e30;
+    for (const auto& t : trains_.trains()) {
+      if (t.line != sn.line || t.offmap) continue;
+      double ahead = t.at_station == opt_.station ? -1.0 : (sn.s - t.s) * t.dir;  // distance still to run
+      if (L.closed) ahead = ahead < 0 && t.at_station != opt_.station ? ahead + L.length : ahead;
+      else if (ahead < 0 && t.at_station != opt_.station) continue;
+      if (ahead < soonest) {
+        soonest = ahead;
+        side = t.dir > 0 ? -1.0 : 1.0;
+      }
     }
+  }
   const double off = Trains::platformOffset(kind) - 1.4;
   player_.pos = {sn.pos.x + sx * side * off, sn.pos.y + sy * side * off, sn.pos.z + 0.05};
   player_.yaw = static_cast<float>(hd + (side > 0 ? -PI / 2 : PI / 2));
@@ -1280,7 +1292,7 @@ void App::updateTransportActions() {
             }
           }
           ride_train_ = tid;
-          ride_look_yaw_ = kind == LineKind::Shinkansen ? -1.0f : 1.5708f;  // out of the window / across the car
+          ride_look_yaw_ = kind == LineKind::Shinkansen ? -0.85f : 1.5708f;  // out of the window / across the car
           ride_look_pitch_ = -0.05f;
           toast(i18n_.f("rail.boarded", {{"line", lineName(t->line)}, {"fare", std::to_string(fare)}}));
         }
@@ -1291,6 +1303,7 @@ void App::updateTransportActions() {
     if (x) {  // out through the gates, onto the street in front of the station
       player_.pos = {st.pos.x - sx * 30.0, st.pos.y - sy * 30.0, st.pos.z};
       player_.snapToGround(world_);
+      audio_.cue(Cue::GateBeep, 0.5f);
       toast(i18n_.f("rail.exited", {{"station", st.name}}));
     }
     return;
@@ -1303,6 +1316,7 @@ void App::updateTransportActions() {
       player_.pos = {st.pos.x + sx * off * side, st.pos.y + sy * off * side, st.pos.z + 0.05};
       player_.vel_z = 0;
       player_.fly = false;
+      audio_.cue(Cue::GateBeep, 0.5f);
       toast(i18n_.f("rail.entered", {{"station", st.name}}));
     }
   }
@@ -1389,6 +1403,7 @@ void App::runSelfTest() {
   setLanguage("ja");
   const std::string ja = tr("menu.new_game");
   check(en == "New Game" && ja != en && ja != "menu.new_game", "Japanese and English strings");
+  check(Audio::synthCheck(), "procedural sound synthesises (engine, train, melody)");
   Settings reread;
   reread.load(dataDir() / "config" / "default.ini", userDir() / "settings.ini");
   check(reread.language == "ja", "settings.ini written and re-read");
@@ -1608,6 +1623,8 @@ void App::draw() {
   else if (flying_) view_cam = aviation_.plane().camera(settings_.fov, fly_cockpit_, fly_look_yaw_, fly_look_pitch_);
   else if (driving_.active()) view_cam = driving_.camera(settings_.fov, drive_first_person_, drive_look_yaw_, drive_look_pitch_);
   else view_cam = player_.camera(photo_mode_ && photo_fov_ > 0 ? photo_fov_ : settings_.fov, third_dist);
+  listen_cam_ = view_cam;
+  listen_game_ = game_view;
   drawWorldView(view_cam);
   if (photo_request_) {  // the frame as seen, before the HUD is drawn
     photo_request_ = false;
@@ -1705,7 +1722,8 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v0.2.0  ·  " + std::to_string(world_.buildingCount()) + " buildings (PLATEAU)", vw - 30, 1040, 20, theme::kMuted);
+  ui_.textRight("v0.3.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional island)" : " buildings (PLATEAU)"),
+                 vw - 30, 1040, 20, theme::kMuted);
 }
 
 void App::drawSettings() {
@@ -1714,8 +1732,8 @@ void App::drawSettings() {
   const float w = 1100, x = (vw - w) / 2;
   ui_.panel({x - 30, 20, w + 60, 1045});
   ui_.text(tr("settings.title"), x, 38, 44, theme::kText);
-  float y = 105;
-  const float rh = 52, gap = 6;
+  float y = 100;
+  const float rh = 48, gap = 6;
   auto onoff = [&](bool v) { return tr(v ? "settings.on" : "settings.off"); };
   bool changed = false;
 
@@ -1817,6 +1835,11 @@ void App::drawSettings() {
   y += rh + gap;
   if (ui_.stepper({x, y, w, rh}, tr("settings.head_bob"), onoff(settings_.head_bob))) {
     settings_.head_bob = !settings_.head_bob;
+    changed = true;
+  }
+  y += rh + gap;
+  if (int d = ui_.stepper({x, y, w, rh}, tr("settings.volume"), std::to_string(settings_.volume) + " %"); d) {
+    settings_.volume = std::clamp(settings_.volume + 10 * d, 0, 100);
     changed = true;
   }
   y += rh + gap + 6;

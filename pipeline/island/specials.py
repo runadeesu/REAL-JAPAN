@@ -110,29 +110,29 @@ def _station(name, x, y, hd, terrain, big, deck=RAIL_DECK):
     walls(g, ring, ground - 1.5, ground + 6.5, ground, PUBLIC, (200, 198, 190))
     cap(g, rect, ground + 6.5, ROOF_FLAT, (150, 150, 146))
     if deck is None:  # Shinkansen: concourse only; platforms / canopy are generated with the line
-        return _named(g, ring, ground, 6.5, 431, name, "station", 2)
+        return [_named(g, ring, ground, 6.5, 431, name, "station", 2)]
     deck = ground + deck
     th = math.radians(hd)
     fwd = (math.sin(th), math.cos(th))
     # (walkable platforms and their canopies are generated with the line, see cell_detail)
-    h = RAIL_DECK + 6.5
-    kind = "station"
+    # the building's solid volume is the concourse below the elevated platforms (which are walkable
+    # decks generated with the line): its height must stay below platform level
+    out = [_named(g, ring, ground, 6.5, 431, name, "station", 2)]
     if big:  # the main station has a tall station building beside the tracks (department store + offices)
         side = np.array([math.cos(th), -math.sin(th)])
         c = np.array([x, y]) + side * 44
         trect = orient(affinity.rotate(sbox(c[0] - 22, c[1] - 60, c[0] + 22, c[1] + 60), -hd, origin=tuple(c)), 1.0)
         tring = np.asarray(trect.exterior.coords)
         tg = float(terrain.sample(*c))
-        walls(g, tring, tg - 2, tg + 26, tg, PUBLIC, (210, 206, 196))
+        tg_ = Geo()
+        walls(tg_, tring, tg - 2, tg + 26, tg, PUBLIC, (210, 206, 196))
         tower = orient(trect.buffer(-7, join_style=2), 1.0)
-        walls(g, np.asarray(tower.exterior.coords), tg + 26, tg + 148, tg, CURTAIN, (70, 95, 115))
-        cap(g, trect.difference(tower) if trect.difference(tower).geom_type == "Polygon" else trect, tg + 26, ROOF_FLAT,
+        walls(tg_, np.asarray(tower.exterior.coords), tg + 26, tg + 148, tg, CURTAIN, (70, 95, 115))
+        cap(tg_, trect.difference(tower) if trect.difference(tower).geom_type == "Polygon" else trect, tg + 26, ROOF_FLAT,
             (140, 140, 136))
-        cap(g, tower, tg + 148, ROOF_FLAT, (150, 150, 146))
-        ring = np.asarray(unary_union([rect, trect]).convex_hull.exterior.coords)
-        h = 148
-        kind = "station_tower"
-    return _named(g, ring, ground, h, 431, name, kind, 3 if not big else 34)
+        cap(tg_, tower, tg + 148, ROOF_FLAT, (150, 150, 146))
+        out.append(_named(tg_, tring, tg, 148, 431, name + "ビル", "station_tower", 34))
+    return out
 
 
 def _temple(name, x, y, terrain):
@@ -343,7 +343,7 @@ def _ferry_terminal(terrain):
 def build_all(isl, terrain, rng) -> Spec:
     spec = Spec()
     for k, (name, x, y, hd) in enumerate(L.STATIONS):
-        spec.buildings.append(_station(name, x, y, hd, terrain, big=(k == 0)))
+        spec.buildings.extend(_station(name, x, y, hd, terrain, big=(k == 0)))
     t = L.LANDMARKS
     spec.buildings += _temple(t["temple"][0], t["temple"][1], t["temple"][2], terrain)
     spec.buildings += _shrine(t["shrine"][0], t["shrine"][1], t["shrine"][2], terrain)
@@ -379,7 +379,7 @@ def build_all(isl, terrain, rng) -> Spec:
         spec.rails.append(np.column_stack([P, z]))
         spec.rail_kinds.append(kind)
     for name, x, y, hd in L.SHINKANSEN_STATIONS:
-        spec.buildings.append(_station(name, x, y, hd, terrain, big=False, deck=None))
+        spec.buildings.extend(_station(name, x, y, hd, terrain, big=False, deck=None))
     # platform decks (walkable) for every station: level with the rail line passing through
     for (name, x, y, hd), kind_i in [(s_, 0) for s_ in L.STATIONS[:4]] + [(s_, 1) for s_ in L.STATIONS[4:]] + \
             [(s_, 2) for s_ in L.SHINKANSEN_STATIONS]:

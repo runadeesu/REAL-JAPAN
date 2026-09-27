@@ -205,6 +205,7 @@ void App::takePhoto() {
   ExportImage(img, pathToUtf8(dir / name).c_str());
   UnloadImage(img);
   ++photos_taken_;
+  audio_.cue(Cue::Shutter, 0.6f);
   const Camera3D cam = player_.camera(photo_fov_ > 0 ? photo_fov_ : settings_.fov);
   const V3 eye = rlToEnu(cam.position), tgt = rlToEnu(cam.target);
   const V3 f{tgt.x - eye.x, tgt.y - eye.y, tgt.z - eye.z};
@@ -255,7 +256,12 @@ void App::updateActivities(float dt) {
   }
   // worship sequence (shrine: bow twice, clap twice, bow once; temple: palms together, bow)
   if (worship_.stage > 0) {
+    const double t_prev = worship_.t;
     worship_.t += dt;
+    auto passed = [&](int stage, double at) { return worship_.stage == stage && t_prev < at && worship_.t >= at; };
+    if (passed(1, 0.05)) audio_.cue(Cue::Coins, 0.5f);                            // coins into the offering box
+    if (passed(1, 0.5) && !worship_.temple) audio_.cue(Cue::ShrineBell, 0.6f);   // shake the rope bell
+    if (!worship_.temple && (passed(3, 0.25) || passed(3, 0.75))) audio_.cue(Cue::Clap, 0.7f);
     const double durs[] = {0, 1.0, 2.4, worship_.temple ? 1.6 : 1.4, 1.3};
     const float bow = static_cast<float>(worship_.stage == 2 || worship_.stage == 4 ? std::sin(std::fmod(worship_.t, 1.2) / 1.2 * PI) * 0.55 : 0.0);
     player_.pitch = worship_.pitch0 - bow;
@@ -283,6 +289,7 @@ void App::updateActivities(float dt) {
       if (fish_.t > fish_.wait) {
         fish_.stage = 2;
         fish_.t = 0;
+        audio_.cue(Cue::Splash, 0.2f);
       }
     } else if (fish_.stage == 2) {  // strike within 1.5 s
       prompt_ = tr("fish.bite");
@@ -332,6 +339,7 @@ void App::updateActivities(float dt) {
         char b[16];
         std::snprintf(b, sizeof b, "%.1f", fish_.size);
         ++fish_count_;
+        audio_.cue(Cue::Splash, 0.5f);
         const bool best = fish_.size > fish_log_[key];
         fish_log_[key] = std::max(fish_log_[key], fish_.size);
         toast(i18n_.f(best ? "fish.caught_best" : "fish.caught", {{"fish", tr(key)}, {"cm", b}}));
@@ -363,6 +371,7 @@ void App::updateActivities(float dt) {
       int r = static_cast<int>(xr(s) % static_cast<uint32_t>(tot)), k = 0;
       while ((r -= kOmikujiW[k]) >= 0) ++k;
       last_omikuji_ = kOmikuji[k];
+      audio_.cue(Cue::Rattle, 0.6f);
       toast(i18n_.f("worship.omikuji_result", {{"r", tr(kOmikuji[k])}}));
     } else if (g && !goshuin_.count(p.name) && ledger_ &&
                ledger_->transfer(player_account_, ledger_->externalAccount(), 500, rj::econ::TxCategory::Purchase, clock_.unixUtc(), tr("worship.goshuin")) == rj::econ::TxResult::Ok) {
@@ -382,6 +391,7 @@ void App::updateActivities(float dt) {
       fish_.t = 0;
       fish_.wait = 5.0 + 22.0 * frand(fish_.rng);
       fish_.bobber = spot;
+      audio_.cue(Cue::Splash, 0.35f);
     }
   }
 }
@@ -510,6 +520,7 @@ void App::drawActivityHud() {
         if (!done && ui_.hovered(r) && ui_.clicked()) {
           ui_.consumeClick();
           till_.scanned[i] = true;
+          audio_.cue(Cue::Beep, 0.5f);
         }
       }
       yy += 240;
@@ -539,7 +550,10 @@ void App::drawActivityHud() {
       const int coins[] = {5000, 1000, 500, 100, 50, 10, 5, 1};
       for (int i = 0; i < 8; ++i) {
         const Rectangle r{x + 24 + static_cast<float>(i % 4) * 236, yy + static_cast<float>(i / 4) * 80, 220, 64};
-        if (ui_.button(r, "+" + yen(coins[i]), true, 26)) till_.entered += coins[i];
+        if (ui_.button(r, "+" + yen(coins[i]), true, 26)) {
+          till_.entered += coins[i];
+          if (coins[i] < 1000) audio_.cue(Cue::Coins, 0.25f);
+        }
       }
       yy += 180;
       if (ui_.button({x + 24, yy, 220, 60}, tr("till.clear"), true, 26)) till_.entered = 0;
@@ -551,6 +565,7 @@ void App::drawActivityHud() {
           clock_.advanceGame(180.0);
           if (ledger_) ledger_->transfer(ledger_->externalAccount(), player_account_, pay, rj::econ::TxCategory::Wage, clock_.unixUtc(), tr("till.title"));
           till_.msg = tr("till.thanks");
+          audio_.cue(Cue::Coins, 0.45f);
           till_.msg_t = 2;
           tillNextCustomer();
         } else {

@@ -42,6 +42,8 @@ void applyKv(Settings& s, const std::map<std::string, std::string>& kv) {
   b("post_fx", s.post_fx);
   b("head_bob", s.head_bob);
   b("dev_overlay", s.dev_overlay);
+  i("volume", s.volume);
+  s.volume = std::clamp(s.volume, 0, 100);
   s.width = std::clamp(s.width, 800, 7680);
   s.height = std::clamp(s.height, 600, 4320);
   s.fov = std::clamp(s.fov, 50.0f, 100.0f);
@@ -89,6 +91,7 @@ bool Settings::save(const std::filesystem::path& user) const {
     << "post_fx = " << (post_fx ? 1 : 0) << "\n"
     << "head_bob = " << (head_bob ? 1 : 0) << "\n"
     << "dev_overlay = " << (dev_overlay ? 1 : 0) << "\n"
+    << "volume = " << volume << "\n"
     << "world = " << world << "\n";
   return writeFileAtomic(user, o.str());
 }

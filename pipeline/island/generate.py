@@ -423,9 +423,11 @@ def smooth_path(pts, it=4, closed=False) -> np.ndarray:
 
 def rail_corridors() -> Polygon:
     loop = smooth_path(L.RAIL_LOOP[:-1], 4, True)
-    parts_ = [LineString(np.vstack([loop, loop[:1]])).buffer(8.0),
-              LineString(smooth_path(L.RAIL_BRANCH, 4)).buffer(8.0),
-              LineString(smooth_path(L.SHINKANSEN, 4)).buffer(9.0)]
+    # clearance either side of the viaducts (tracks + a service strip / frontage road, as along
+    # Tokyo's elevated lines); buildings start beyond it
+    parts_ = [LineString(np.vstack([loop, loop[:1]])).buffer(11.0),
+              LineString(smooth_path(L.RAIL_BRANCH, 4)).buffer(10.0),
+              LineString(smooth_path(L.SHINKANSEN, 4)).buffer(14.0)]
     for name, x, y, hd in list(L.STATIONS) + list(L.SHINKANSEN_STATIONS):
         parts_.append(affinity.rotate(box(x - 24, y - 170, x + 24, y + 170), -hd, origin=(x, y)))
     return unary_union(parts_)

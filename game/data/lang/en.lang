@@ -181,6 +181,7 @@ interior.depth = {d} m below the street (T.P. {h} m)
 interior.note = Floors, walls, ceilings and stairs follow the official data. Shop names, fit-out and signs are not in the data and are not invented (shown plain).
 settings.post_fx = Post-processing (SSAO, bloom, auto exposure, anti-aliasing)
 settings.head_bob = Head bob while walking
+settings.volume = Volume (all sound is synthesised in code)
 weather.clear = Clear
 weather.fair = Fair
 weather.thin_cloud = Thin cloud
