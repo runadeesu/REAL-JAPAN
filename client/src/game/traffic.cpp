@@ -425,7 +425,7 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
     // indicate a turn at the next junction from about 30 m before it (the law asks for 30 m)
     int want = 0;
     if (v.next_edge >= 0 && e.length - v.s < 32.0) {
-      const double turn = std::remainder(headingAtStart(edges_[static_cast<size_t>(v.next_edge)], v.next_dir) - headingAtEnd(e, v.dir), 2.0 * M_PI);
+      const double turn = std::remainder(headingAtStart(edges_[static_cast<size_t>(v.next_edge)], v.next_dir) - headingAtEnd(e, v.dir), 6.283185307179586);
       want = turn > 0.6 ? 1 : (turn < -0.6 ? -1 : 0);
     }
     if (want != 0) {

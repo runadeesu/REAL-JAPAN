@@ -95,7 +95,7 @@ double Trains::lateral(const Station& st, const rj::geo::Vec3d& p) const {
     }
   }
   // the line's direction may run against the station heading
-  const double hd = st.heading * M_PI / 180.0;
+  const double hd = st.heading * 0.017453292519943295;  // degrees -> radians
   rj::geo::Vec3d q;
   double h, g;
   pointAt(L, st.s, q, h, g);
