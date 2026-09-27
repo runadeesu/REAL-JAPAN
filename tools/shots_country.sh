@@ -32,11 +32,11 @@ want ride_yukimi && shot ride_yukimi "RJ_RIDE_LOOK=-1.15,-0.06" --state ride --s
 # the regions from the air (fly mode, north = yaw 0)
 want air_capital && shot air_capital "" --state walk --fly --alt 420 --pitch -20 --pos 33.7700,140.9860 --yaw 20
 want air_shion && shot air_shion "" --state walk --fly --alt 380 --pitch -22 --pos 33.7880,140.7420 --yaw 0
-want air_asanagi && shot air_asanagi "" --state walk --fly --alt 380 --pitch -20 --pos 33.7700,140.6180 --yaw 285
+want air_asanagi && shot air_asanagi "" --state walk --fly --alt 380 --pitch -20 --pos 33.7430,140.6300 --yaw 305
 want air_onsen && shot air_onsen "" --state walk --fly --alt 120 --pitch -12 --pos 33.902743,140.908098 --yaw 280
 want air_volcano && shot air_volcano "" --state walk --fly --alt 1300 --pitch -8 --pos 33.8900,140.8800 --yaw 320
 want air_paddies && SHOT_T=2026-09-20T10:00 shot air_paddies "" --state walk --fly --alt 60 --pitch -14 --pos 33.8150,140.8700 --yaw 270
-want air_yukimi_winter && SHOT_T=2027-01-20T11:00 shot air_yukimi_winter "" --state walk --fly --alt 260 --pitch -18 --pos 34.0050,140.8270 --yaw 0
+want air_yukimi_winter && SHOT_T=2027-01-20T11:00 shot air_yukimi_winter "" --state walk --fly --alt 260 --pitch -16 --pos 34.0450,140.8300 --yaw 190
 # ferry: alongside the pier (from the pier), on deck under way
 want ferry_view && shot ferry_view "" --state ferryview --station 0
 want ferry_deck && shot ferry_deck "" --state ferry --station 0 --ride 160 --simspeed 4

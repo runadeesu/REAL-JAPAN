@@ -763,6 +763,8 @@ void Renderer::drawMarkings(const RoadMarkings& rm) {
 }
 
 void Renderer::drawOcean(const Camera3D& cam, float sea_y) {
+  rlDrawRenderBatchActive();
+  rlDisableColorBlend();  // opaque: alpha carries the reflection amount
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
   setI(lit_, "surfaceMode", 0);
@@ -775,6 +777,8 @@ void Renderer::drawOcean(const Camera3D& cam, float sea_y) {
 }
 
 void Renderer::drawCellSeas(const World& world) {
+  rlDrawRenderBatchActive();
+  rlDisableColorBlend();  // opaque: alpha carries the reflection amount
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
   setI(lit_, "surfaceMode", 0);

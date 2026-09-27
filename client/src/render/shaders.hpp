@@ -352,7 +352,12 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   }
   else if (id == 17) {  // forest canopy seen from afar: clumpy crowns
     vec4 c = texture(texNoise, wuv / 6.0);
-    vec3 green = vec3(0.045, 0.075, 0.03) * (0.6 + 0.8 * c.r);
+    // stands of different species and age (cedar blue-green, broadleaf yellow-green) at 40-150 m; from
+    // afar, where single crowns are below a pixel, the shade between them darkens the canopy
+    vec4 cs = texture(texNoise, wuv / 41.0), cl = texture(texNoise, wuv / 150.0);
+    float far = smoothstep(0.15, 1.2, length(fwidth(wuv)));
+    vec3 green = mix(vec3(0.032, 0.062, 0.034), vec3(0.058, 0.085, 0.028), smoothstep(0.3, 0.7, cl.r))
+                 * (0.6 + 0.8 * mix(c.r, 0.5, far)) * (0.8 + 0.4 * cs.g) * mix(1.0, 0.82, far);
     // mixed forest: evergreen conifers (cedar / cypress plantations) and broadleaf stands in patches;
     // the broadleaf trees turn red and yellow in autumn and are bare in winter
     float broad = smoothstep(0.45, 0.65, texture(texNoise, wuv / 180.0).g);
@@ -380,7 +385,7 @@ Surf material(int id, vec3 ng, vec2 wuv) {
     if (abs(ng.y) < 0.5) {
       vec2 cell = floor(vec2(fragPos.x + fragPos.z, fragPos.y) / vec2(3.2, 3.2));
       float lit = step(hash12(cell), mix(occupancy.y, occupancy.x, 0.5) * 0.85);
-      float win = step(0.25, fract((fragPos.x + fragPos.z) / 3.2)) * step(0.3, fract(fragPos.y / 3.2));
+      float win = step(0.25, fract((fragPos.x + fragPos.z) / 3.2)) * step(0.3, fract(fragPos.y / 3.2)) * step(0.99, fragColor.a);
       s.albedo *= mix(1.0, 0.55, win * 0.6);
       s.emit = vec3(1.0, 0.86, 0.62) * lit * win * nightFactor * 0.9;
     } else {
@@ -652,6 +657,12 @@ Surf terrainSurface(vec3 ng, vec2 wuv) {
   s.emit = vec3(0.0);
   s.transmit = vec3(0.0);
   s.porosity = 0.8 * wRoad + 0.6 * wPave + 0.3 * wMark;
+  // sea bed (below the water, seen at the waterline): wet sand and silt
+  float isBed = 1.0 - smoothstep(0.02, 0.05, distance(c, vec3(52.0, 66.0, 62.0) / 255.0));
+  if (isBed > 0.01) {
+    s.albedo = mix(s.albedo, vec3(0.07, 0.065, 0.05) * (0.8 + 0.4 * macro.g), isBed);
+    s.rough = mix(s.rough, 0.5, isBed); s.n = normalize(mix(s.n, ng, isBed));
+  }
   if (landOn == 1) {
     // rural ground (fictional country): the land-cover weights say what grows here, the ground
     // raster's key colours keep levees, farm roads and verges as they are
@@ -745,6 +756,13 @@ Surf farSurface(vec3 ng, vec2 wuv) {
   vec3 c = texture(texture0, fragUV).rgb;
   s.albedo = pow(c, vec3(2.2)) * 0.95; s.rough = 0.9; s.metal = 0.0; s.n = ng; s.ao = 1.0; s.emit = vec3(0.0);
   s.porosity = 0.5; s.transmit = vec3(0.0);
+  // towns (painted a flat grey in the colour map): a mottled roofscape of tiles, metal and concrete
+  float town = 1.0 - smoothstep(0.03, 0.07, distance(c, vec3(122.0, 121.0, 110.0) / 255.0));
+  if (town > 0.01) {
+    vec4 t1 = texture(texNoise, wuv / 17.0), t2 = texture(texNoise, wuv / 73.0);
+    vec3 roofs = mix(vec3(0.075, 0.078, 0.085), vec3(0.16, 0.15, 0.14), smoothstep(0.35, 0.75, t1.r)) * (0.8 + 0.4 * t2.g);
+    s.albedo = mix(s.albedo, roofs, town);
+  }
   float forest = 1.0 - smoothstep(0.04, 0.10, distance(c, vec3(40.0, 58.0, 32.0) / 255.0));
   if (forest > 0.01) {  // broadleaf patches turn in autumn and are bare in winter (as the near canopy)
     float broad = smoothstep(0.45, 0.65, texture(texNoise, wuv / 900.0).g);

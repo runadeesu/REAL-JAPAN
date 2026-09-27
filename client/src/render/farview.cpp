@@ -206,33 +206,48 @@ void FarView::build() {
     const double ex = std::cos(b.yaw), ey = std::sin(b.yaw);
     const double fx = -ey, fy = ex;
     const uint32_t h = hashU(b.x, b.y);
-    static const unsigned char kWall[5][3] = {{206, 202, 192}, {182, 180, 174}, {214, 208, 194}, {160, 166, 172}, {196, 190, 180}};
-    const unsigned char* wc = kWall[h % 5];
-    const unsigned char wall[4] = {wc[0], wc[1], wc[2], 255}, roof[4] = {128, 128, 126, 255};
+    // Colours by building class (the boxes carry no style): low buildings are houses and shops with
+    // tiled or metal pitched roofs, mid-rise concrete with flat grey roofs, towers glass and panels.
+    const bool house = b.height < 11.0f;
+    static const unsigned char kHouseWall[6][3] = {{176, 166, 150}, {120, 96, 74}, {196, 190, 178}, {92, 74, 60}, {160, 154, 146}, {134, 120, 104}};
+    static const unsigned char kHouseRoof[6][3] = {{58, 60, 66}, {64, 66, 72}, {70, 72, 78}, {84, 70, 60}, {58, 68, 82}, {96, 62, 50}};
+    static const unsigned char kMidWall[5][3] = {{206, 202, 192}, {182, 180, 174}, {214, 208, 194}, {160, 166, 172}, {196, 190, 180}};
+    static const unsigned char kTowerWall[4][3] = {{128, 142, 156}, {150, 160, 168}, {176, 180, 184}, {110, 124, 138}};
+    const unsigned char* wc = house ? kHouseWall[h % 6] : b.height < 40.0f ? kMidWall[h % 5] : kTowerWall[h % 4];
+    const unsigned char* rc = house ? kHouseRoof[(h >> 8) % 6] : nullptr;
+    const unsigned char wall[4] = {wc[0], wc[1], wc[2], static_cast<unsigned char>(house ? 250 : 255)};  // alpha < 1: no window grid
+    const unsigned char roof[4] = {rc ? rc[0] : static_cast<unsigned char>(140 + (h >> 8) % 24), rc ? rc[1] : static_cast<unsigned char>(140 + (h >> 8) % 24),
+                                   rc ? rc[2] : static_cast<unsigned char>(136 + (h >> 8) % 24), 255};
     rj::geo::Vec3d c[4];
     const double sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
     for (int k = 0; k < 4; ++k) c[k] = {p.x + ex * b.hl * sx[k] + fx * b.hw * sy[k], p.y + ey * b.hl * sx[k] + fy * b.hw * sy[k], p.z - 1.0};
     const double top = p.z + b.height;
-    for (int k = 0; k < 4; ++k) {
-      const rj::geo::Vec3d& A = c[k];
-      const rj::geo::Vec3d& B = c[(k + 1) % 4];
-      float nv[3] = {static_cast<float>(B.y - A.y), static_cast<float>(-(B.x - A.x)), 0.0f};
-      const float l = std::max(1e-6f, std::hypot(nv[0], nv[1]));
-      nv[0] /= l;
-      nv[1] /= l;
+    auto quad = [&G](const rj::geo::Vec3d& A, const rj::geo::Vec3d& B, const rj::geo::Vec3d& C, const rj::geo::Vec3d& D, const unsigned char* col) {
+      const double ux = B.x - A.x, uy = B.y - A.y, uz = B.z - A.z, vx = D.x - A.x, vy = D.y - A.y, vz = D.z - A.z;
+      float n[3] = {static_cast<float>(uy * vz - uz * vy), static_cast<float>(uz * vx - ux * vz), static_cast<float>(ux * vy - uy * vx)};
+      const float l = std::max(1e-6f, std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]));
+      for (float& x : n) x /= l;
       const unsigned short base = G.nv();
-      G.vert(A, nv, 0, 0, wall, 41.0f);
-      G.vert(B, nv, 0, 0, wall, 41.0f);
-      G.vert({B.x, B.y, top}, nv, 0, 0, wall, 41.0f);
-      G.vert({A.x, A.y, top}, nv, 0, 0, wall, 41.0f);
+      for (const rj::geo::Vec3d* q : {&A, &B, &C, &D}) G.vert(*q, n, 0, 0, col, 41.0f);
       G.idx.insert(G.idx.end(), {base, static_cast<unsigned short>(base + 1), static_cast<unsigned short>(base + 2), base,
                                  static_cast<unsigned short>(base + 2), static_cast<unsigned short>(base + 3)});
+    };
+    auto at = [](const rj::geo::Vec3d& v, double z) { return rj::geo::Vec3d{v.x, v.y, z}; };
+    for (int k = 0; k < 4; ++k) quad(c[k], c[(k + 1) % 4], at(c[(k + 1) % 4], top), at(c[k], top), wall);
+    if (!house) {
+      quad(at(c[0], top), at(c[1], top), at(c[2], top), at(c[3], top), roof);
+      continue;
     }
-    const float up[3] = {0, 0, 1};
-    const unsigned short base = G.nv();
-    for (int k = 0; k < 4; ++k) G.vert({c[k].x, c[k].y, top}, up, 0, 0, roof, 41.0f);
-    G.idx.insert(G.idx.end(), {base, static_cast<unsigned short>(base + 1), static_cast<unsigned short>(base + 2), base,
-                               static_cast<unsigned short>(base + 2), static_cast<unsigned short>(base + 3)});
+    // gable roof, ridge along the longer side (about 25 degrees), gable ends as triangles (degenerate quads)
+    const bool along = b.hl >= b.hw;
+    const double rise = (along ? b.hw : b.hl) * 0.47;
+    const int i0 = along ? 0 : 1;  // the two eave edges run c[i0]->c[i0+1] and c[i0+2]->c[i0+3]
+    const rj::geo::Vec3d e0 = at(c[i0], top), e1 = at(c[(i0 + 1) % 4], top), e2 = at(c[(i0 + 2) % 4], top), e3 = at(c[(i0 + 3) % 4], top);
+    const rj::geo::Vec3d r0{(e0.x + e3.x) * 0.5, (e0.y + e3.y) * 0.5, top + rise}, r1{(e1.x + e2.x) * 0.5, (e1.y + e2.y) * 0.5, top + rise};
+    quad(e0, e1, r1, r0, roof);
+    quad(e2, e3, r0, r1, roof);
+    quad(e1, e2, r1, r1, wall);
+    quad(e3, e0, r0, r0, wall);
   }
   for (auto& [ti, list] : geos)
     for (auto& G : list)

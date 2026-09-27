@@ -55,7 +55,7 @@ TEX, TEX_RURAL, TEX_SEA = 2048, 1024, 256
 COL = {"yard": (150, 144, 132), "road": (70, 70, 74), "sidewalk": (188, 182, 170), "median": (96, 124, 70),
        "park": (88, 128, 62), "forest": (46, 62, 36), "sand": (198, 182, 140), "grass": (104, 136, 70),
        "apron": (168, 168, 164), "runway": (58, 58, 62), "mark": (232, 232, 226), "bed": (92, 86, 74),
-       "footprint": (84, 82, 76), "plaza": (196, 188, 172), "field": (124, 110, 76), "paddy": (92, 118, 64),
+       "footprint": (84, 82, 76), "plaza": (196, 188, 172), "field": (124, 110, 76), "paddy": (92, 118, 64), "seabed": (52, 66, 62),
        "levee": (118, 134, 80), "farmroad": (150, 142, 122), "bare": (86, 66, 58), "rock": (118, 112, 104),
        "hole": (255, 0, 255)}
 
@@ -71,16 +71,31 @@ def rigid(fi: LocalFrame, fc: LocalFrame):
     return Mc @ Mi.T, Mc @ (oi - oc)
 
 
+def curvature_drop(fi: LocalFrame, x, y):
+    """Height of the ellipsoid below the country-local map point (x, y) in the tangent frame:
+    about -(d^2 / 2R), -77 m 31 km from the origin (mm-accurate to 50 km)."""
+    s = math.sin(math.radians(fi.lat))
+    w = 1.0 - GE2 * s * s
+    n_r, m_r = GA / math.sqrt(w), GA * (1.0 - GE2) / w ** 1.5
+    return -(np.square(x) / (2.0 * n_r) + np.square(y) / (2.0 * m_r))
+
+
 class Xf:
-    """Country-local -> cell-local rigid transform."""
+    """Country-local map coordinates (x, y on the tangent plane, z = height above the sea) ->
+    cell-local: the Earth's curvature below (x, y), then the rigid transform between the frames.
+    (Exports such as rail.txt give lat/lon of the tangent point plus a height, which the client
+    raises along the local vertical; the two agree to about d^3 / 2R^2 + h d / R, i.e. under
+    0.6 m at the country's far edge and a few centimetres within 15 km of the origin.)"""
 
     def __init__(self, fi: LocalFrame, fc: LocalFrame):
+        self.fi = fi
         self.R, self.t = rigid(fi, fc)
 
     def p(self, P):
-        P = np.asarray(P, float)
+        P = np.array(P, float)
         if P.shape[-1] == 2:
             P = np.column_stack([P, np.zeros(len(P))])
+        P[..., 2] += curvature_drop(self.fi, P[..., 0], P[..., 1])
         return P @ self.R.T + self.t
 
     def n(self, N_):
@@ -293,6 +308,9 @@ def ground_raster(ctry, spec, lc, rp, cpoly: Polygon, M, blds, size) -> tuple[by
     W = size * ss
     base = np.zeros((W, W, 3), np.uint8)
     base[:] = COL["grass"]  # open country; lots in the towns are painted as yards below
+    if not cpoly.within(ctry.land):  # the sea floor (seen through shallow water and at low tide)
+        Xs, Ys = uv_to_xy(M, W)
+        base[ctry.terrain.sample(Xs, Ys) <= 0.0] = COL["seabed"]
     if ctry.towns is not None and ctry.towns.intersects(cpoly):
         tm = Image.new("L", (W, W), 0)
         tdr = ImageDraw.Draw(tm)
@@ -317,11 +335,7 @@ def ground_raster(ctry, spec, lc, rp, cpoly: Polygon, M, blds, size) -> tuple[by
             col = np.where(road[..., None], COL["farmroad"], np.where(lev[..., None], COL["levee"], COL["paddy"]))
             base[m] = col[m]
         elif name == "field":
-            ang = -0.5
-            u = X * math.cos(ang) + Y * math.sin(ang)
-            rows = (np.abs(((u + 0.6) % 1.2) - 0.6) < 0.25)
-            col = np.where(rows[..., None], (104, 92, 64), COL["field"])
-            base[m] = col[m]
+            base[m] = COL["field"]  # the furrows are drawn by the client (a raster this coarse aliases them)
         else:
             base[m] = COL[name]
     img = Image.fromarray(base, "RGB")

@@ -153,6 +153,8 @@ class App {
   std::string fatal_;
   int frame_ = 0;
   int shot_frames_ = -1;
+  int shot_settle_frames_ = 0;    // --screenshot with --pos: frames without pending cell loads
+  bool shot_alt_fixed_ = false;   // --fly --alt applied above the ground once it has loaded
   std::optional<World::Hit> hover_;
   bool quit_ = false;
   double map_half_extent_ = 350.0;

@@ -45,7 +45,21 @@ int App::run() {
     EndDrawing();
     ++frame_;
     const bool walking = scriptBusy();  // scripted walk / drive / ride finishes first
-    if (shot_frames_ >= 0 && !walking && --shot_frames_ < 0) {
+    // A shot at --pos waits until the cells around it have streamed in (as a player would see them
+    // after a few seconds); --alt is then measured from the ground there.
+    bool settled = true;
+    if (shot_frames_ >= 0 && opt_.has_pos && in_session_) {
+      shot_settle_frames_ = world_.pendingJobs() == 0 ? shot_settle_frames_ + 1 : 0;
+      settled = shot_settle_frames_ >= 5;
+      if (settled && opt_.fly && !shot_alt_fixed_) {
+        shot_alt_fixed_ = true;
+        player_.snapToGround(world_);
+        player_.pos.z += opt_.alt;
+        shot_settle_frames_ = 3;
+        settled = false;
+      }
+    }
+    if (shot_frames_ >= 0 && !walking && settled && --shot_frames_ < 0) {
       Image img = LoadImageFromScreen();
       ExportImage(img, opt_.screenshot.c_str());
       UnloadImage(img);
@@ -1702,7 +1716,7 @@ void App::drawWorldView(const Camera3D& cam) {
   renderer_.setLights(collectLights(cam));
   BeginMode3D(cam);
   renderer_.drawWorld(cam, world_, settings_.photo_textures, !in && !world_.meta().fictional);
-  if (!deep) renderer_.drawMarkings(markings_);
+  // the sea is opaque (its alpha is the reflection amount): before the blended road markings
   if (world_.meta().fictional && !deep) {
     if (far_.ready()) {
       renderer_.drawCellSeas(world_);  // (the far view has the open sea beyond the streamed cells)
@@ -1712,6 +1726,7 @@ void App::drawWorldView(const Camera3D& cam) {
       renderer_.drawOcean(cam, static_cast<float>(world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z));
     }
   }
+  if (!deep) renderer_.drawMarkings(markings_);
   static const bool no_facades = std::getenv("RJ_NO_FACADES") != nullptr;      // debug isolation
   static const bool no_int_out = std::getenv("RJ_NO_INTERIOR_OUT") != nullptr;
   if (!deep) {

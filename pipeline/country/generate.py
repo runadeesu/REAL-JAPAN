@@ -350,6 +350,10 @@ def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -
         xs = wx0 + np.arange(j1 - j0) * R
         Xw, Yw = np.meshgrid(xs, ys)
         wet = shapely.contains_xy(water, Xw, Yw)
+        # Cuts and fills stay within what a road bed does (about 10 m down, 6 m up): where the
+        # grade-limited profile cannot follow the ground (a slope steeper than the road may climb) the
+        # ground is left as it is instead of being filled into a ridge hundreds of metres high.
+        prof = win + np.clip(prof - win, -10.0, 6.0)
         new = (prof * (1.0 - t) + win * t).astype(np.float32)
         terrain.h[i0:i1, j0:j1] = np.where((d < half + verge) & ~wet & (win > 0.5), new, win)
 

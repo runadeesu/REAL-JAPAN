@@ -14,7 +14,7 @@ capital 千景 with its layout kept; the country grew around it.
 |---|---|
 | Extent | main island about 50 x 38 km, a southern island 10 x 7 km, the capital's islet |
 | Coast | hand-drawn outline, roughened procedurally: rocky coasts, a ria coast in the north-west, the long straight sandy beach of the southern plain, the capital's sea walls kept exactly |
-| Relief | ranges along warped crest lines (秋津山脈 spine up to ~1,600 m, 千景山地, 朝凪山地, the hills around 紫苑), a concave stratovolcano 焔岳 (1,850 m, summit crater, radial gullies), the southern island's cone 南島山, flat alluvial plains (千景平野, 雪見平野, 紫苑盆地), dendritic valleys cut along the computed drainage network |
+| Relief | ranges along warped crest lines (秋津山脈 spine up to ~1,400 m, 千景山地, 朝凪山地, the hills around 紫苑), a concave stratovolcano 焔岳 (1,850 m, summit crater, radial gullies), the southern island's cone 南島山, flat alluvial plains (千景平野, 雪見平野, 紫苑盆地), dendritic valleys cut along the computed drainage network |
 | Water | five rivers with concave long profiles, meandering inside V-shaped valleys; the lake 焔湖 |
 | Land cover | forest on slopes (runtime canopy in the client), rice paddies on plains and valley floors, upland fields near villages, grass on the volcano's skirt, bare scoria above its tree line, beaches |
 | Climate | snow potential: the north coast beyond the spine and high ground; lies in winter only (season from the game date) |
@@ -59,6 +59,9 @@ card at the end of a ride.
 * `snow.png` — snow potential.
 * `rail.txt` (lines with names, stations, readings), `transport.txt` (airports, piers, ferry routes),
   `roads.rjroad`, `residents.csv`, `client.txt` (cells, place names, readings, POIs).
+
+Figures of this build: main island about 1,380 km², 1,507 cells, 196,657 generated buildings,
+about 390 MB of cell data (cook: about 33 minutes on 4 processes).
 
 ## Not implemented (honest list)
 

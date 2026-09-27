@@ -31,8 +31,8 @@ python3 pipeline/cook_slice.py pipeline/slices/shibuya.json      # 写真テク�
 ### 架空の国「秋津国」（既定のワールド）
 
 ```bash
-python3 pipeline/cook_country.py              # 全国（約 2,700 セル）を生成して game/data/world/country/ へ
-                                              # 4 プロセス並列で約 40 分、出力 約 600 MB（外部データ不要）
+python3 pipeline/cook_country.py              # 全国を生成して game/data/world/country/ へ
+                                              # 4 プロセス並列で約 33 分（地形 8 分＋セル 25 分）、1,507 セル・約 390 MB（外部データ不要）
 python3 pipeline/cook_country.py --preview --only 50405559,50405569   # 地形 40 m の簡易版で一部だけ（確認用）
 python3 pipeline/tools_preview_country.py out.png                     # 国全体の地図のプレビュー
 ```
