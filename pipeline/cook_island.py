@@ -347,12 +347,53 @@ def road_graph(isl, fi: LocalFrame):
     """RJROAD from the generated centerlines (noded at crossings); width = carriageway width."""
     lines = []
     widths = []
+    full = []  # right-of-way widths (streets are cut back to the edge of a crossing road)
     for r in isl.net.roads:
         if r.carriage < 3.0:
             continue
         lines.append(r.line)
         widths.append(r.carriage)
-    noded = unary_union(MultiLineString(lines))  # splits at every crossing
+        full.append(r.width)
+    # T-junctions: a street that ends on, at the edge of, or just past another road is joined to
+    # it - its end is moved onto that road's centre line and a vertex inserted there, so the graph
+    # connects them (crossings are noded by the union below)
+    snap_tree = STRtree(lines)
+    lines = [LineString(ln.coords) for ln in lines]
+    inserts = {}  # line index -> [distance along it]
+    for i in range(len(lines)):
+        c = list(lines[i].coords)
+        for which in (0, -1):
+            p = Point(c[which])
+            best = None
+            for j in snap_tree.query(p.buffer(30.0)):
+                if j == i:
+                    continue
+                d = lines[j].distance(p)
+                if 1e-6 < d < full[j] * 0.5 + 3.0 and (best is None or d < best[0]):
+                    best = (d, j)
+            if best is not None:
+                j = best[1]
+                t = lines[j].project(p)
+                q = lines[j].interpolate(t)
+                c[which] = (q.x, q.y)
+                inserts.setdefault(j, []).append(t)
+        lines[i] = LineString(c)
+    for j, ts in inserts.items():
+        coords = list(lines[j].coords)
+        cum = [0.0]
+        for a, b in zip(coords, coords[1:]):
+            cum.append(cum[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+        pts = [(cum[k], coords[k]) for k in range(len(coords))]
+        for t in ts:
+            q = lines[j].interpolate(t)
+            pts.append((t, (q.x, q.y)))
+        pts.sort(key=lambda e: e[0])
+        out = [pts[0][1]]
+        for _, xy in pts[1:]:
+            if math.hypot(xy[0] - out[-1][0], xy[1] - out[-1][1]) > 1e-6:
+                out.append(xy)
+        lines[j] = LineString(out)
+    noded = unary_union(MultiLineString(lines))  # splits at every crossing (and the joined T-junctions)
     segs = [g for g in getattr(noded, "geoms", [noded]) if isinstance(g, LineString) and g.length > 0.5]
     tree = STRtree(lines)
     nodes, key = [], {}

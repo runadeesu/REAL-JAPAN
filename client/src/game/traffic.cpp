@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 
@@ -227,8 +228,14 @@ bool Traffic::spawnOne(const rj::geo::Vec3d& player, double rmin, double rmax) {
     for (size_t i = 0; i < edges_.size(); ++i) {
       const Edge& e = edges_[i];
       if (e.length < 12.0 || e.width < 4.0f) continue;
-      double dmin = 1e30;
-      for (const auto& q : e.pts) dmin = std::min(dmin, std::hypot(q.x - player.x, q.y - player.y));
+      double dmin = 1e30;  // distance to the edge's centre line (long straight roads have few vertices)
+      for (size_t k = 1; k < e.pts.size(); ++k) {
+        const auto& A = e.pts[k - 1];
+        const auto& B = e.pts[k];
+        const double vx = B.x - A.x, vy = B.y - A.y, l2 = vx * vx + vy * vy;
+        const double t = l2 > 0 ? std::clamp(((player.x - A.x) * vx + (player.y - A.y) * vy) / l2, 0.0, 1.0) : 0.0;
+        dmin = std::min(dmin, std::hypot(player.x - (A.x + vx * t), player.y - (A.y + vy * t)));
+      }
       if (dmin > rmax) continue;
       cand_.push_back(static_cast<int>(i));
       cand_w_.push_back(static_cast<float>(e.length) * std::min(e.width, 22.0f) * std::min(e.width, 22.0f) / 64.0f);
@@ -314,6 +321,15 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
   while (static_cast<int>(veh_.size()) < target && budget-- > 0)
     if (!spawnOne(player, initial ? 12.0 : 150.0, 380.0)) break;
   ++warm_frames_;
+  if (std::getenv("RJ_TRAFFIC_DEBUG") && warm_frames_ % 60 == 0) {
+    int near = 0, wide = 0, moving = 0;
+    for (const auto& v : veh_) {
+      if (std::hypot(v.pos.x - player.x, v.pos.y - player.y) < 200.0) ++near;
+      if (edges_[static_cast<size_t>(v.edge)].width >= 20.0f) ++wide;
+      if (v.v > 1.0) ++moving;
+    }
+    TraceLog(LOG_INFO, "RJ: traffic %zu vehicles (target %d): %d within 200 m, %d on wide roads, %d moving", veh_.size(), target, near, wide, moving);
+  }
 
   // Lane occupancy for leader search.
   std::map<std::tuple<int, int, int>, std::vector<size_t>> lanes;
