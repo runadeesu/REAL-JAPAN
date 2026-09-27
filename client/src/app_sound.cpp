@@ -124,6 +124,7 @@ void App::updateDepartureBoards() {
 void App::updateSound(float dt) {
   if (!audio_.active()) return;
   dt = std::clamp(dt, 0.0f, 0.25f);
+  if (ui_.takePresses() > 0) audio_.cue(Cue::Click, 0.5f);  // menu and phone buttons
   SoundScene sc;
   sc.master = settings_.volume / 100.0f;
   if (!listen_game_) {  // title screen: the city far below

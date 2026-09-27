@@ -47,6 +47,11 @@ class Ui {
   Rectangle px(Rectangle r) const { return {r.x * s_, r.y * s_, r.width * s_, r.height * s_}; }
   bool clicked() const { return clicked_; }
   void consumeClick() { clicked_ = false; }
+  int takePresses() {  // buttons pressed since the last call (for the click sound)
+    const int n = presses_;
+    presses_ = 0;
+    return n;
+  }
 
   Font font() const { return font_; }
 
@@ -56,6 +61,7 @@ class Ui {
   float s_ = 1.0f;
   float vw_ = 1920.0f;
   bool clicked_ = false;
+  int presses_ = 0;
   Vector2 mouse_{};
 };
 

@@ -103,6 +103,7 @@ bool Ui::button(Rectangle r, const std::string& label, bool enabled, float size)
   textCentered(label, r.x + r.width / 2, r.y + (r.height - size) / 2 - 2, size, enabled ? theme::kText : theme::kMuted);
   if (hov && clicked_) {
     clicked_ = false;
+    ++presses_;
     return true;
   }
   return false;
