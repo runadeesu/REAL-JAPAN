@@ -195,3 +195,4 @@ hud.controls_short = WASD move · Shift run · E interact/enter · Tab phone · 
 hud.perf = {fps} fps · {dc} draws · {tri} M tris · exposure {exp}
 hud.life = pedestrians {peds} (visitors {vis}, activity {act}) · vehicles {cars} · crossings {xw} ({est} estimated)
 hud.wet = road wetness {n}%
+error.missing_cells = World data files are missing. If the download came as two ZIP files (part1 / part2), extract both into the same place.

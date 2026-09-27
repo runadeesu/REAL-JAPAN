@@ -255,7 +255,7 @@ Surf material(int id, vec3 ng, vec2 wuv) {
     float lit = id == 11 ? 0.0 : litFrom(fragMat.y);
     if (id == 20) {
       // By day interiors are much darker than the street; lit rooms glow at night.
-      float b = mix(0.08, 0.6, nightFactor) * (0.45 + 0.9 * fract(fragMat.y * 7.13));  // rooms differ
+      float b = mix(0.06, 0.38, nightFactor) * (0.4 + 0.9 * fract(fragMat.y * 7.13));  // rooms differ
       vec3 tint = fragMat.y < 1.0 ? vec3(0.88, 0.94, 1.0) : vec3(1.0, 0.84, 0.62);  // office LED vs home
       s.transmit = interiorBehind(ng, false, lit) * tint * b;
     }
@@ -386,10 +386,10 @@ void main() {
           vec2 g = vec2(along / 1.8, fragPos.y / 3.5);
           vec2 cid = floor(g), f = fract(g);
           float h = hash12(cid + floor(hn.xz * 8.0) * 31.0);
-          float lit = step(h, occupancy.x);
+          float lit = step(h, occupancy.x * 0.8);
           float inWin = step(0.08, f.x) * step(f.x, 0.92) * step(0.2, f.y) * step(f.y, 0.86);
           float lum = dot(t.rgb, vec3(0.3, 0.59, 0.11));
-          float glassy = mix(0.3, 1.0, 1.0 - smoothstep(0.2, 0.5, lum)) * (0.7 + 0.3 * step(t.r, t.b + 0.02));
+          float glassy = mix(0.08, 1.0, 1.0 - smoothstep(0.18, 0.42, lum)) * (0.6 + 0.4 * step(t.r, t.b + 0.02));
           vec3 wc = fract(h * 7.31) < 0.6 ? vec3(0.9, 0.95, 1.0) : vec3(1.0, 0.82, 0.6);  // LED office / warm
           s.emit += wc * lit * inWin * glassy * nightFactor * (0.35 + 0.75 * fract(h * 3.7));
         }

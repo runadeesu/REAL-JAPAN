@@ -88,6 +88,17 @@ bool App::boot() {
     fatal_ = "Font load failed: data/fonts/BIZUDPGothic-Regular.ttf";
     return false;
   }
+  {
+    // The distribution may come as two ZIP parts: say clearly when one was not extracted.
+    std::string missing;
+    std::error_code ec;
+    for (const auto& c : world_.meta().cells)
+      if (!std::filesystem::exists(slice_dir_ / "cells" / (c.mesh + ".rjcell"), ec)) missing += " " + c.mesh + ".rjcell";
+    if (!missing.empty()) {
+      fatal_ = tr("error.missing_cells") + "\n\n" + pathToUtf8(slice_dir_ / "cells") + ":" + missing;
+      return false;
+    }
+  }
   if (!renderer_.init()) {
     fatal_ = "Shader compilation failed (OpenGL 3.3 required)";
     return false;
@@ -286,7 +297,10 @@ void App::placeRoads() {
 void App::update(float dt) {
   ui_.beginFrame();
   if (screen_ == Screen::Boot) return;  // boot happens after the first frame is shown
-  if (screen_ == Screen::Fatal) return;
+  if (screen_ == Screen::Fatal) {
+    if (!opt_.screenshot.empty() && shot_frames_ < 0) shot_frames_ = 3;  // test aid: capture the error screen
+    return;
+  }
 
   if (IsKeyPressed(KEY_F12)) takeUserScreenshot();
 
@@ -794,6 +808,11 @@ void App::drawBootScreen() {
 void App::drawFatal() {
   ClearBackground(Color{20, 8, 10, 255});
   DrawText("PROJECT: REAL JAPAN - startup error", 40, 40, 30, RAYWHITE);
+  if (ui_.hasFont()) {  // Japanese / English message (the default font has ASCII only)
+    ui_.textWrapped(fatal_, 40, 100, ui_.vw() - 80, 26, Color{255, 180, 180, 255});
+    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER)) quit_ = true;
+    return;
+  }
   DrawText(fatal_.c_str(), 40, 100, 20, Color{255, 180, 180, 255});
   DrawText("Please re-extract the game folder (data/ must be next to RealJapan.exe).", 40, 140, 20, GRAY);
   if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER)) quit_ = true;
@@ -847,7 +866,7 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v0.1.0  ·  " + std::to_string(world_.buildingCount()) + " buildings (PLATEAU)", vw - 30, 1040, 20, theme::kMuted);
+  ui_.textRight("v0.2.0  ·  " + std::to_string(world_.buildingCount()) + " buildings (PLATEAU)", vw - 30, 1040, 20, theme::kMuted);
 }
 
 void App::drawSettings() {

@@ -4,7 +4,7 @@
 #   Steps: tools/fetch_deps.sh -> pipeline/fetch_plateau.py -> pipeline/cook_slice.py -> this script
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VER="0.1.0"
+VER="0.2.0"
 NAME="RealJapan-${VER}-win64"
 BUILD="$ROOT/build-win"
 DIST="$ROOT/dist/$NAME"
@@ -28,15 +28,25 @@ cp "$ROOT/game/data/fonts/OFL.txt" "$DIST/LICENSES/BIZ_UDPGothic_OFL.txt"
 # Windows line endings for the text files users will open in Notepad.
 for f in "$DIST"/README_*.txt "$DIST"/LICENSES/*.txt; do sed -i 's/\r\?$/\r/' "$f"; done
 
-(cd "$ROOT/dist" && rm -f "$NAME.zip" && python3 - "$NAME" <<'EOF'
+# One full ZIP, plus the same content in two parts (each below ~30 MB for size-limited transfers):
+# part2 holds half of the world cells; both extract into the same RealJapan-<ver>-win64 folder.
+(cd "$ROOT/dist" && rm -f "$NAME.zip" "$NAME-part1.zip" "$NAME-part2.zip" && python3 - "$NAME" <<'EOF'
 import os, sys, zipfile
 name = sys.argv[1]
-with zipfile.ZipFile(name + ".zip", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-    for dp, _, files in os.walk(name):
-        for f in sorted(files):
-            p = os.path.join(dp, f)
+files = []
+for dp, _, fs in os.walk(name):
+    for f in sorted(fs):
+        files.append(os.path.join(dp, f))
+cells = sorted(p for p in files if p.endswith(".rjcell"))
+part2 = set(cells[len(cells) // 2:])
+def write(zname, sel):
+    with zipfile.ZipFile(zname, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for p in sel:
             z.write(p, p)
+write(name + ".zip", files)
+write(name + "-part1.zip", [p for p in files if p not in part2])
+write(name + "-part2.zip", [p for p in files if p in part2])
 EOF
 )
-(cd "$ROOT/dist" && sha256sum "$NAME.zip" > "$NAME.zip.sha256" && ls -la "$NAME.zip" && cat "$NAME.zip.sha256")
+(cd "$ROOT/dist" && sha256sum "$NAME.zip" "$NAME-part1.zip" "$NAME-part2.zip" > "$NAME.sha256" && ls -la "$NAME"*.zip && cat "$NAME.sha256")
 echo "packaged: $ROOT/dist/$NAME.zip"

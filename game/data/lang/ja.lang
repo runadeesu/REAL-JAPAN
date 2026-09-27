@@ -195,3 +195,4 @@ hud.controls_short = WASD 移動 · Shift 走る · E 調べる/入る · Tab �
 hud.perf = {fps} fps · 描画 {dc} 回 · {tri} M三角形 · 露出 {exp}
 hud.life = 歩行者 {peds}（来街者 {vis}・活動度 {act}）· 車両 {cars} · 横断歩道 {xw}（推定 {est}）
 hud.wet = 路面の濡れ {n}%
+error.missing_cells = 街のデータファイルが見つかりません。配布物が2つのZIP（part1 / part2）に分かれている場合は、両方を同じ場所に展開してください。
