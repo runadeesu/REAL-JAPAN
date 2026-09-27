@@ -263,6 +263,45 @@ void uploadCell(CellCpu& cpu, CellGpu& gpu) {
     UploadMesh(&t, false);
     releaseVertexCopies(t);
     gpu.terrain = t;
+    // sea surface over the cell (the cell frame is anchored at anchor[2] above the sea), subdivided
+    // so the water's lighting and fog vary across it
+    const float sea_z = static_cast<float>(-cpu.anchor[2]);
+    float zmin = 1e30f;
+    for (size_t k = 2; k < cpu.tpos.size(); k += 3) zmin = std::min(zmin, cpu.tpos[k]);
+    const int nx = cpu.tnx, ny = cpu.tny;
+    if (zmin < sea_z + 0.5f && nx >= 2 && ny >= 2) {
+      constexpr int kN = 9;
+      std::vector<float> pos, nrm;
+      std::vector<unsigned short> idx;
+      auto P = [&](int i, int j) { return &cpu.tpos[static_cast<size_t>(i * nx + j) * 3]; };
+      const float* a = P(0, 0);
+      const float* b = P(0, nx - 1);
+      const float* c = P(ny - 1, 0);
+      const float* d = P(ny - 1, nx - 1);
+      for (int i = 0; i < kN; ++i)
+        for (int j = 0; j < kN; ++j) {
+          const float u = static_cast<float>(j) / (kN - 1), v = static_cast<float>(i) / (kN - 1);
+          for (int k = 0; k < 2; ++k)
+            pos.push_back((a[k] * (1 - u) + b[k] * u) * (1 - v) + (c[k] * (1 - u) + d[k] * u) * v);
+          pos.push_back(sea_z);
+          nrm.insert(nrm.end(), {0.0f, 0.0f, 1.0f});
+        }
+      for (int i = 0; i + 1 < kN; ++i)
+        for (int j = 0; j + 1 < kN; ++j) {
+          const auto q0 = static_cast<unsigned short>(i * kN + j), q1 = static_cast<unsigned short>(i * kN + j + 1);
+          const auto q2 = static_cast<unsigned short>((i + 1) * kN + j), q3 = static_cast<unsigned short>((i + 1) * kN + j + 1);
+          idx.insert(idx.end(), {q0, q1, q3, q0, q3, q2});
+        }
+      Mesh m{};
+      m.vertexCount = kN * kN;
+      m.triangleCount = static_cast<int>(idx.size() / 3);
+      m.vertices = rlCopy(pos);
+      m.normals = rlCopy(nrm);
+      m.indices = rlCopy(idx);
+      UploadMesh(&m, false);
+      releaseVertexCopies(m);
+      gpu.sea = m;
+    }
   }
   for (auto& img : cpu.pages) {
     Texture2D t{};
@@ -296,6 +335,8 @@ void unloadCell(CellGpu& gpu) {
   gpu.pages.clear();
   if (gpu.terrain.vaoId) UnloadMesh(gpu.terrain);
   gpu.terrain = Mesh{};
+  if (gpu.sea.vaoId) UnloadMesh(gpu.sea);
+  gpu.sea = Mesh{};
   if (gpu.ground.id) UnloadTexture(gpu.ground);
   gpu.ground = Texture2D{};
   gpu.uploaded = false;

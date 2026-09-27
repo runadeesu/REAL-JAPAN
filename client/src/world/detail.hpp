@@ -95,6 +95,9 @@ struct CellDetailCpu {
   Image ao{};  // ground contact occlusion (grey), same UV as the ground texture
   std::vector<TreeRec> trees;   // PLATEAU veg SolitaryVegetationObject
   std::vector<float> hedges;    // PlantCover footprint triangles (cell ENU)
+  // land cover (fictional country): RGBA weights of forest, rice paddy, upland field, bare ground,
+  // same UV as the ground texture; the forest canopy is built from it on the loader thread
+  Image landcover{};
   bool present = false;
 };
 
@@ -110,6 +113,7 @@ struct CellDetailGpu {
   };
   std::vector<Tree> trees;
   Mesh hedge{};
+  Texture2D landcover{};
 };
 
 void uploadDetail(CellDetailCpu& cpu, CellDetailGpu& gpu);  // frees the CPU vertex arrays

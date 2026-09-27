@@ -4,13 +4,13 @@
 #   Steps: tools/fetch_deps.sh -> pipeline/fetch_plateau.py -> pipeline/cook_slice.py -> this script
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VER="0.4.0"
+VER="0.5.0"
 NAME="RealJapan-${VER}-win64"
 BUILD="$ROOT/build-win"
 DIST="$ROOT/dist/$NAME"
 
 test -f "$ROOT/game/data/world/shibuya/client.txt" || { echo "cooked world missing: run pipeline/cook_slice.py"; exit 1; }
-test -f "$ROOT/game/data/world/island/client.txt" || { echo "fictional island missing: run pipeline/cook_island.py"; exit 1; }
+test -f "$ROOT/game/data/world/country/client.txt" || { echo "fictional country missing: run pipeline/cook_country.py"; exit 1; }
 test -f "$ROOT/game/data/fonts/BIZUDPGothic-Regular.ttf" || { echo "font missing: run tools/fetch_deps.sh"; exit 1; }
 
 cmake -S "$ROOT/client" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \

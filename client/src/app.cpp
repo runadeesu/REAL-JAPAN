@@ -67,9 +67,9 @@ bool App::boot() {
     return false;
   }
   saved_world_ = settings_.world;  // a --world launch option is not written back to settings.ini
-  if (!opt_.world.empty()) settings_.world = opt_.world == "shibuya" ? "shibuya" : "island";
+  if (!opt_.world.empty()) settings_.world = opt_.world == "shibuya" ? "shibuya" : "country";
   slice_dir_ = data / "world" / settings_.world;
-  if (!std::filesystem::exists(slice_dir_ / "client.txt")) slice_dir_ = data / "world" / "shibuya";  // island not cooked
+  if (!std::filesystem::exists(slice_dir_ / "client.txt")) slice_dir_ = data / "world" / "shibuya";  // country not cooked
   std::string err;
   if (!world_.loadMeta(slice_dir_, err)) {
     fatal_ = "World data error: " + err;
@@ -134,6 +134,8 @@ bool App::boot() {
   for (const auto& c : m.cells)
     if (rj::geo::MeshCode::fromLatLon({m.spawn_lat, m.spawn_lon}, 3)->str() == c.mesh) h0 = c.h;
   world_.resetOrigin({m.spawn_lat, m.spawn_lon, h0});
+  if (m.fictional && far_.load(slice_dir_)) far_.build();
+  updateFarMapping();
   player_.pos = {0, 0, 0};
   player_.yaw = static_cast<float>(m.spawn_heading * DEG2RAD);
   clock_ = rj::sim::GameClock(static_cast<int64_t>(std::time(nullptr)), settings_.time_scale);
@@ -350,6 +352,7 @@ void App::update(float dt) {
       fish_.bobber = X.apply(fish_.bobber);
       walk_start_ = X.apply(walk_start_);
       TraceLog(LOG_INFO, "RJ: origin rebased");
+      updateFarMapping();
     }
     facades_.clear();  // facade meshes live in origin coordinates
     traffic_placed_ = false;
@@ -823,7 +826,7 @@ void App::update(float dt) {
         if (IsKeyPressed(KEY_TAB) || IsKeyPressed(KEY_ESCAPE)) screen_ = Screen::Game;
         const float wheel = GetMouseWheelMove();
         if (phone_app_ == PhoneApp::Map && wheel != 0.0f)
-          map_half_extent_ = std::clamp(map_half_extent_ * (wheel > 0 ? 0.8 : 1.25), 80.0, 1600.0);
+          map_half_extent_ = std::clamp(map_half_extent_ * (wheel > 0 ? 0.8 : 1.25), 80.0, far_.ready() ? 30000.0 : 1600.0);
       }
       break;
     }
@@ -866,8 +869,14 @@ void App::update(float dt) {
     lighting_.occupancy = Vector3{office, resid, shop};
   }
   lighting_.wind = std::clamp(weather_.now().wind_ms / 8.0f, 0.15f, 1.6f);
-  // Keep the end of the drawn world inside the haze.
-  lighting_.fog_density = std::max(lighting_.fog_density, 1.1f / (static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f));
+  // Keep the end of the drawn world inside the haze (with the far view, the country continues to
+  // the horizon: only the weather's own haze, with visibility up to about 60 km)
+  // (the weather's haze beyond the city's own: about 40 km visibility on a clear day, much less
+  // under cloud, in rain or fog)
+  lighting_.fog_far = std::max(1.8e-5f, (lighting_.fog_density - 0.00032f) * 0.8f + 0.000045f);
+  if (far_.ready()) lighting_.fog_density = lighting_.fog_far;
+  else lighting_.fog_density = std::max(lighting_.fog_density, 1.1f / (static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f));
+  updateSeason();
   // Underground: blend to artificial light as the eye drops below the street surface, so stairwells
   // near an entrance still see daylight and the sky.
   underground_ = 0.0f;
@@ -914,9 +923,65 @@ void App::updateInteriorAction() {
     }
 }
 
+void App::updateFarMapping() {
+  if (!far_.ready() || !world_.hasOrigin()) return;
+  Vector3 u{}, v{};
+  far_.mapping(world_, u, v);
+  renderer_.setSnowMap(far_.snowMap(), u, v);
+}
+
+void App::updateSeason() {
+  // Season from the game date (the whole country shares it): lying snow in the north and on the
+  // mountains in winter, rice paddies flooded in spring, green in summer, golden in autumn,
+  // broadleaf trees turning in autumn and bare in winter. Dates are typical, not a forecast.
+  const auto jt = clock_.jst();
+  static const int kCum[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+  const float doy = static_cast<float>(kCum[std::clamp(jt.date.m, 1, 12) - 1] + jt.date.d);
+  auto ramp = [](float x, float a, float b) { return std::clamp((x - a) / (b - a), 0.0f, 1.0f); };
+  float snow = 0.0f;  // Dec 1 -> Jan 5 rising, full to Feb 28, melting through March, gone mid-April
+  if (doy >= 335.0f) snow = ramp(doy, 335.0f, 370.0f);
+  else if (doy < 60.0f) snow = ramp(doy + 365.0f, 335.0f, 370.0f);
+  else snow = 1.0f - ramp(doy, 60.0f, 105.0f);
+  float crop;  // 0 stubble .. 1 flooded .. 2 green .. 3 golden
+  if (doy < 105.0f) crop = 0.0f;
+  else if (doy < 135.0f) crop = ramp(doy, 105.0f, 125.0f);
+  else if (doy < 200.0f) crop = 1.0f + ramp(doy, 135.0f, 185.0f);
+  else if (doy < 280.0f) crop = 2.0f + ramp(doy, 225.0f, 262.0f);
+  else crop = 3.0f * (1.0f - ramp(doy, 285.0f, 305.0f));
+  float leaf;  // 0 green .. 1 autumn colours .. 2 bare
+  if (doy < 100.0f) leaf = 2.0f;
+  else if (doy < 130.0f) leaf = 2.0f - 2.0f * ramp(doy, 100.0f, 125.0f);
+  else if (doy < 330.0f) leaf = ramp(doy, 285.0f, 318.0f);
+  else leaf = 1.0f + ramp(doy, 330.0f, 350.0f);
+  if (const char* e = std::getenv("RJ_SEASON")) std::sscanf(e, "%f,%f,%f", &snow, &crop, &leaf);  // test aid
+  renderer_.setSeason(snow, crop, leaf);
+}
+
+std::string App::airportName(int i) const {
+  if (i < 0 || i >= static_cast<int>(aviation_.airports().size())) return "";
+  const Airport& a = aviation_.airports()[static_cast<size_t>(i)];
+  return i18n_.code() == "ja" || a.name_en.empty() ? a.name : a.name_en;
+}
+
+int64_t App::railFare(bool shinkansen, double km) {
+  static const struct { double km; int yen; } kBand[] = {{3, 150}, {6, 190}, {10, 210}, {15, 240}, {20, 330}, {25, 420},
+                                                         {30, 510}, {35, 590}, {40, 680}, {45, 770}, {50, 860}, {60, 990},
+                                                         {70, 1170}, {80, 1340}, {100, 1690}};
+  int64_t yen = 1690 + static_cast<int64_t>(std::max(0.0, km - 100.0) * 16.0);
+  for (const auto& b : kBand)
+    if (km <= b.km) {
+      yen = b.yen;
+      break;
+    }
+  if (shinkansen) yen += km <= 30.0 ? 870 : km <= 60.0 ? 1760 : 2290;  // limited-express charge (non-reserved seat)
+  return yen;
+}
+
 std::string App::lineName(int line) const {
   if (line < 0 || line >= static_cast<int>(trains_.lines().size())) return "";
-  switch (trains_.lines()[static_cast<size_t>(line)].kind) {
+  const RailLine& L = trains_.lines()[static_cast<size_t>(line)];
+  if (!L.name.empty()) return i18n_.code() == "ja" || L.name_en.empty() ? L.name : L.name_en;
+  switch (L.kind) {
     case LineKind::Loop: return tr("rail.line.loop");
     case LineKind::Branch: return tr("rail.line.branch");
     default: return tr("rail.line.shinkansen");
@@ -1042,7 +1107,11 @@ bool App::scriptBusy() const {
   return ride_test_t_ >= 0.0f && !ride_test_done_;
 }
 
-std::string App::pierName(int pier) const { return tr("ferry.pier." + std::to_string(pier)); }
+std::string App::pierName(int pier) const {
+  if (pier >= 0 && pier < static_cast<int>(ferries_.piers().size()) && !ferries_.piers()[static_cast<size_t>(pier)].name.empty())
+    return ferries_.piers()[static_cast<size_t>(pier)].name;
+  return tr("ferry.pier." + std::to_string(pier));
+}
 
 Camera3D App::jetCamera() const {
   Camera3D c{};
@@ -1067,16 +1136,14 @@ Camera3D App::jetCamera() const {
 void App::updateAviationActions() {
   if (!aviation_.loaded() || !inside_id_.empty() || driving_.active() || ride_train_ >= 0 || ride_ferry_ >= 0) return;
   const bool e = IsKeyPressed(KEY_E) || autoKeyE();
-  const Airport& ap = aviation_.airport();
-  const rj::geo::Vec3d nxv{ap.twy_a.x - ap.rwy_a.x, ap.twy_a.y - ap.rwy_a.y, 0};
-  const double nl = std::max(1.0, std::hypot(nxv.x, nxv.y));
-  const rj::geo::Vec3d landside{ap.terminal.x + nxv.x / nl * 140.0, ap.terminal.y + nxv.y / nl * 140.0, ap.terminal.z};
   if (ride_jet_ >= 0) {
     const Airliner* a = aviation_.airliner(ride_jet_);
     if (!a) {
       ride_jet_ = -1;
       return;
     }
+    const Airport& ap = aviation_.airports()[static_cast<size_t>(a->from)];
+    const rj::geo::Vec3d landside = aviation_.landside(a->from);
     const std::string kt = std::to_string(static_cast<int>(a->v * 1.944));
     const std::string ft = std::to_string(static_cast<int>(std::max(0.0, (a->pos.z - 2.4 - ap.rwy_a.z) * 3.281) / 100.0) * 100);
     using P = Airliner::Phase;
@@ -1089,15 +1156,15 @@ void App::updateAviationActions() {
           player_.pos = landside;
           player_.snapToGround(world_);
           player_.vel_z = 0;
-          toast(tr(jet_flown_ ? "jet.alighted" : "jet.left_before"));
+          toast(jet_flown_ ? i18n_.f("jet.alighted", {{"airport", airportName(a->from)}}) : tr("jet.left_before"));
         }
         break;
       case P::Pushback:
       case P::TaxiOut: prompt_ = tr("jet.taxi_out"); break;
       case P::Takeoff: prompt_ = i18n_.f("jet.takeoff", {{"kt", kt}}); break;
       case P::Climb: prompt_ = i18n_.f("jet.climb", {{"ft", ft}, {"kt", kt}}); break;
-      case P::Offmap: prompt_ = tr("jet.mainland"); break;
-      case P::Approach: prompt_ = i18n_.f("jet.approach", {{"ft", ft}, {"kt", kt}}); break;
+      case P::Offmap: prompt_ = tr("jet.taxi_in"); break;
+      case P::Approach: prompt_ = i18n_.f("jet.approach", {{"ft", ft}, {"kt", kt}, {"airport", airportName(a->to)}}); break;
       case P::Landing: prompt_ = i18n_.f("jet.landing", {{"kt", kt}}); break;
       case P::TaxiIn: prompt_ = tr("jet.taxi_in"); break;
     }
@@ -1105,10 +1172,12 @@ void App::updateAviationActions() {
   }
   if (flying_) return;
   if (!prompt_.empty() || player_.fly) return;
-  if (std::hypot(player_.pos.x - landside.x, player_.pos.y - landside.y) < 50.0) {
-    if (const Airliner* a = aviation_.boardable()) {
-      const int64_t fare = 12800;
-      prompt_ = i18n_.f("jet.board", {{"fare", std::to_string(fare)}});
+  if (const int here = aviation_.airportNear(player_.pos, 50.0); here >= 0) {
+    if (const Airliner* a = aviation_.boardable(here)) {
+      const int64_t fare = 12800;  // game value
+      const Airport& to = aviation_.airports()[static_cast<size_t>(a->to)];
+      prompt_ = i18n_.f("jet.board", {{"fare", std::to_string(fare)}, {"dest", airportName(a->to)}});
+      (void)to;
       if (e) {
         if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare, clock_.unixUtc(),
                                           tr("jet.airline")) != rj::econ::TxResult::Ok) {
@@ -1120,6 +1189,7 @@ void App::updateAviationActions() {
         aviation_.setAboard(a->id, true);
         jet_look_yaw_ = -1.25f;
         jet_look_pitch_ = -0.12f;
+        if (const char* e = std::getenv("RJ_JET_LOOK")) std::sscanf(e, "%f,%f", &jet_look_yaw_, &jet_look_pitch_);  // test aid (radians)
         toast(i18n_.f("jet.boarded", {{"fare", std::to_string(fare)}}));
       }
     } else {
@@ -1180,7 +1250,8 @@ void App::updateFerryActions() {
     return;
   }
   const int dest = ferries_.destinationPier(*f);
-  const int64_t fare = f->cls == 0 ? 480 : 2400;
+  // game fares by service: harbour ferry, high-speed ferry, car ferry (passenger)
+  const int64_t fare = f->cruise > 15.0 ? 4200 : f->cls == 0 ? 480 : 2600;
   prompt_ = i18n_.f("ferry.board", {{"dest", dest >= 0 ? pierName(dest) : tr("ferry.dest.mainland")}, {"fare", std::to_string(fare)}});
   if (e) {
     if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare, clock_.unixUtc(),
@@ -1281,8 +1352,24 @@ void App::updateTransportActions() {
         player_.vel_z = 0;
         player_.fly = false;
         player_.yaw = yaw;
+        // fare by the distance ridden, paid with the IC card at the end of the ride (game values
+        // modelled on typical Japanese fare bands, not a real fare table)
+        const auto& L = trains_.lines()[static_cast<size_t>(t->line)];
+        double dist = 0.0;
+        if (ride_board_station_ >= 0 && ride_board_station_ < static_cast<int>(stations.size())) {
+          dist = std::fabs(st.s - stations[static_cast<size_t>(ride_board_station_)].s);
+          if (L.closed) dist = std::min(dist, L.length - dist);
+        }
+        const double km = std::max(1.0, dist / 1000.0);
+        const int64_t fare = railFare(kind == LineKind::Shinkansen, km);
         ride_train_ = -1;
-        toast(i18n_.f("rail.alighted", {{"station", st.name}}));
+        ride_board_station_ = -1;
+        if (ledger_ && ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare,
+                                         clock_.unixUtc(), lineName(t->line)) == rj::econ::TxResult::Ok)
+          toast(i18n_.f("rail.alighted_fare", {{"station", st.name}, {"km", std::to_string(static_cast<int>(km + 0.5))},
+                                               {"fare", std::to_string(fare)}}));
+        else
+          toast(i18n_.f("rail.alighted", {{"station", st.name}}));
       }
     } else if (t->next_stop >= 0) {
       prompt_ = i18n_.f("rail.next", {{"line", lineName(t->line)}, {"station", stations[static_cast<size_t>(t->next_stop)].name},
@@ -1319,11 +1406,11 @@ void App::updateTransportActions() {
       else if (dest == "mainland") dest = tr("rail.dest.mainland");
       prompt_ = i18n_.f("rail.board", {{"line", lineName(t->line)}, {"dest", dest}});
       if (e) {
-        const int64_t fare = kind == LineKind::Shinkansen ? 2980 : 170;
-        if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare,
-                                          clock_.unixUtc(), lineName(t->line)) != rj::econ::TxResult::Ok) {
+        const int64_t fare = railFare(kind == LineKind::Shinkansen, 1.0);  // the minimum must be on the card
+        if (ledger_ && ledger_->balance(player_account_) < fare) {
           toast(tr("rail.no_money"));
         } else {
+          ride_board_station_ = si;
           // the car nearest to the player
           double best = 1e30;
           for (int k = 0; k < t->cars; ++k) {
@@ -1340,7 +1427,7 @@ void App::updateTransportActions() {
           ride_look_yaw_ = kind == LineKind::Shinkansen ? -0.85f : 1.5708f;  // out of the window / across the car
           ride_look_pitch_ = -0.05f;
           if (const char* e = std::getenv("RJ_RIDE_LOOK")) std::sscanf(e, "%f,%f", &ride_look_yaw_, &ride_look_pitch_);  // test aid (radians)
-          toast(i18n_.f("rail.boarded", {{"line", lineName(t->line)}, {"fare", std::to_string(fare)}}));
+          toast(i18n_.f("rail.boarded", {{"line", lineName(t->line)}}));
         }
       }
     } else {
@@ -1375,9 +1462,9 @@ void App::runSelfTest() {
     if (!ok) ++fails;
   };
   const bool fic = world_.meta().fictional;
-  if (fic) check(world_.residentCount() > 0, "world cells streamed around the start (island)");
+  if (fic) check(world_.residentCount() > 0, "world cells streamed around the start (country)");
   else check(world_.residentCount() == world_.knownCount(), "all world cells loaded");
-  if (fic) check(world_.buildingCount() > 500, "buildings present (generated island)");
+  if (fic) check(world_.buildingCount() > 500, "buildings present (generated country)");
   else check(world_.buildingCount() > 9000, "buildings present (PLATEAU)");
   check(town_.size() > 0, "residents loaded");
   check(peds_.navReady(), "pedestrian navigation grid built");
@@ -1397,12 +1484,19 @@ void App::runSelfTest() {
   check(std::hypot(player_.pos.x - spawn.x, player_.pos.y - spawn.y) < 0.05, "position restored after load");
   check(ledger_ && ledger_->balance(player_account_) == kStartMoney, "money restored after load");
   if (fic) {
-    // island: transport systems and the player's activities
+    // country: transport systems and the player's activities
     if (!traffic_placed_ && traffic_.loaded()) placeRoads();
-    check(trains_.loaded() && trains_.lines().size() == 3 && trains_.stations().size() >= 8, "rail lines and stations loaded");
+    check(trains_.loaded() && trains_.lines().size() == 4 && trains_.stations().size() >= 16, "rail lines (loop, main line, two Shinkansen) and stations loaded");
     check(!trains_.trains().empty(), "trains in service");
-    check(ferries_.loaded() && ferries_.ships().size() == 2, "ferries loaded");
-    check(aviation_.loaded() && aviation_.airport().stands.size() == 6 && aviation_.airliners().size() == 2, "airport, stands and flights loaded");
+    {
+      bool named = !trains_.stations().empty();
+      for (const auto& st : trains_.stations()) named = named && stationReading(st.name) != nullptr;
+      check(named, "every station has a reading (name boards)");
+    }
+    check(ferries_.loaded() && ferries_.ships().size() == 3 && ferries_.piers().size() == 4, "ferry routes between the ports loaded");
+    check(aviation_.loaded() && aviation_.airports().size() == 2 && aviation_.airport().stands.size() == 6 && aviation_.airliners().size() == 2,
+          "two airports, stands and flights loaded");
+    check(far_.ready() && !far_.tiles().empty(), "far view of the country built");
     {
       Driving d;
       Vehicle v;
@@ -1421,7 +1515,7 @@ void App::runSelfTest() {
       Jobs j;
       check(j.startDelivery(world_, traffic_, player_.pos), "delivery job found nearby");
     }
-    check(saveSlot(3) && loadSlot(3), "save / load on the island");
+    check(saveSlot(3) && loadSlot(3), "save / load in the fictional world");
   }
   // Verified interior: enter through a real entrance, stand on a real floor, walls block.
   if (!fic) check(!world_.meta().interiors.empty(), "interior listed in slice");
@@ -1587,19 +1681,36 @@ void App::drawWorldView(const Camera3D& cam) {
     });
   }
   // Indoors walls can be 0.3 m from the eye: pull the near plane in so it never cuts through them.
-  Renderer::setClipPlanes(in ? 0.08f : (cockpit_view ? 0.05f : 0.2f), static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f);
+  const float near_clip = in ? 0.08f : (cockpit_view ? 0.05f : 0.2f);
+  float far_clip = static_cast<float>(settings_.view_distance_m) * 1.6f + 500.0f;
+  if (far_.ready()) far_clip = std::max(far_clip, 3800.0f);  // every streamed cell (the far view takes over beyond)
+  Renderer::setClipPlanes(near_clip, far_clip);
   renderer_.beginScene(ro, lighting_, cam, render_time_);
   ClearBackground(deep ? Color{58, 58, 60, 255} : BLACK);
   const float aspect = static_cast<float>(GetScreenWidth()) / static_cast<float>(std::max(1, GetScreenHeight()));
   if (!deep) renderer_.drawSky(cam, lighting_, aspect);
+  if (far_.ready() && !in && !deep) {
+    // The country to the horizon in its own depth range, then the streamed cells in front of it.
+    Renderer::setClipPlanes(15.0f, 90000.0f);
+    BeginMode3D(cam);
+    const auto g = world_.toGeodetic(rlToEnu(cam.position));
+    renderer_.drawFarView(far_, world_, cam, static_cast<float>(world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z), lighting_.fog_far);
+    EndMode3D();
+    Renderer::clearDepth();
+    Renderer::setClipPlanes(near_clip, far_clip);
+  }
   renderer_.setLights(collectLights(cam));
   BeginMode3D(cam);
   renderer_.drawWorld(cam, world_, settings_.photo_textures, !in && !world_.meta().fictional);
   if (!deep) renderer_.drawMarkings(markings_);
   if (world_.meta().fictional && !deep) {
-    // Sea level (height 0) under the camera, in the floating-origin frame.
-    const auto g = world_.toGeodetic(rlToEnu(cam.position));
-    renderer_.drawOcean(cam, static_cast<float>(world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z));
+    if (far_.ready()) {
+      renderer_.drawCellSeas(world_);  // (the far view has the open sea beyond the streamed cells)
+    } else {
+      // Sea level (height 0) under the camera, in the floating-origin frame.
+      const auto g = world_.toGeodetic(rlToEnu(cam.position));
+      renderer_.drawOcean(cam, static_cast<float>(world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z));
+    }
   }
   static const bool no_facades = std::getenv("RJ_NO_FACADES") != nullptr;      // debug isolation
   static const bool no_int_out = std::getenv("RJ_NO_INTERIOR_OUT") != nullptr;
@@ -1789,7 +1900,7 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v0.4.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional island)" : " buildings (PLATEAU)"),
+  ui_.textRight("v0.5.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
                  vw - 30, 1040, 20, theme::kMuted);
 }
 
@@ -2206,12 +2317,19 @@ void App::drawMap(Rectangle r, double half, bool labels) {
   ui_.panel({r.x - 6, r.y - 6, r.width + 12, r.height + 12}, Color{0, 0, 0, 200});
   const Rectangle pr = ui_.px(r);
   BeginScissorMode(static_cast<int>(pr.x), static_cast<int>(pr.y), static_cast<int>(pr.width), static_cast<int>(pr.height));
-  DrawRectangleRec(pr, Color{60, 60, 64, 255});
+  DrawRectangleRec(pr, far_.ready() ? Color{40, 70, 90, 255} : Color{60, 60, 64, 255});
   const double ppm = pr.width / (2.0 * half);  // pixels per metre
   const float cx = pr.x + pr.width / 2, cy = pr.y + pr.height / 2;
   auto toScreen = [&](const rj::geo::Vec3d& p) {
     return Vector2{static_cast<float>(cx + (p.x - player_.pos.x) * ppm), static_cast<float>(cy - (p.y - player_.pos.y) * ppm)};
   };
+  if (far_.ready()) {  // the whole country underneath (far-view colour map)
+    double la0, lo0, la1, lo1;
+    far_.extent(la0, lo0, la1, lo1);
+    const Vector2 nw = toScreen(world_.toLocal({la1, lo0, 0.0})), se = toScreen(world_.toLocal({la0, lo1, 0.0}));
+    const Texture2D t = far_.colorMap();
+    DrawTexturePro(t, {0, 0, static_cast<float>(t.width), static_cast<float>(t.height)}, {nw.x, nw.y, se.x - nw.x, se.y - nw.y}, {0, 0}, 0, WHITE);
+  }
   for (const auto& [code, c] : world_.cells()) {
     if (!c->gpu.ground.id) continue;
     const double* b = c->cpu->bounds;
@@ -2220,12 +2338,31 @@ void App::drawMap(Rectangle r, double half, bool labels) {
     const Rectangle dst{sw.x, ne.y, ne.x - sw.x, sw.y - ne.y};
     DrawTexturePro(c->gpu.ground, {0, 0, static_cast<float>(c->gpu.ground.width), static_cast<float>(c->gpu.ground.height)}, dst, {0, 0}, 0, WHITE);
   }
+  if (half > 900.0 && trains_.loaded()) {  // railway lines when zoomed out
+    for (const auto& L : trains_.lines()) {
+      const Color c = L.kind == LineKind::Shinkansen ? Color{60, 110, 230, 255} : L.kind == LineKind::Branch ? Color{230, 130, 40, 255}
+                                                                                                            : Color{60, 190, 120, 255};
+      for (size_t i = 1; i < L.pts.size(); i += 4) {
+        const size_t j = std::min(L.pts.size() - 1, i + 4);
+        DrawLineEx(toScreen(L.pts[i - 1]), toScreen(L.pts[j]), 2.5f * ui_.scale(), c);
+      }
+    }
+  }
   if (labels) {
     for (const auto& p : world_.meta().pois) {
+      if (half > 2500.0) break;
       const Vector2 s = toScreen(world_.toLocal({p.lat, p.lon, 0}));
       if (!CheckCollisionPointRec(s, pr)) continue;
       DrawCircleV(s, 4 * ui_.scale(), theme::kAccent);
       if (half < 600) ui_.text(p.name, s.x / ui_.scale() + 8, s.y / ui_.scale() - 10, 18, WHITE);
+    }
+    for (const auto& pl : world_.meta().places) {  // town and village names
+      if (!pl.city && (half < 700.0 || half > 9000.0)) continue;
+      if (pl.city && half < 1200.0) continue;
+      const Vector2 s = toScreen(world_.toLocal({pl.lat, pl.lon, 0}));
+      if (!CheckCollisionPointRec(s, pr)) continue;
+      const std::string nm = i18n_.code() == "ja" || pl.name_en.empty() ? pl.name : pl.name_en;
+      ui_.text(nm, s.x / ui_.scale() - 20, s.y / ui_.scale() - 12, pl.city ? 22 : 17, pl.city ? WHITE : Color{225, 225, 210, 255});
     }
   }
   if (jobs_.active()) {  // job target

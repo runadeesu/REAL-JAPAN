@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(RealJapan VERSION 0.4.0 LANGUAGES C CXX)
+project(RealJapan VERSION 0.5.0 LANGUAGES C CXX)
 
 # PROJECT: REAL JAPAN native client (Windows x64 primary target, Linux for dev).
 #   Linux:   cmake -S client -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -42,12 +42,14 @@ set(RJ_SOURCES
   src/i18n/i18n.cpp
   src/save/save.cpp
   src/world/cell.cpp
+  src/world/canopy.cpp
   src/world/world.cpp
   src/world/interior.cpp
   src/world/detail.cpp
   src/world/facade.cpp
   src/render/renderer.cpp
   src/render/textures.cpp
+  src/render/farview.cpp
   src/render/foliage.cpp
   src/render/vehicles.cpp
   src/render/humans.cpp

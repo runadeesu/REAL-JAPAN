@@ -19,7 +19,7 @@ from shapely.ops import unary_union
 
 from . import layout as L
 from .buildings import (CURTAIN, GLASS, LAMP, METAL, PANEL, PLAIN, PUBLIC, ROOF_FLAT, ROOF_METAL, ROOF_TILE, TEMPLE,
-                        BuildingOut, Geo, box, cap, cylinder, pitched_roof, walls)
+                        WAREHOUSE, WOODEN, BuildingOut, Geo, box, cap, cylinder, pitched_roof, walls)
 from .generate import parts
 from realjapan_pipeline.streetdetail import Geo as DGeo
 
@@ -67,6 +67,8 @@ class Spec:
     quays: list = field(default_factory=list)       # LineStrings along seawalls
     trees: list = field(default_factory=list)       # (x, y, h, r, kind)
     canopy: Polygon = None
+    tunnel_flags: list = field(default_factory=list)  # per rail line: bool per point (in a tunnel)
+    portal_holes: Polygon = None                      # ground cut away at the tunnel mouths
 
 
 class CellExtra:
@@ -81,25 +83,29 @@ def _named(g: Geo, ring, ground, h, usage, name, kind, storeys=1):
 
 
 def _station(name, x, y, hd, terrain, big, deck=RAIL_DECK):
+    """Station building: a concourse under the elevated platforms when there is room (deck = rail
+    level above the ground), else a building beside the tracks; the main station also has a tall
+    station building (department store + offices)."""
     ground = float(terrain.sample(x, y))
-    rect = affinity.rotate(sbox(x - 16, y - 105, x + 16, y + 105), -hd, origin=(x, y))
+    th = math.radians(hd)
+    side = np.array([math.cos(th), -math.sin(th)])
+    clear = RAIL_DECK if deck is None else float(deck)
+    if clear >= 5.0:
+        c = np.array([x, y])
+        rect = affinity.rotate(sbox(x - 16, y - 105, x + 16, y + 105), -hd, origin=(x, y))
+        top = min(6.5, clear - 1.0)
+    else:  # low line (or in a cutting): station house beside the platforms, on the right-hand side
+        c = np.array([x, y]) + side * 26
+        ground = float(terrain.sample(*c))
+        rect = affinity.rotate(sbox(c[0] - 8, c[1] - 20, c[0] + 8, c[1] + 20), -hd, origin=tuple(c))
+        top = 6.0
     rect = orient(rect, 1.0)
     ring = np.asarray(rect.exterior.coords)
     g = Geo()
-    # concourse (ground floor), deck slab, platforms and canopy over the elevated tracks
-    walls(g, ring, ground - 1.5, ground + 6.5, ground, PUBLIC, (200, 198, 190))
-    cap(g, rect, ground + 6.5, ROOF_FLAT, (150, 150, 146))
-    if deck is None:  # Shinkansen: concourse only; platforms / canopy are generated with the line
-        return [_named(g, ring, ground, 6.5, 431, name, "station", 2)]
-    deck = ground + deck
-    th = math.radians(hd)
-    fwd = (math.sin(th), math.cos(th))
-    # (walkable platforms and their canopies are generated with the line, see cell_detail)
-    # the building's solid volume is the concourse below the elevated platforms (which are walkable
-    # decks generated with the line): its height must stay below platform level
-    out = [_named(g, ring, ground, 6.5, 431, name, "station", 2)]
-    if big:  # the main station has a tall station building beside the tracks (department store + offices)
-        side = np.array([math.cos(th), -math.sin(th)])
+    walls(g, ring, ground - 1.5, ground + top, ground, PUBLIC, (200, 198, 190))
+    cap(g, rect, ground + top, ROOF_FLAT, (150, 150, 146))
+    out = [_named(g, ring, ground, top, 431, name, "station", 2)]
+    if big:
         c = np.array([x, y]) + side * 44
         trect = orient(affinity.rotate(sbox(c[0] - 22, c[1] - 60, c[0] + 22, c[1] + 60), -hd, origin=tuple(c)), 1.0)
         tring = np.asarray(trect.exterior.coords)
@@ -250,28 +256,41 @@ def _stadium(name, x, y, terrain):
     return [_named(g, np.asarray(ell.exterior.coords), ground, 24, 422, name, "stadium")]
 
 
-def _airport(terrain, spec: Spec):
-    (ax, ay), (bx, by), w = L.RUNWAY
+def _airport(terrain, spec: Spec, ap, ground_z):
+    (ax, ay), (bx, by), w = ap["runway"]
     rw = LineString([(ax, ay), (bx, by)])
     d = np.array([bx - ax, by - ay])
     Lr = np.linalg.norm(d)
     ux = d / Lr
     nx = np.array([-ux[1], ux[0]])
-    spec.runway = rw.buffer(w / 2, cap_style=2)
-    twy = LineString([(ax, ay) + nx * 190, (bx, by) + nx * 190])
+    tx, ty = ap["terminal"]
+    # the terminal side of the runway (the taxiway runs between them)
+    if float((np.array([tx, ty]) - np.array([ax, ay])) @ nx) < 0:
+        nx = -nx
+    big = ap["reclaimed"] is not None
+    tw = 190.0 if big else 150.0
+    runway = rw.buffer(w / 2, cap_style=2)
+    twy = LineString([(ax, ay) + nx * tw, (bx, by) + nx * tw])
     taxi = twy.buffer(12, cap_style=2)
     for t in (0.08, 0.35, 0.65, 0.92):
         p0 = np.array([ax, ay]) + d * t
-        taxi = taxi.union(LineString([p0, p0 + nx * 190]).buffer(11.5))
-    tx, ty = L.TERMINAL
+        taxi = taxi.union(LineString([p0, p0 + nx * tw]).buffer(11.5))
     along_t = float((np.array([tx, ty]) - np.array([ax, ay])) @ ux)
-    for s_ in (along_t - 200, along_t + 200):  # taxiway -> apron links
+    ap_w = 380.0 if big else 180.0
+    for s_ in (along_t - ap_w * 0.53, along_t + ap_w * 0.53):  # taxiway -> apron links
         p0 = np.array([ax, ay]) + ux * s_
-        taxi = taxi.union(LineString([p0 + nx * 190, p0 + nx * 300]).buffer(11.5))
-    apron = orient(affinity.rotate(sbox(tx - 380, ty - 90, tx + 380, ty + 70), math.degrees(math.atan2(ux[1], ux[0])), origin=(tx, ty)), 1.0)
-    spec.apron = unary_union([apron, taxi]).difference(spec.runway)
-    ap = Polygon(L.AIRPORT)
-    spec.grass = ap.difference(spec.apron).difference(spec.runway.buffer(1))
+        taxi = taxi.union(LineString([p0 + nx * tw, p0 + nx * (tw + 110)]).buffer(11.5))
+    ang = math.degrees(math.atan2(ux[1], ux[0]))
+    ac = np.array([ax, ay]) + ux * along_t + nx * (tw + 190)
+    apron = orient(affinity.rotate(sbox(ac[0] - ap_w, ac[1] - 80, ac[0] + ap_w, ac[1] + 80), ang, origin=tuple(ac)), 1.0)
+    spec.runway = runway if spec.runway is None else spec.runway.union(runway)
+    a_all = unary_union([apron, taxi]).difference(runway)
+    spec.apron = a_all if spec.apron is None else spec.apron.union(a_all)
+    field_ = rw.buffer(150, cap_style=2).union(Point(tx, ty).buffer(ap_w + 60))
+    if big:
+        field_ = field_.union(Polygon(ap["reclaimed"]))
+    g_ = field_.difference(a_all).difference(runway.buffer(1))
+    spec.grass = g_ if spec.grass is None else spec.grass.union(g_)
     marks = []
     s = 60.0
     while s < Lr - 60:  # centreline dashes
@@ -286,23 +305,27 @@ def _airport(terrain, spec: Spec):
             marks.append(LineString([p, p + ux * sgn * 30]).buffer(0.9, cap_style=2))
     for sn in (-1, 1):
         marks.append(LineString([np.array([ax, ay]) + nx * sn * (w / 2 - 1.5), np.array([bx, by]) + nx * sn * (w / 2 - 1.5)]).buffer(0.45, cap_style=2))
-    spec.marks = unary_union(marks)
+    m_ = unary_union(marks)
+    spec.marks = m_ if spec.marks is None else spec.marks.union(m_)
     out = []
     ground = float(terrain.sample(tx, ty))
     g = Geo()
-    ang = math.degrees(math.atan2(ux[1], ux[0]))
-    term = orient(affinity.rotate(sbox(tx - 160, ty + 70, tx + 160, ty + 130), ang, origin=(tx, ty)), 1.0)
-    walls(g, np.asarray(term.exterior.coords), ground - 1, ground + 22, ground, CURTAIN, (90, 120, 140))
-    cap(g, term, ground + 22, ROOF_METAL, (190, 194, 198))
-    out.append(_named(g, np.asarray(term.exterior.coords), ground, 22, 431, "千景空港ターミナル", "terminal", 4))
+    tc = ac + nx * (80 + (60 if big else 35))
+    th = 60 if big else 35
+    tl = 160 if big else 70
+    term = orient(affinity.rotate(sbox(tc[0] - tl, tc[1] - th / 2, tc[0] + tl, tc[1] + th / 2), ang, origin=tuple(tc)), 1.0)
+    walls(g, np.asarray(term.exterior.coords), ground - 1, ground + (22 if big else 12), ground, CURTAIN, (90, 120, 140))
+    cap(g, term, ground + (22 if big else 12), ROOF_METAL, (190, 194, 198))
+    out.append(_named(g, np.asarray(term.exterior.coords), ground, 22 if big else 12, 431, ap["name"] + "ターミナル", "terminal", 4 if big else 2))
     g2 = Geo()
-    ctx, cty = np.array([tx, ty]) + ux * 230 + nx * 120
-    cylinder(g2, (ctx, cty, ground - 1), 3.2, 52, PANEL, (220, 220, 216), ground, seg=12, top=False)
-    cylinder(g2, (ctx, cty, ground + 51), 6.5, 6, GLASS, (60, 90, 110), ground, seg=12)
-    out.append(_named(g2, np.asarray(Point(ctx, cty).buffer(6.5, 8).exterior.coords), ground, 58, 431, "管制塔", "control_tower", 12))
-    for k in range(3):  # hangars
+    ctx, cty = ac + ux * (ap_w * 0.6) + nx * 120
+    ht = 52 if big else 26
+    cylinder(g2, (ctx, cty, ground - 1), 3.2, ht, PANEL, (220, 220, 216), ground, seg=12, top=False)
+    cylinder(g2, (ctx, cty, ground + ht - 1), 6.5, 6, GLASS, (60, 90, 110), ground, seg=12)
+    out.append(_named(g2, np.asarray(Point(ctx, cty).buffer(6.5, 8).exterior.coords), ground, ht + 6, 431, "管制塔", "control_tower", 12))
+    for k in range(3 if big else 1):  # hangars
         g3 = Geo()
-        hx, hy = np.array([tx, ty]) - ux * (330 + k * 90) + nx * 40
+        hx, hy = ac - ux * (ap_w * 0.87 + k * 90) + nx * 40
         hg = orient(affinity.rotate(sbox(hx - 38, hy - 30, hx + 38, hy + 30), ang, origin=(hx, hy)), 1.0)
         walls(g3, np.asarray(hg.exterior.coords), ground - 1, ground + 20, ground, PLAIN, (200, 204, 208))
         cap(g3, hg, ground + 20, ROOF_METAL, (170, 175, 180))
@@ -310,17 +333,106 @@ def _airport(terrain, spec: Spec):
     return out
 
 
-def _ferry_terminal(terrain):
-    x, y = L.FERRY_TERMINAL
-    ground = float(terrain.sample(x, y))
+def _ferry_terminal(terrain, name, x, y, hd):
+    """Terminal building on the shore behind the pier root (away from the sea)."""
+    th = math.radians(hd)
+    back = -np.array([math.sin(th), math.cos(th)])
+    c = np.array([x, y]) + back * 45
+    ground = float(terrain.sample(*c))
     g = Geo()
-    b = orient(sbox(x - 40, y + 10, x + 40, y + 50), 1.0)
+    b = orient(affinity.rotate(sbox(c[0] - 40, c[1] - 20, c[0] + 40, c[1] + 20), -hd, origin=tuple(c)), 1.0)
     walls(g, np.asarray(b.exterior.coords), ground - 1, ground + 13, ground, PUBLIC, (214, 214, 208))
     cap(g, b, ground + 13, ROOF_METAL, (80, 120, 160))
-    return [_named(g, np.asarray(b.exterior.coords), ground, 13, 431, "千景港フェリーターミナル", "ferry_terminal", 2)]
+    return [_named(g, np.asarray(b.exterior.coords), ground, 13, 431, name + "フェリーターミナル", "ferry_terminal", 2)]
 
 
-def build_all(isl, terrain, rng) -> Spec:
+def _castle(name, x, y, terrain):
+    """Castle keep on a battered stone base: white plastered storeys under dark tiled roofs."""
+    ground = float(terrain.sample(x, y))
+    g = Geo()
+    base_top = ground + 11.0
+    s0 = 21.0
+    for k in range(6):  # battered stone base (steps)
+        s_ = s0 - k * 0.6
+        sq = orient(sbox(x - s_, y - s_ * 0.8, x + s_, y + s_ * 0.8), 1.0)
+        walls(g, np.asarray(sq.exterior.coords), ground - 1 + k * 2.0 - (1 if k == 0 else 0), ground + 1 + k * 2.0, ground, PLAIN,
+              (150, 146, 138))
+    cap(g, orient(sbox(x - s0 + 3.6, y - (s0 - 3.6) * 0.8, x + s0 - 3.6, y + (s0 - 3.6) * 0.8), 1.0), base_top, ROOF_FLAT, (160, 156, 148))
+    z = base_top
+    for tier in range(5):
+        hx = 15.0 - tier * 2.4
+        hy = hx * 0.8
+        sq = orient(sbox(x - hx, y - hy, x + hx, y + hy), 1.0)
+        th = 4.6 if tier < 4 else 4.0
+        walls(g, np.asarray(sq.exterior.coords), z, z + th, ground, TEMPLE, (240, 238, 232))
+        r = np.asarray(sq.exterior.coords)[:4]
+        pitched_roof(g, r, z + th, 30, 1.8, ROOF_TILE, (60, 64, 70), TEMPLE, (240, 238, 232), ground, hip=True)
+        z += th + 1.6
+    fp = np.asarray(orient(sbox(x - s0, y - s0 * 0.8, x + s0, y + s0 * 0.8), 1.0).exterior.coords)
+    return [_named(g, fp, ground, z - ground + 4, 454, name, "castle")]
+
+
+def _torii_path(name, x, y, terrain, hd=0.0, n=60, spacing=2.4):
+    """Shrine with a long tunnel of vermilion torii up the hillside behind it (generic design)."""
+    out = _shrine(name, x, y, terrain)
+    g = Geo()
+    th = math.radians(hd)
+    fwd = np.array([math.sin(th), math.cos(th)])
+    for k in range(n):
+        p = np.array([x, y]) + fwd * (20 + k * spacing)
+        gz = float(terrain.sample(*p))
+        _torii(g, p[0], p[1], hd, gz, 0.72)
+    fp = np.asarray(orient(sbox(x - 3, y + 18, x + 3, y + 20 + n * spacing), 1.0).exterior.coords) if hd == 0 else None
+    out.append(BuildingOut(g, Geo(), np.asarray([[x - 2.5, y + 18], [x + 2.5, y + 18], [x + 2.5, y + 19], [x - 2.5, y + 19]]),
+                           float(terrain.sample(x, y)), 5, 1, 454, "", "torii"))
+    return out
+
+
+def _lighthouse(name, x, y, terrain):
+    ground = float(terrain.sample(x, y))
+    g = Geo()
+    cylinder(g, (x, y, ground - 1), 3.2, 25, PLAIN, (240, 240, 236), ground, seg=16, top=False)
+    cylinder(g, (x, y, ground + 24), 3.8, 0.6, PLAIN, (60, 60, 60), ground, seg=16)
+    cylinder(g, (x, y, ground + 24.6), 2.2, 3.0, GLASS, (120, 150, 160), ground, seg=12, top=False)
+    box(g, (x, y, ground + 26.0), (0, 1), (0.5, 0.5, 0.5), LAMP, (255, 240, 200), ground)
+    cylinder(g, (x, y, ground + 27.6), 2.5, 1.2, METAL, (60, 70, 60), ground, seg=12)
+    return [_named(g, np.asarray(Point(x, y).buffer(3.2, 8).exterior.coords), ground, 29, 454, name, "lighthouse")]
+
+
+def _cranes(name, x, y, terrain, hd=80.0, n=4):
+    """Container gantry cranes along the quay (generic)."""
+    ground = float(terrain.sample(x, y))
+    g = Geo()
+    th = math.radians(hd)
+    fwd = np.array([math.sin(th), math.cos(th)])
+    side = np.array([math.cos(th), -math.sin(th)])
+    blue, white = (50, 110, 170), (230, 230, 226)
+    for k in range(n):
+        c = np.array([x, y]) + fwd * (k - (n - 1) / 2) * 70
+        for sg in (-1, 1):
+            for sf in (-1, 1):
+                p = c + side * 9 * sg + fwd * 8 * sf
+                box(g, (p[0], p[1], ground + 19), (float(fwd[0]), float(fwd[1])), (0.7, 0.7, 19), METAL, blue, ground)
+        for sf in (-1, 1):  # boom girders reaching over the water and back over the yard
+            a = c + fwd * 8 * sf - side * 30
+            b = c + fwd * 8 * sf + side * 50
+            beam(g, (a[0], a[1], ground + 38), (b[0], b[1], ground + 38), 1.6, METAL, white, ground)
+        box(g, (c[0], c[1], ground + 41), (float(fwd[0]), float(fwd[1])), (10, 9, 2.5), METAL, white, ground)
+    fp = np.asarray(orient(affinity.rotate(sbox(x - 12, y - n * 36, x + 12, y + n * 36), -hd, origin=(x, y)), 1.0).exterior.coords)
+    return [_named(g, fp, ground, 44, 441, name, "cranes")]
+
+
+def _hut(name, x, y, terrain):
+    ground = float(terrain.sample(x, y))
+    g = Geo()
+    b = orient(sbox(x - 14, y - 8, x + 14, y + 8), 1.0)
+    walls(g, np.asarray(b.exterior.coords), ground - 1, ground + 4.5, ground, WOODEN, (110, 86, 62))
+    pitched_roof(g, np.asarray(b.exterior.coords)[:4], ground + 4.5, 28, 0.9, ROOF_METAL, (130, 60, 50), WOODEN, (110, 86, 62), ground, hip=False)
+    return [_named(g, np.asarray(b.exterior.coords), ground, 9, 454, name, "hut")]
+
+
+def build_all(ctry, terrain, rng) -> Spec:
+    from .railgeom import rail_lines2d, rail_profile
     spec = Spec()
     t = L.LANDMARKS
     spec.buildings += _temple(t["temple"][0], t["temple"][1], t["temple"][2], terrain)
@@ -328,55 +440,70 @@ def build_all(isl, terrain, rng) -> Spec:
     spec.buildings += _tower(t["tower"][0], t["tower"][1], t["tower"][2], terrain)
     spec.buildings += _wheel(t["wheel"][0], t["wheel"][1], t["wheel"][2], terrain)
     spec.buildings += _stadium(t["stadium"][0], t["stadium"][1], t["stadium"][2], terrain)
-    spec.buildings += _airport(terrain, spec)
-    spec.buildings += _ferry_terminal(terrain)
-    # forest: the mountain district away from roads and the summit shrine
-    mnt = unary_union([Polygon(p).buffer(0) for n, s, p in L.DISTRICTS if s == "mountain"]).intersection(isl.land)
-    road_clear = unary_union([r.line.buffer(r.width / 2 + 4) for r in isl.net.roads if r.kind in ("mountain", "arterial")])
-    spec.forest = mnt.difference(road_clear).difference(Point(*t["shrine"][1:]).buffer(60)).difference(isl.river.poly.buffer(6))
-    spec.canopy = spec.forest.buffer(-6)
+    spec.buildings += _temple(t["old_temple"][0], t["old_temple"][1], t["old_temple"][2], terrain)
+    spec.buildings += _torii_path(t["torii_shrine"][0], t["torii_shrine"][1], t["torii_shrine"][2], terrain, hd=80.0)
+    spec.buildings += _castle(t["castle"][0], t["castle"][1], t["castle"][2], terrain)
+    spec.buildings += _shrine(t["onsen_shrine"][0], t["onsen_shrine"][1], t["onsen_shrine"][2], terrain)
+    spec.buildings += _shrine(t["south_shrine"][0], t["south_shrine"][1], t["south_shrine"][2], terrain)
+    spec.buildings += _lighthouse(t["lighthouse"][0], t["lighthouse"][1], t["lighthouse"][2], terrain)
+    spec.buildings += _cranes(t["port_cranes"][0], t["port_cranes"][1], t["port_cranes"][2], terrain)
+    spec.buildings += _hut(t["volcano_hut"][0], t["volcano_hut"][1], t["volcano_hut"][2], terrain)
+    for k, ap in enumerate(L.AIRPORTS):
+        spec.buildings += _airport(terrain, spec, ap, ctry.airport_z[k] if k < len(ctry.airport_z) else None)
+    for name, (x, y, hd) in L.PIERS.items():
+        if name != "台場":
+            spec.buildings += _ferry_terminal(terrain, name.replace("港", "港"), x, y, hd)
     spec.fields = Polygon()
-    # elevated rail (loop + branch + Shinkansen), smoothed
-    from scipy.ndimage import gaussian_filter1d
-    for pts, closed, kind, deck in ((L.RAIL_LOOP[:-1], True, "loop", RAIL_DECK), (L.RAIL_BRANCH, False, "branch", RAIL_DECK),
-                                    (L.SHINKANSEN, False, "shinkansen", L.SHINKANSEN_DECK)):
-        P = resample(chaikin(pts, 4, closed), 6.0)
-        if closed:
-            P = np.vstack([P, P[:1]])
-        gz = np.maximum(terrain.sample(P[:, 0], P[:, 1]), 2.0)
-        if kind == "shinkansen":
-            # grade-limited profile: bridges over low ground, tunnels through the mountain (max 2.5 %)
-            z = gz + deck
-            z = gaussian_filter1d(np.minimum(z, 80.0), 30, mode="nearest")
-            for k in range(1, len(z)):
-                z[k] = np.clip(z[k], z[k - 1] - 0.15, z[k - 1] + 0.15)
-            for k in range(len(z) - 2, -1, -1):
-                z[k] = np.clip(z[k], z[k + 1] - 0.15, z[k + 1] + 0.15)
-        else:
-            z = gaussian_filter1d(gz, 25, mode="wrap" if closed else "nearest") + deck
+    # rail lines (smoothed centre lines, grade-limited profiles with level stations)
+    lines = rail_lines2d()
+    st_all = stations_aligned(lines)
+    for li, ln in enumerate(L.RAIL_LINES):
+        P = lines[li]
+        ks = [k for (_, _, _, _, l2, k) in st_all if l2 == li]
+        z = rail_profile(P, ln["kind"], ln["closed"], terrain, ks, PLATFORM_LEN[li])
         spec.rails.append(np.column_stack([P, z]))
-        spec.rail_kinds.append(kind)
-    # stations snapped onto the smoothed lines: concourse (and the main station's tower) under the
-    # viaduct, walkable platform decks level with the line and following its curve
-    for si, (name, x, y, hd, li, k) in enumerate(stations_aligned([R[:, :2] for R in spec.rails])):
+        spec.rail_kinds.append(ln["kind"])
+        spec.tunnel_flags.append(_tunnels(P, z, terrain))
+    holes = []
+    for li, R in enumerate(spec.rails):
+        tun = spec.tunnel_flags[li]
+        _cut_for_rail(terrain, R, tun)
+        # the ground over the first metres inside each tunnel mouth is cut away (the portal wall
+        # stands at the mouth): where the natural surface would cross the tube
+        n = len(R)
+        for i in range(n):
+            if tun[i] and ((i > 0 and not tun[i - 1]) or (i + 1 < n and not tun[i + 1])):
+                dirn = 1 if (i > 0 and not tun[i - 1]) else -1
+                seg = [R[j, :2] for j in range(i, min(n, max(-1, i + dirn * 8)), dirn) if 0 <= j < n]
+                if len(seg) >= 2:
+                    holes.append(LineString(seg).buffer(7.5 if spec.rail_kinds[li] == "shinkansen" else 6.5, cap_style=2))
+    spec.portal_holes = unary_union(holes) if holes else Polygon()
+    # stations snapped onto the smoothed lines: concourse (and the main station's tower), walkable
+    # platform decks level with the line and following its curve
+    for si, (name, x, y, hd, li, k) in enumerate(st_all):
         R = spec.rails[li]
-        spec.buildings.extend(_station(name, x, y, hd, terrain, big=(si == 0), deck=None if li == 2 else RAIL_DECK))
+        kind = spec.rail_kinds[li]
+        ztop = float(R[k, 2]) + 1.1
+        spec.buildings.extend(_station(name, x, y, hd, terrain, big=(name == "千景中央駅"),
+                                       deck=None if kind == "shinkansen" else ztop - 1.1 - float(terrain.sample(x, y))))
         length = PLATFORM_LEN[li]
-        path = track_piece(R, k, length / 2, closed=(li == 0))
-        spec.platforms.append((x, y, hd, length, 5.0, float(R[k, 2]) + 1.1, li, name, path))
-    for x, y, hd in L.FERRY_PIERS:
+        path = track_piece(R, k, length / 2, closed=L.RAIL_LINES[li]["closed"])
+        spec.platforms.append((x, y, hd, length, 5.0, ztop, li, name, path))
+    for name, (x, y, hd) in L.PIERS.items():
         spec.piers.append((x, y, hd, 120.0))
-    # bridges: roads crossing the river (flat decks) and the bay bridge (arched)
-    for r in isl.net.roads:
-        for water, arch in ((isl.river.poly, False), (None, True)):
+    # bridges: roads crossing rivers (flat decks) and the capital's bay bridge (arched)
+    import shapely
+    water_all = unary_union([rv.poly for rv in ctry.rivers])
+    for r in ctry.net.roads:
+        for arch in (False, True):
             if arch:
                 if r.name not in L.BRIDGE_ROADS:
                     continue
-                seg = r.line.difference(isl.land.union(isl.islet).buffer(-2))
+                seg = r.line.difference(ctry.land.buffer(-2))
             else:
-                if not r.line.intersects(water):
+                if not r.line.intersects(water_all):
                     continue
-                seg = r.line.intersection(water.buffer(10))
+                seg = r.line.intersection(water_all.buffer(10))
             for part in getattr(seg, "geoms", [seg]):
                 if not isinstance(part, LineString) or part.length < 8:
                     continue
@@ -387,22 +514,24 @@ def build_all(isl, terrain, rng) -> Spec:
                     z0, z1 = max(z0, 2.5), max(z1, 2.5)
                 deck = part.buffer(r.width / 2, cap_style=2)
                 spec.bridges.append((deck, part, z0, z1, arch, r.width))
-    # seawalls: every coast except the beach
+    # seawalls: the capital's shores and the harbours (natural coasts elsewhere)
     beach = Polygon(L.BEACH).buffer(120)
-    for poly in (isl.land, isl.islet):
-        for p in parts(poly):
-            ring = LineString(p.exterior.coords)
-            g = ring.difference(beach)
-            for part in getattr(g, "geoms", [g]):
-                if isinstance(part, LineString) and part.length > 10:
-                    spec.quays.append(part)
-    # trees: street trees on wide roads, parks, temple, mountain road edges
-    carr = isl.net.carriage.buffer(0.4)
-    import shapely
-    shapely.prepare(carr)
-    for r in isl.net.roads:
+    harbours = unary_union([Point(x, y).buffer(700) for (x, y, hd) in L.PIERS.values()]
+                           + [box_(-4300, -3600, 4300, 3900)]
+                           + [Polygon(p).buffer(200) for n, s, p in L.DISTRICTS if s == "port"])
+    for poly in parts(ctry.land):
+        ring = LineString(poly.exterior.coords)
+        g = ring.intersection(harbours).difference(beach)
+        for part in getattr(g, "geoms", [g]):
+            if isinstance(part, LineString) and part.length > 10:
+                spec.quays.append(part)
+    # trees: street trees on wide roads, parks, temple / shrine groves
+    for r in ctry.net.roads:
         if r.sidewalk < 3.5:
             continue
+        nb = ctry.net.near(r.line, 30.0)
+        carr = unary_union([o.line.buffer(o.carriage / 2 + 0.4) for o in nb])
+        shapely.prepare(carr)
         L_ = r.line.length
         for side in (-1, 1):
             try:
@@ -423,11 +552,61 @@ def build_all(isl, terrain, rng) -> Spec:
             x, y = rng.uniform(minx, maxx), rng.uniform(miny, maxy)
             if P.contains(Point(x, y)):
                 spec.trees.append((x, y, rng.uniform(8, 16), rng.uniform(3, 5.5), 0))
-    tx, ty = t["temple"][1], t["temple"][2]
-    for _ in range(60):
-        a, rr = rng.uniform(0, 2 * math.pi), rng.uniform(40, 105)
-        spec.trees.append((tx + rr * math.cos(a), ty + rr * math.sin(a), rng.uniform(9, 17), rng.uniform(3, 5), 0))
+    for key, n_, r0, r1 in (("temple", 60, 40, 105), ("old_temple", 90, 45, 130), ("torii_shrine", 50, 25, 90),
+                            ("onsen_shrine", 30, 18, 50), ("south_shrine", 30, 18, 50), ("shrine", 25, 14, 40)):
+        tx, ty = t[key][1], t[key][2]
+        for _ in range(n_):
+            a, rr = rng.uniform(0, 2 * math.pi), rng.uniform(r0, r1)
+            spec.trees.append((tx + rr * math.cos(a), ty + rr * math.sin(a), rng.uniform(9, 20), rng.uniform(3, 5), 0))
     return spec
+
+
+def _tunnels(P, z, terrain, cover=9.0, min_run=6):
+    """Points in tunnel: the ground is at least `cover` m above the rail (short runs and gaps closed)."""
+    gz = terrain.sample(P[:, 0], P[:, 1])
+    t = gz > z + cover
+    # close short open gaps between tunnels, drop very short tunnels (they become cuttings)
+    from scipy.ndimage import binary_closing, binary_opening
+    t = binary_closing(t, structure=np.ones(min_run, bool))
+    t = binary_opening(t, structure=np.ones(min_run, bool))
+    return t
+
+
+def _cut_for_rail(terrain, R, tun, half=6.5, slope=1.4, chunk=160):
+    """Cuttings: where the line runs below the ground outside the tunnels, the ground is dug down to
+    the formation with side slopes (1 : 1/slope)."""
+    from .terrain import line_distance
+    Rs = terrain.RES
+    n = len(R)
+    gz = terrain.sample(R[:, 0], R[:, 1])
+    need = (~tun) & (gz > R[:, 2] - 0.8)
+    k = 0
+    while k < n - 1:
+        if not need[k]:
+            k += 1
+            continue
+        k1 = min(n, k + chunk)
+        P = R[max(0, k - 2):min(n, k1 + 2)]
+        x0b, y0b = P[:, 0].min(), P[:, 1].min()
+        x1b, y1b = P[:, 0].max(), P[:, 1].max()
+        pad = half + 40.0
+        i0 = max(0, int((y0b - pad - terrain.y0) / Rs))
+        i1 = min(terrain.ny, int((y1b + pad - terrain.y0) / Rs) + 2)
+        j0 = max(0, int((x0b - pad - terrain.x0) / Rs))
+        j1 = min(terrain.nx, int((x1b + pad - terrain.x0) / Rs) + 2)
+        wx0, wy0 = terrain.x0 + j0 * Rs, terrain.y0 + i0 * Rs
+        d, kk = line_distance(P[:, :2], (i1 - i0, j1 - j0), wx0, wy0, Rs)
+        kk = np.clip(kk, 0, len(P) - 1)
+        zr = P[kk, 2]
+        intun = tun[np.clip(kk + max(0, k - 2), 0, n - 1)]
+        win = terrain.h[i0:i1, j0:j1]
+        cut = zr - 0.3 + np.maximum(d - half, 0.0) * slope
+        terrain.h[i0:i1, j0:j1] = np.where((d < pad) & ~intun, np.minimum(win, cut), win).astype(np.float32)
+        k = k1
+
+
+def box_(x0, y0, x1, y1):
+    return sbox(x0, y0, x1, y1)
 
 
 # --------------------------------------------------------------------------------------------
@@ -440,7 +619,7 @@ def _dquad(geos, mat, P4, col=(255, 255, 255, 255)):
     geos.setdefault(mat, DGeo()).add(P, n / ln, None, col, [0, 1, 2, 0, 2, 3])
 
 
-def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra:
+def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> CellExtra:
     ex = CellExtra()
     clip = cpoly.buffer(2)
 
@@ -453,19 +632,38 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
         if clip.contains(Point(x, y)):
             cx, cy, cz = ground_c(x, y)
             ex.trees.append(((cx, cy, cz), h, r, k))
-    # --- river water surface ---
-    P = np.asarray(isl.river.center.coords)
-    W, Z = isl.river.widths, isl.river.water
-    for i in range(len(P) - 1):
-        seg = LineString(P[i:i + 2])
-        if not seg.intersects(clip):
+    # --- river water surfaces ---
+    for rv in isl.rivers:
+        if not rv.poly.intersects(clip):
             continue
-        a, b = P[i], P[i + 1]
-        d = (b - a) / max(np.linalg.norm(b - a), 1e-9)
-        nrm = np.array([-d[1], d[0]])
-        wa, wb = W[i] / 2 - 1, W[i + 1] / 2 - 1
-        q = [(a - nrm * wa, Z[i]), (b - nrm * wb, Z[i + 1]), (b + nrm * wb, Z[i + 1]), (a + nrm * wa, Z[i])]
-        _dquad(geos, "water", xf.p([[p[0], p[1], z] for p, z in q]))
+        P = np.asarray(rv.center.coords)
+        W, Z = rv.widths, rv.water
+        for i in range(len(P) - 1):
+            seg = LineString(P[i:i + 2])
+            if not seg.intersects(clip):
+                continue
+            a, b = P[i], P[i + 1]
+            d = (b - a) / max(np.linalg.norm(b - a), 1e-9)
+            nrm = np.array([-d[1], d[0]])
+            wa, wb = W[i] / 2 - 1, W[i + 1] / 2 - 1
+            q = [(a - nrm * wa, Z[i]), (b - nrm * wb, Z[i + 1]), (b + nrm * wb, Z[i + 1]), (a + nrm * wa, Z[i])]
+            _dquad(geos, "water", xf.p([[p[0], p[1], z] for p, z in q]))
+    # --- lake surfaces (triangulated polygon at the lake level) ---
+    for name, lvl, pp in L.LAKES:
+        lp = Polygon(pp)
+        if not lp.intersects(clip):
+            continue
+        lvl = getattr(isl.terrain, "lake_levels", {}).get(name, lvl)
+        part = lp.intersection(clip)
+        for pg in parts(part):
+            gg = Geo()
+            cap(gg, pg, lvl, 0, (255, 255, 255))
+            arr = gg.arrays()
+            if arr is None:
+                continue
+            pos, nrm_, col_, uv_, idx_ = arr
+            V = xf.p(pos)
+            geos.setdefault("water", DGeo()).add(V, xf.n(nrm_), None, (255, 255, 255, 255), idx_)
     # --- seawalls (vertical concrete + coping) ---
     for ql in spec.quays:
         if not ql.intersects(clip):
@@ -526,12 +724,13 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
                     B0 = xf.p([[base[0], base[1], za - 12]])[0]
                     _box_d(geos, "concrete", B0 + [0, 0, 30], (1.2, 1.2, 30))
     import shapely
-    carr_p = isl.net.carriage.intersection(clip.buffer(50))
+    carr_p = (rp if rp is not None else isl.net.polys(clip)).carriage.intersection(clip.buffer(50))
     shapely.prepare(carr_p)
     # --- station platforms (walkable) with canopies ---
-    for x, y, hd, length, width, ztop, kind_i, _name, path in spec.platforms:
+    for x, y, hd, length, width, ztop, line_i, _name, path in spec.platforms:
         if not clip.buffer(length).contains(Point(x, y)):
             continue
+        kind_i = 2 if L.RAIL_LINES[line_i]["kind"] == "shinkansen" else 0
         th = math.radians(hd)
         fwd = np.array([math.sin(th), math.cos(th)])
         side = np.array([math.cos(th), -math.sin(th)])
@@ -641,6 +840,7 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
     stations_xy = np.array([(p[0], p[1]) for p in spec.platforms], float)
     for ri, R in enumerate(spec.rails):
         shink = spec.rail_kinds[ri] == "shinkansen" if spec.rail_kinds else False
+        tun = spec.tunnel_flags[ri] if spec.tunnel_flags else np.zeros(len(R), bool)
         for i in range(len(R) - 1):
             a, b = R[i], R[i + 1]
             if not LineString([a[:2], b[:2]]).intersects(clip):
@@ -653,18 +853,28 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
             nrm = np.array([-d[1], d[0]])
             hw = 5.8 if shink else 5.0
             ga = ground_c(*a[:2])
-            if shink and ga[2] > xf.p([[a[0], a[1], a[2]]])[0][2] + 7.0:
-                # tunnel: a concrete tube around the track (seen from the train)
+            if tun[i]:
+                # tunnel: a concrete tube around the track (seen from the train), a portal at each end
                 ring_n = 10
                 A0 = xf.p([[a[0], a[1], a[2]]])[0]
                 B0 = xf.p([[b[0], b[1], b[2]]])[0]
                 nn = np.array([nrm[0], nrm[1], 0.0])
+                tw, th_ = (6.0, 7.0) if shink else (5.0, 6.2)
                 for k in range(ring_n):
                     t0, t1 = math.pi * k / ring_n, math.pi * (k + 1) / ring_n
-                    o0 = nn * math.cos(t0) * 6.0 + np.array([0, 0, math.sin(t0) * 7.0])
-                    o1 = nn * math.cos(t1) * 6.0 + np.array([0, 0, math.sin(t1) * 7.0])
+                    o0 = nn * math.cos(t0) * tw + np.array([0, 0, math.sin(t0) * th_])
+                    o1 = nn * math.cos(t1) * tw + np.array([0, 0, math.sin(t1) * th_])
                     _dquad(geos, "concrete", [A0 + o1, B0 + o1, B0 + o0, A0 + o0])
-                _dquad(geos, "ballast", [A0 - nn * 6, B0 - nn * 6, B0 + nn * 6, A0 + nn * 6])
+                _dquad(geos, "ballast", [A0 - nn * tw, B0 - nn * tw, B0 + nn * tw, A0 + nn * tw])
+                for off in ((-3.9, -2.4, 2.4, 3.9) if shink else (-3.2, -1.8, 1.8, 3.2)):
+                    pa, pb = a[:2] + nrm * off, b[:2] + nrm * off
+                    Ar = xf.p([[pa[0], pa[1], a[2] + 0.18]])[0]
+                    Br = xf.p([[pb[0], pb[1], b[2] + 0.18]])[0]
+                    o = np.array([nrm[0], nrm[1], 0]) * 0.04
+                    _dquad(geos, "metal", [Ar - o, Br - o, Br + o, Ar + o])
+                for end, P0, outward in ((i > 0 and not tun[i - 1], A0, -1.0), (i + 1 < len(tun) and not tun[i + 1], B0, 1.0)):
+                    if end:
+                        _portal(geos, P0, nn, np.array([d[0], d[1], 0.0]) * outward, tw, th_)
                 continue
             q = [(a[:2] - nrm * hw, a[2]), (b[:2] - nrm * hw, b[2]), (b[:2] + nrm * hw, b[2]), (a[:2] + nrm * hw, a[2])]
             V = xf.p([[p[0], p[1], z] for p, z in q])
@@ -683,9 +893,10 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos) -> CellExtra
             if i % 4 == 0 and not shapely.contains_xy(carr_p, a[0], a[1]):  # pier every ~24 m, never on a carriageway
                 g = ground_c(*a[:2])
                 top = xf.p([[a[0], a[1], a[2] - 1.4]])[0]
-                _box_d(geos, "concrete", np.array([top[0], top[1], (top[2] + g[2]) / 2]), (1.1, 1.1, max(0.5, (top[2] - g[2]) / 2)))
-    # --- mountain forest canopy (bumpy crown surface over the forest) ---
-    if spec.canopy is not None and not spec.canopy.is_empty and spec.canopy.intersects(clip):
+                if top[2] - g[2] > 1.2:
+                    _box_d(geos, "concrete", np.array([top[0], top[1], (top[2] + g[2]) / 2]), (1.1, 1.1, (top[2] - g[2]) / 2))
+    # --- forest canopy: built by the client from the cell's land-cover map (see cook_country.py) ---
+    if False:
         region = spec.canopy.intersection(clip)
         import shapely
         shapely.prepare(region)
@@ -817,6 +1028,37 @@ def _catenary(geos, xf, a, b, d, nrm, i, hw, shink, stations_xy):
         _wire(geos, bot, arm_end, 0.02, steel)
 
 
+def _portal(geos, P0, nn, out, tw, th_):
+    """Tunnel portal: a concrete wall across the track with the arch opening, facing out along the track."""
+    W, H = tw + 3.0, th_ + 3.5
+    up = np.array([0.0, 0.0, 1.0])
+    ring = [nn * math.cos(math.pi * k / 10) * tw + up * math.sin(math.pi * k / 10) * th_ for k in range(11)]
+
+    def rect_pt(v):
+        """Where the ray from the rail centre through v meets the wall's outline (sides +-W, top H)."""
+        x, z = float(v @ nn), float(v[2])
+        t = min(W / abs(x) if abs(x) > 1e-6 else 1e9, H / z if z > 1e-6 else 1e9)
+        return nn * x * t + up * z * t, (abs(abs(x) * t - W) < 1e-6)
+
+    def face(Q):
+        n_ = np.cross(Q[1] - Q[0], Q[2] - Q[0])
+        return Q if float(n_ @ out) > 0 else Q[::-1]
+
+    for k in range(10):
+        a, b = ring[k], ring[k + 1]
+        (A2, a_side), (B2, b_side) = rect_pt(a), rect_pt(b)
+        if a_side != b_side:  # the outline turns a corner between the two rays
+            corner = nn * (W if float(a @ nn) + float(b @ nn) > 0 else -W) + up * H
+            for tri in ([P0 + a, P0 + b, P0 + corner], [P0 + a, P0 + corner, P0 + A2], [P0 + b, P0 + B2, P0 + corner]):
+                T = face(tri)
+                _dquad(geos, "concrete", [T[0], T[1], T[2], T[2]])
+            continue
+        Q = face([P0 + a, P0 + b, P0 + B2, P0 + A2])
+        _dquad(geos, "concrete", Q)
+    C0, C1 = P0 - nn * (W + 0.3) + up * H, P0 + nn * (W + 0.3) + up * H
+    _dquad(geos, "concrete", face([C0, C1, C1 + up * 0.6, C0 + up * 0.6]))
+
+
 def _box_d(geos, mat, c, hs):
     c = np.asarray(c, float)
     hx, hy, hz = hs
@@ -835,44 +1077,61 @@ def _box_d(geos, mat, c, hs):
             geos.setdefault(mat, DGeo()).add(np.array(P), n, None, (255, 255, 255, 255), [0, 1, 2, 0, 2, 3])
 
 
+def airport_layout(ap):
+    """Key points of an airport's layout (shared by the geometry and the client's taxi network)."""
+    (ax, ay), (bx, by), w = ap["runway"]
+    A, B = np.array([ax, ay], float), np.array([bx, by], float)
+    dv = B - A
+    ux = dv / np.linalg.norm(dv)
+    nx = np.array([-ux[1], ux[0]])
+    T = np.array(ap["terminal"], float)
+    if float((T - A) @ nx) < 0:
+        nx = -nx
+    big = ap["reclaimed"] is not None
+    tw = 190.0 if big else 150.0
+    ap_w = 380.0 if big else 180.0
+    at = float((T - A) @ ux)
+    return dict(A=A, B=B, dv=dv, ux=ux, nx=nx, tw=tw, ap_w=ap_w, at=at, big=big, w=w)
+
+
 def write_extra(spec: Spec, out: str, fi) -> None:
-    """rail.txt: the loop line and branch (for trains), stations; transport.txt: airport / ferry."""
+    """rail.txt: lines (with names) and stations; transport.txt: airports, piers and ferry routes."""
     with open(os.path.join(out, "rail.txt"), "w", encoding="utf-8") as f:
-        f.write("# rail polylines (lat lon z) of the fictional island's lines\n")
+        f.write("# rail polylines (lat lon z) of the fictional country's lines: line <i> <kind> <n> <name>|<english>\n")
         for k, R in enumerate(spec.rails):
-            f.write(f"line {k} {spec.rail_kinds[k]} {len(R)}\n")
+            ln = L.RAIL_LINES[k]
+            f.write(f"line {k} {spec.rail_kinds[k]} {len(R)} {ln['name']}|{ln['name_en']}\n")
             for x, y, z in R:
                 la, lo = fi.to_geodetic(x, y)
                 f.write(f"{la:.8f} {lo:.8f} {z:.2f}\n")
         for x, y, hd, length, width, ztop, kind_i, name, _path in spec.platforms:
             la, lo = fi.to_geodetic(x, y)
             f.write(f"station {kind_i} {la:.8f} {lo:.8f} {hd} {ztop:.2f} {name}\n")
+        for key, (kana, roman) in L.READINGS.items():
+            f.write(f"reading {key} {kana} {roman}\n")
+    g2 = lambda p: "%.8f %.8f" % fi.to_geodetic(float(p[0]), float(p[1]))  # noqa: E731
     with open(os.path.join(out, "transport.txt"), "w", encoding="utf-8") as f:
-        (ax, ay), (bx, by), w = L.RUNWAY
-        la0, lo0 = fi.to_geodetic(ax, ay)
-        la1, lo1 = fi.to_geodetic(bx, by)
-        f.write(f"runway {la0:.8f} {lo0:.8f} {la1:.8f} {lo1:.8f} {w}\n")
-        # taxi network (island metres -> geodetic): parallel taxiway, runway connectors, apron links,
-        # apron taxilane and the gate stands in front of the terminal (nose towards the building)
-        A, B = np.array([ax, ay], float), np.array([bx, by], float)
-        dv = B - A
-        ux_ = dv / np.linalg.norm(dv)
-        nx_ = np.array([-ux_[1], ux_[0]])
-        T = np.array(L.TERMINAL, float)
-        at = float((T - A) @ ux_)
-        g2 = lambda p: "%.8f %.8f" % fi.to_geodetic(float(p[0]), float(p[1]))
-        f.write(f"taxiway {g2(A + nx_ * 190)} {g2(B + nx_ * 190)}\n")
-        for t in (0.08, 0.35, 0.65, 0.92):
-            f.write(f"connector {g2(A + dv * t)} {g2(A + dv * t + nx_ * 190)}\n")
-        for s_ in (at - 200, at + 200):
-            f.write(f"apronlink {g2(A + ux_ * s_ + nx_ * 190)} {g2(A + ux_ * s_ + nx_ * 330)}\n")
-        f.write(f"apronlane {g2(A + ux_ * (at - 360) + nx_ * 330)} {g2(A + ux_ * (at + 360) + nx_ * 330)}\n")
-        hd_stand = math.degrees(math.atan2(nx_[0], nx_[1])) % 360
-        for s_ in (-300, -180, -60, 60, 180, 300):
-            f.write(f"stand {g2(A + ux_ * (at + s_) + nx_ * 398)} {hd_stand:.1f}\n")
-        f.write(f"terminal {g2(T)}\n")
-        for x, y, hd in L.FERRY_PIERS:
+        for apd in L.AIRPORTS:
+            a = airport_layout(apd)
+            A, B, dv, ux, nx, tw, ap_w, at = a["A"], a["B"], a["dv"], a["ux"], a["nx"], a["tw"], a["ap_w"], a["at"]
+            f.write(f"airport {apd['name']}|{apd['name_en']}\n")
+            f.write(f"runway {g2(A)} {g2(B)} {a['w']}\n")
+            # taxi network: parallel taxiway, runway connectors, apron links, apron taxilane and the gate
+            # stands in front of the terminal (nose towards the building)
+            f.write(f"taxiway {g2(A + nx * tw)} {g2(B + nx * tw)}\n")
+            for t in (0.08, 0.35, 0.65, 0.92):
+                f.write(f"connector {g2(A + dv * t)} {g2(A + dv * t + nx * tw)}\n")
+            for s_ in (at - ap_w * 0.53, at + ap_w * 0.53):
+                f.write(f"apronlink {g2(A + ux * s_ + nx * tw)} {g2(A + ux * s_ + nx * (tw + 140))}\n")
+            f.write(f"apronlane {g2(A + ux * (at - ap_w * 0.95) + nx * (tw + 140))} {g2(A + ux * (at + ap_w * 0.95) + nx * (tw + 140))}\n")
+            hd_stand = math.degrees(math.atan2(nx[0], nx[1])) % 360
+            offs = (-300, -180, -60, 60, 180, 300) if a["big"] else (-60, 60)
+            for s_ in offs:
+                f.write(f"stand {g2(A + ux * (at + s_) + nx * (tw + 208))} {hd_stand:.1f}\n")
+            tc = A + ux * at + nx * (tw + 190 + 80 + (30 if a["big"] else 17.5))
+            f.write(f"terminal {g2(tc)}\n")
+        for name, (x, y, hd) in L.PIERS.items():
             la, lo = fi.to_geodetic(x, y)
-            f.write(f"pier {la:.8f} {lo:.8f} {hd}\n")
-        for k, route in enumerate(L.FERRY_ROUTES):
-            f.write(f"ferry {k} " + " ".join("%.8f,%.8f" % fi.to_geodetic(x, y) for x, y in route) + "\n")
+            f.write(f"pier {la:.8f} {lo:.8f} {hd} {name}\n")
+        for k, (a_, b_, kind, route) in enumerate(L.FERRY_ROUTES):
+            f.write(f"ferry {k} {kind} {a_}|{b_} " + " ".join("%.8f,%.8f" % fi.to_geodetic(x, y) for x, y in route) + "\n")

@@ -21,7 +21,6 @@ const ShipClass kClasses[2] = {
     {62.0f, 13.0f, 3.2f, 6.1f, 5.7f, -26.0f, 14.0f, 4.2f, -14.0f, 8.0f},
     {110.0f, 20.0f, 5.5f, 11.3f, 9.2f, -44.0f, 26.0f, 7.0f, -28.0f, 16.0f},
 };
-double cruiseOf(int cls) { return cls == 0 ? 8.5 : 10.5; }  // 16.5 / 20 knots
 }  // namespace
 
 const ShipClass& Ferries::shipClass(int cls) { return kClasses[std::clamp(cls, 0, 1)]; }
@@ -41,6 +40,8 @@ bool Ferries::load(const std::filesystem::path& transport, std::string& err) {
     if (k == "pier") {
       Pier p;
       ls >> p.geo.lat_deg >> p.geo.lon_deg >> p.heading;
+      std::getline(ls, p.name);
+      p.name.erase(0, p.name.find_first_not_of(' '));
       p.geo.h_ellipsoidal_m = 0;
       piers_.push_back(p);
     } else if (k == "ferry") {
@@ -51,6 +52,7 @@ bool Ferries::load(const std::filesystem::path& transport, std::string& err) {
       while (ls >> tok) {
         rj::geo::Geodetic g{};
         if (std::sscanf(tok.c_str(), "%lf,%lf", &g.lat_deg, &g.lon_deg) == 2) r.via.push_back(g);
+        else if (tok == "short" || tok == "jet" || tok == "car") r.kind = tok;  // (the "from|to" names token is skipped)
       }
       if (r.via.size() >= 2) routes_.push_back(r);
     }
@@ -82,14 +84,20 @@ void Ferries::place(const World& world) {
   const bool first = !placed_;
   if (first) {
     int id = 1;
-    for (int r = 0; r < static_cast<int>(routes_.size()) && r < 2; ++r) {
+    for (int r = 0; r < static_cast<int>(routes_.size()); ++r) {
       Ferry f;
       f.id = id++;
       f.route = r;
-      f.cls = r == 0 ? 0 : 1;
+      const std::string& kind = routes_[static_cast<size_t>(r)].kind;
+      // service speeds (game values): harbour ferry 16.5 kn, high-speed ferry 35 kn, car ferry 22 kn
+      f.cls = kind == "car" ? 1 : 0;
+      f.cruise = kind == "jet" ? 18.0 : kind == "car" ? 11.3 : 8.5;
+      // older single-island files: the second route was the car ferry
+      if (routes_.size() == 2 && r == 1 && kind == "short") f.cls = 1, f.cruise = 10.5;
       ships_.push_back(f);
     }
   }
+  for (auto& p : piers_) p.ships = 0;
   for (auto& f : ships_) {
     const Route& R = routes_[static_cast<size_t>(f.route)];
     std::vector<rj::geo::Vec3d> via;
@@ -98,6 +106,9 @@ void Ferries::place(const World& world) {
     f.pier_b = nearestPier(via.back(), 400.0);
     if (f.pier_b == f.pier_a) f.pier_b = -1;
     if (f.pier_a < 0) continue;
+    // each ship calling at a pier takes the next free side of it
+    f.side_a = piers_[static_cast<size_t>(f.pier_a)].ships++ % 2 == 0 ? 1 : -1;
+    if (f.pier_b >= 0) f.side_b = piers_[static_cast<size_t>(f.pier_b)].ships++ % 2 == 0 ? -1 : 1;
     const ShipClass& C = shipClass(f.cls);
     auto berthAt = [&](int pier, int side, rj::geo::Vec3d& at, rj::geo::Vec3d& out) {
       const Pier& P = piers_[static_cast<size_t>(pier)];
@@ -109,13 +120,13 @@ void Ferries::place(const World& world) {
     };
     f.path.clear();
     rj::geo::Vec3d atA, outA;
-    berthAt(f.pier_a, f.route == 0 ? 1 : -1, atA, outA);
+    berthAt(f.pier_a, f.side_a, atA, outA);
     f.path.push_back(atA);
     f.path.push_back(outA);
     for (size_t i = 1; i + 1 < via.size(); ++i) f.path.push_back({via[i].x, via[i].y, atA.z});
     if (f.pier_b >= 0) {
       rj::geo::Vec3d atB, outB;
-      berthAt(f.pier_b, -1, atB, outB);
+      berthAt(f.pier_b, f.side_b, atB, outB);
       f.path.push_back(outB);
       f.path.push_back(atB);
     } else {  // towards the mainland: continue well beyond the last point, out of sight
@@ -211,13 +222,13 @@ void Ferries::update(double dt, double t_s, float wind) {
       }
       case Ferry::Phase::Under: {
         const bool pier_end = f.dir > 0 ? f.pier_b >= 0 : true;
-        double vmax = cruiseOf(f.cls);
+        double vmax = f.cruise;
         if (pier_end) {
-          vmax = std::min(vmax, 0.5 + std::sqrt(2.0 * 0.1 * std::max(0.0, remain - 0.5)));  // come alongside gently
+          vmax = std::min(vmax, 0.5 + std::sqrt(2.0 * (f.cruise > 15.0 ? 0.3 : 0.1) * std::max(0.0, remain - 0.5)));  // come alongside gently
           if (remain < 420.0) vmax = std::min(vmax, 3.0);
         }
         if (q < 200.0) vmax = std::min(vmax, 3.0);  // harbour speed
-        const double acc = f.v < vmax ? 0.12 : -0.18;
+        const double acc = f.v < vmax ? (f.cruise > 15.0 ? 0.35 : 0.12) : -(f.cruise > 15.0 ? 0.45 : 0.18);
         f.v = acc > 0 ? std::min(vmax, f.v + acc * dt) : std::max(vmax, f.v + acc * dt);
         advance(f.v);
         // heading follows the course ahead (turn rate limited)
@@ -259,7 +270,7 @@ void Ferries::update(double dt, double t_s, float wind) {
     f.heave = static_cast<float>(0.25 * k * std::sin(0.55 * t_s + f.id));
     f.pitch = static_cast<float>(0.9 * kDeg * k * std::sin(0.42 * t_s + 1.3 * f.id));
     f.roll = static_cast<float>(1.8 * kDeg * k * std::sin(0.31 * t_s + 0.7 * f.id));
-    f.wake = static_cast<float>(std::clamp(std::fabs(f.v) / cruiseOf(f.cls), 0.0, 1.0));
+    f.wake = static_cast<float>(std::clamp(std::fabs(f.v) / std::min(f.cruise, 11.0), 0.0, 1.0));
     // wake trail from the stern
     const rj::geo::Vec3d stern{f.pos.x - std::sin(f.yaw) * C.length * 0.5, f.pos.y - std::cos(f.yaw) * C.length * 0.5, f.pos.z};
     if (f.phase == Ferry::Phase::Offmap) {

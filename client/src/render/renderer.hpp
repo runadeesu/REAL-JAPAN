@@ -45,6 +45,7 @@ struct Lighting {
   Vector3 ambient_sky{0.3f, 0.36f, 0.46f};
   Vector3 ambient_ground{0.16f, 0.15f, 0.13f};
   float fog_density = 0.0004f;
+  float fog_far = 0.00003f;  // the weather's own haze (far view)
   float cloud_cover = 0.2f;
   Vector2 cloud_offset{0, 0};
   float wetness = 0.0f;
@@ -98,6 +99,21 @@ class Renderer {
   void renderMirror(const Camera3D& rear, const Lighting& L, float time_s, const std::function<void()>& scene);
   void invalidateMirror() { mirror_ok_ = false; }
   void setLights(const std::vector<PointLight>& lights);
+  // Fictional country: snow-potential map (tex.id 0: none) with its raylib (x, z) -> uv mapping, and
+  // the season (lying snow 0..1, rice paddies 0..3, leaves 0..2; see the lit shader)
+  // Far view beyond the streamed cells (drawn first, in its own depth range; see App::renderScene)
+  void drawCellSeas(const World& world);  // sea surfaces of the streamed cells (with the far view)
+  void drawFarView(const class FarView& far, const World& world, const Camera3D& cam, float sea_y, float fog_density);
+  void setSnowMap(Texture2D tex, Vector3 u, Vector3 v) {
+    snow_tex_ = tex;
+    snow_u_ = u;
+    snow_v_ = v;
+  }
+  void setSeason(float snow, float crop, float leaf) {
+    season_snow_ = snow;
+    season_crop_ = crop;
+    season_leaf_ = leaf;
+  }
   // neutral_floor: flat stand-in plane outside data coverage (off underground, where it would cut through).
   void drawWorld(const Camera3D& cam, const World& world, bool photo_textures, bool neutral_floor = true);
   void drawMeshMat(const Mesh& m, const Matrix& model, int material, Color tint, Vector3 emissive = {0, 0, 0});
@@ -150,6 +166,7 @@ class Renderer {
 
   float exposure() const { return exposure_; }
   void setExposureOverride(float e) { exposure_override_ = e; }
+  static void clearDepth();  // depth only (between the far view and the near scene)
   static void setClipPlanes(float near_m, float far_m);
   int drawCalls() const { return draw_calls_; }
   long long triangles() const { return triangles_; }
@@ -199,6 +216,9 @@ class Renderer {
   int tw_ = 0, th_ = 0;
   bool post_active_ = false;
   RenderOptions opt_{};
+  Texture2D snow_tex_{};
+  Vector3 snow_u_{0, 0, 0}, snow_v_{0, 0, 0};
+  float season_snow_ = 0.0f, season_crop_ = 2.0f, season_leaf_ = 0.0f;
   float exposure_ = 1.0f;
   float exposure_override_ = 0.0f;
   int frame_ = 0;

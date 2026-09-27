@@ -11,7 +11,7 @@ namespace rjc {
 
 struct Settings {
   std::string language = "ja";
-  std::string world = "island";  // "island" (千景島, fictional) or "shibuya" (real PLATEAU slice)
+  std::string world = "country";  // "country" (秋津国, fictional) or "shibuya" (real PLATEAU slice)
   int width = 1600;
   int height = 900;
   bool fullscreen = false;

@@ -1,8 +1,10 @@
 #pragma once
-// Trains on the fictional island's lines (data/world/island/rail.txt): the elevated loop line, the
-// branch line and the Shinkansen. Headway operation (no published timetable: it is a fictional
-// railway) with realistic acceleration, braking to the platform stop mark and dwell times.
-// The player enters a station through the gates, boards a stopped train, rides and alights.
+// Trains on the fictional country's lines (data/world/country/rail.txt): the capital's elevated
+// loop line, the conventional main line and the Shinkansen lines. Headway operation (no published
+// timetable: it is a fictional railway) with realistic acceleration, braking to the platform stop
+// mark, speed limits on curves (from the track's curvature) and dwell times; trains reverse at the
+// ends of their lines. The player enters a station through the gates, boards a stopped train,
+// rides and alights.
 
 #include <algorithm>
 #include <filesystem>
@@ -20,10 +22,14 @@ enum class LineKind : int { Loop = 0, Branch = 1, Shinkansen = 2 };
 struct RailLine {
   LineKind kind = LineKind::Loop;
   bool closed = false;
+  std::string name, name_en;           // e.g. 秋津新幹線 / Akitsu Shinkansen
   std::vector<rj::geo::Geodetic> geo;  // rail level (h = height above sea)
   std::vector<rj::geo::Vec3d> pts;     // origin ENU
   std::vector<double> cum;
   double length = 0;
+  // speed limits: per point from the curve radius (v = sqrt(a * R)), and the braking envelopes a
+  // train running along (+) / against (-) the polyline must stay under to meet them
+  std::vector<double> vlim, env_fwd, env_bwd;
 };
 
 struct Station {
@@ -49,8 +55,8 @@ struct Train {
   int cars = 10;
   double car_len = 20.0;
   double vmax = 22.0;
-  double hold = 0;      // turnaround / off-map wait
-  bool offmap = false;  // Shinkansen beyond the island (towards the mainland)
+  double hold = 0;      // turnaround wait at the end of the line
+  bool offmap = false;  // (unused in the country: every line ends at a station on the map)
   bool manual = false;  // driven by the player (notches), with an ATS-style safety brake
   int notch = 0;        // -8 emergency, -7..-1 brake, 0 coast, 1..5 power
 };
@@ -75,6 +81,8 @@ class Trains {
   int stationNear(const rj::geo::Vec3d& p, double r) const;  // by platform centre, any height
   int trainStoppedAt(int station) const;                      // train id or -1
   std::string destination(const Train& t) const;
+  // speed limit (m/s) for a train at s running in direction dir (curves ahead included)
+  double speedCap(const Train& t) const;
   int nextStation(const Train& t) const { return t.next_stop; }
   // player driving
   void setManual(int id, bool on);

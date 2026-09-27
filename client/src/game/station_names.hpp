@@ -1,26 +1,26 @@
 #pragma once
-// Readings of the fictional island's station names (for the station name boards). The names are
-// invented for this game; the readings are ours.
+// Readings of the fictional country's station and place names (for the station name boards and
+// the car displays). The names are invented for this game; the readings come with the world data
+// ("reading <name> <kana> <roman>" lines in rail.txt / client.txt).
 
+#include <map>
 #include <string>
 
 namespace rjc {
 
 struct StationReading {
-  const char* name;   // base name as it appears before 駅 in rail.txt
-  const char* kana;
-  const char* roman;
+  std::string name;   // base name as it appears before 駅 in rail.txt
+  std::string kana;
+  std::string roman;
 };
 
-inline const StationReading* stationReading(const std::string& full) {
-  static const StationReading kR[] = {
-      {"千景中央", "ちかげちゅうおう", "Chikage-Chuo"}, {"天望台", "てんぼうだい", "Tembodai"}, {"古市", "ふるいち", "Furuichi"},
-      {"臨海", "りんかい", "Rinkai"},                 {"西ヶ丘", "にしがおか", "Nishigaoka"}, {"山麓", "さんろく", "Sanroku"},
-      {"千景北", "ちかげきた", "Chikage-Kita"},
-  };
-  for (const auto& r : kR)
-    if (full.rfind(r.name, 0) == 0) return &r;
-  return nullptr;
+inline std::map<std::string, StationReading>& stationReadings() {
+  static std::map<std::string, StationReading> m;
+  return m;
+}
+
+inline void addStationReading(const std::string& name, const std::string& kana, const std::string& roman) {
+  stationReadings()[name] = StationReading{name, kana, roman};
 }
 
 // "千景中央駅（新幹線）" -> "千景中央"
@@ -31,6 +31,18 @@ inline std::string stationBaseName(const std::string& full) {
   const std::string eki = "駅";
   if (s.size() >= eki.size() && s.compare(s.size() - eki.size(), eki.size(), eki) == 0) s.resize(s.size() - eki.size());
   return s;
+}
+
+// The reading of a station's base name (exact match, else the longest known name it starts with).
+inline const StationReading* stationReading(const std::string& full) {
+  const std::string base = stationBaseName(full);
+  const auto& m = stationReadings();
+  auto it = m.find(base);
+  if (it != m.end()) return &it->second;
+  const StationReading* best = nullptr;
+  for (const auto& [k, r] : m)
+    if (base.rfind(k, 0) == 0 && (!best || k.size() > best->name.size())) best = &r;
+  return best;
 }
 
 }  // namespace rjc

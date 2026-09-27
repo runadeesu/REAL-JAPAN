@@ -4,6 +4,7 @@
 #include <cmath>
 #include <sstream>
 
+#include "game/station_names.hpp"
 #include "platform/paths.hpp"
 #include "world/world.hpp"
 
@@ -32,6 +33,12 @@ bool Trains::load(const std::filesystem::path& file, std::string& err) {
       RailLine L;
       L.kind = kind == "shinkansen" ? LineKind::Shinkansen : kind == "branch" ? LineKind::Branch : LineKind::Loop;
       L.closed = L.kind == LineKind::Loop;
+      std::string names;
+      std::getline(ls, names);  // "<name>|<english>" (optional)
+      names.erase(0, names.find_first_not_of(' '));
+      const auto bar = names.find('|');
+      L.name = names.substr(0, bar);
+      if (bar != std::string::npos) L.name_en = names.substr(bar + 1);
       for (int i = 0; i < n && std::getline(in, line); ++i) {
         std::istringstream ps(line);
         double la, lo, z;
@@ -47,6 +54,12 @@ bool Trains::load(const std::filesystem::path& file, std::string& err) {
       st.name.erase(0, st.name.find_first_not_of(' '));
       st.geo = {la, lo, st.ztop_h};
       stations_.push_back(st);
+    } else if (k == "reading") {
+      std::string name, kana, roman;
+      ls >> name >> kana;
+      std::getline(ls, roman);
+      roman.erase(0, roman.find_first_not_of(' '));
+      if (!name.empty() && !kana.empty()) addStationReading(name, kana, roman);
     }
   }
   if (lines_.empty()) {
@@ -114,6 +127,35 @@ void Trains::place(const World& world) {
       L.cum.push_back(acc);
     }
     L.length = acc;
+    // curve speed limits: radius from the heading change over +-30 m; a = 2.0 m/s^2 in total
+    // (mostly balanced by the track's cant), capped by the line's top speed
+    const size_t n = L.pts.size();
+    const double vtop = L.kind == LineKind::Shinkansen ? 83.3 : L.kind == LineKind::Branch ? 33.3 : 25.0;
+    L.vlim.assign(n, vtop);
+    for (size_t i = 0; i < n; ++i) {
+      size_t a = i, b = i;
+      while (a > 0 && L.cum[i] - L.cum[a] < 30.0) --a;
+      while (b + 1 < n && L.cum[b] - L.cum[i] < 30.0) ++b;
+      if (a == i || b == i || a + 1 >= n || b < 1) continue;
+      const double h0 = std::atan2(L.pts[a + 1].x - L.pts[a].x, L.pts[a + 1].y - L.pts[a].y);
+      const double h1 = std::atan2(L.pts[b].x - L.pts[b - 1].x, L.pts[b].y - L.pts[b - 1].y);
+      double dh = std::fabs(std::remainder(h1 - h0, 2.0 * kPi));
+      const double ds = std::max(1.0, L.cum[b] - L.cum[a]);
+      if (dh < 1e-4) continue;
+      const double R = ds / dh;
+      L.vlim[i] = std::min(vtop, std::max(8.0, std::sqrt(2.0 * R)));
+    }
+    const double brake = L.kind == LineKind::Shinkansen ? 0.8 : 1.0;
+    L.env_fwd = L.vlim;
+    L.env_bwd = L.vlim;
+    for (size_t i = n - 1; i-- > 0;) {
+      const double ds = L.cum[i + 1] - L.cum[i];
+      L.env_fwd[i] = std::min(L.env_fwd[i], std::sqrt(L.env_fwd[i + 1] * L.env_fwd[i + 1] + 2.0 * brake * ds));
+    }
+    for (size_t i = 1; i < n; ++i) {
+      const double ds = L.cum[i] - L.cum[i - 1];
+      L.env_bwd[i] = std::min(L.env_bwd[i], std::sqrt(L.env_bwd[i - 1] * L.env_bwd[i - 1] + 2.0 * brake * ds));
+    }
   }
   for (auto& st : stations_) {
     st.pos = world.toLocal(st.geo);
@@ -154,29 +196,36 @@ void Trains::place(const World& world) {
         mk(1, L.length * (k + 0.15) / 3.0, 10, 20.0, 25.0);
         mk(-1, L.length * (k + 0.65) / 3.0, 10, 20.0, 25.0);
       }
-    } else if (L.kind == LineKind::Branch) {
-      mk(1, 220.0, 6, 20.0, 22.0);
-      mk(-1, L.length - 20.0, 6, 20.0, 22.0);
     } else {
-      mk(1, 205.0, 8, 25.0, 75.0);            // departing the terminal
-      mk(-1, L.length - 10.0, 8, 25.0, 75.0);  // arriving from the mainland
+      // trains spread along the line in both directions (about one every 12 km each way on the
+      // main line, every 20 km on the Shinkansen), the first of each direction at its terminal
+      const bool sk = L.kind == LineKind::Shinkansen;
+      const int cars = sk ? 8 : 6;
+      const double len = sk ? 25.0 : 20.0, vmax = sk ? 83.3 : 33.3;
+      const int per_dir = std::max(1, static_cast<int>(L.length / (sk ? 20000.0 : 12000.0)));
+      for (int k = 0; k < per_dir; ++k) {
+        mk(1, 205.0 + (L.length - 400.0) * k / per_dir, cars, len, vmax);
+        mk(-1, L.length - 10.0 - (L.length - 400.0) * k / per_dir, cars, len, vmax);
+      }
     }
   }
-  // Trains starting at a terminal wait there with the doors open (first departure).
+  // The first train of each direction waits at its terminal with the doors open.
   for (auto& t : trains_) {
     const auto& L = lines_[static_cast<size_t>(t.line)];
-    if (L.closed || t.dir < 0) continue;
-    int first = -1;
+    if (L.closed) continue;
+    const bool first_of_dir = t.dir > 0 ? t.s < 300.0 : t.s > L.length - 300.0;
+    if (!first_of_dir) continue;
+    int term = -1;
     for (int i = 0; i < static_cast<int>(stations_.size()); ++i)
       if (stations_[static_cast<size_t>(i)].line == t.line &&
-          (first < 0 || stations_[static_cast<size_t>(i)].s < stations_[static_cast<size_t>(first)].s))
-        first = i;
-    if (first < 0) continue;
-    t.s = stopMark(t, first);
-    t.at_station = first;
-    t.dwell = t.dwell0 = 60.0;
+          (term < 0 || stations_[static_cast<size_t>(i)].s * t.dir < stations_[static_cast<size_t>(term)].s * t.dir))
+        term = i;
+    if (term < 0) continue;
+    t.s = stopMark(t, term);
+    t.at_station = term;
+    t.dwell = 60.0;
     t.dwell0 = 63.0;  // already open at the start
-    t.next_stop = first;
+    t.next_stop = term;
   }
 }
 
@@ -236,7 +285,7 @@ void Trains::update(double dt) {
         }
         if (gap > 0 && gap < 60.0 + t.v * t.v / (2.0 * brake) && t.v > 0.5) ats = true;
       }
-      if (t.v > t.vmax + 1.0) ats = true;
+      if (t.v > speedCap(t) + 1.0) ats = true;  // overspeed against the curve limit ahead (ATS-P-like)
       if (ats) a = std::min(a, -1.2);
       ats_[static_cast<size_t>(t.id) % 64] = ats;
       t.v = std::max(0.0, t.v + a * dt);
@@ -275,12 +324,11 @@ void Trains::update(double dt) {
         const bool terminal = L.kind != LineKind::Loop;
         t.dwell = t.dwell0 = terminal ? 45.0 : 25.0;
       } else if (t.next_stop < 0) {
-        // end of the line: reverse (the front becomes the other end); the Shinkansen's far end is
-        // off the map (towards the mainland): it waits there before coming back
+        // end of the line: reverse (the front becomes the other end) after a turnaround wait
         t.s -= t.dir * t.cars * t.car_len;
         t.dir = -t.dir;
-        t.offmap = L.kind == LineKind::Shinkansen && t.dir < 0;
-        t.hold = t.offmap ? 150.0 : 25.0;
+        t.offmap = false;
+        t.hold = 25.0;
         chooseNextStop(t);
       }
       continue;
@@ -288,7 +336,7 @@ void Trains::update(double dt) {
     // follow the braking curve to the stop mark (or to the safe distance behind the train ahead):
     // the speed never exceeds what service braking can take off in the distance left, so the
     // train arrives on the mark instead of sliding past it
-    const double vcap = std::sqrt(2.0 * brake * std::max(0.0, dist - 0.1));
+    const double vcap = std::min(std::sqrt(2.0 * brake * std::max(0.0, dist - 0.1)), speedCap(t));
     if (t.v > vcap) t.v = std::max(vcap, t.v - 1.3 * brake * dt);
     else t.v = std::min({t.vmax, t.v + amax * dt, std::max(vcap, 0.3)});
     const double adv = std::min(t.v * dt, std::max(0.0, dist));
@@ -391,8 +439,27 @@ std::string Trains::destination(const Train& t) const {
       pick = i;
     }
   }
-  if (L.kind == LineKind::Shinkansen && t.dir > 0) return "mainland";
   return pick >= 0 ? stations_[static_cast<size_t>(pick)].name : "";
+}
+
+double Trains::speedCap(const Train& t) const {
+  const auto& L = lines_[static_cast<size_t>(t.line)];
+  if (L.env_fwd.empty()) return t.vmax;
+  double s = t.s;
+  if (L.closed) {
+    s = std::fmod(s, L.length);
+    if (s < 0) s += L.length;
+  }
+  const size_t k = std::min(L.cum.size() - 1, static_cast<size_t>(std::lower_bound(L.cum.begin(), L.cum.end(), s) - L.cum.begin()));
+  // the front must respect what lies ahead; the rear the limit it is still passing
+  double cap = t.dir > 0 ? L.env_fwd[k] : L.env_bwd[k];
+  const double rear = s - t.dir * t.cars * t.car_len;
+  const double rs = L.closed ? std::fmod(std::fmod(rear, L.length) + L.length, L.length) : std::clamp(rear, 0.0, L.length);
+  const size_t a = std::min(L.cum.size() - 1, static_cast<size_t>(std::lower_bound(L.cum.begin(), L.cum.end(), std::min(s, rs)) - L.cum.begin()));
+  const size_t b = std::min(L.cum.size() - 1, static_cast<size_t>(std::lower_bound(L.cum.begin(), L.cum.end(), std::max(s, rs)) - L.cum.begin()));
+  if (b >= a && b - a < 200)  // (not across the loop's seam)
+    for (size_t i = a; i <= b; ++i) cap = std::min(cap, L.vlim[i]);
+  return std::min(cap, t.vmax);
 }
 
 }  // namespace rjc

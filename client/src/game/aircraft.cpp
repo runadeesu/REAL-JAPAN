@@ -69,26 +69,44 @@ bool Aviation::load(const std::filesystem::path& transport, std::string& err) {
   }
   std::istringstream in(*text);
   std::string line;
-  bool rwy = false, twy = false;
-  int stands = 0;
+  airports_.clear();
   while (std::getline(in, line)) {
     std::istringstream ls(line);
     std::string k;
     ls >> k;
+    if (k == "airport") {  // starts the next airport's block ("airport <name>|<english>")
+      Airport A;
+      std::string names;
+      std::getline(ls, names);
+      names.erase(0, names.find_first_not_of(' '));
+      const auto bar = names.find('|');
+      A.name = names.substr(0, bar);
+      if (bar != std::string::npos) A.name_en = names.substr(bar + 1);
+      airports_.push_back(A);
+      continue;
+    }
     if (k != "runway" && k != "taxiway" && k != "connector" && k != "apronlink" && k != "apronlane" && k != "stand" && k != "terminal") continue;
     std::vector<double> v;
     double x;
     while (ls >> x) v.push_back(x);
-    rwy |= k == "runway";
-    twy |= k == "taxiway";
-    stands += k == "stand";
-    airport_.raw.push_back({k, v});
+    if (airports_.empty()) airports_.push_back(Airport{});  // (older files: a single airport, no header)
+    airports_.back().raw.push_back({k, v});
   }
-  if (!rwy || !twy || stands == 0) {
+  for (auto& A : airports_) {
+    bool rwy = false, twy = false;
+    int stands = 0;
+    for (const auto& [k, v] : A.raw) {
+      rwy |= k == "runway";
+      twy |= k == "taxiway";
+      stands += k == "stand";
+    }
+    A.ok = rwy && twy && stands > 0;
+  }
+  airports_.erase(std::remove_if(airports_.begin(), airports_.end(), [](const Airport& A) { return !A.ok; }), airports_.end());
+  if (airports_.empty()) {
     err = "transport.txt has no airport taxi network";
     return false;
   }
-  airport_.ok = true;
   return true;
 }
 
@@ -98,55 +116,64 @@ void Aviation::place(const World& world) {
     if (auto h = world.terrainHeight(p.x, p.y)) p.z = *h;
     return p;
   };
-  Airport& A = airport_;
-  A.connectors.clear();
-  A.apron_links.clear();
-  A.stands.clear();
-  for (const auto& [k, v] : A.raw) {
-    if (k == "runway" && v.size() >= 5) {
-      A.rwy_a = G(v[0], v[1]);
-      A.rwy_b = G(v[2], v[3]);
-      A.rwy_width = v[4];
-    } else if (k == "taxiway" && v.size() >= 4) {
-      A.twy_a = G(v[0], v[1]);
-      A.twy_b = G(v[2], v[3]);
-    } else if (k == "connector" && v.size() >= 4) {
-      A.connectors.push_back({G(v[0], v[1]), G(v[2], v[3])});
-    } else if (k == "apronlink" && v.size() >= 4) {
-      A.apron_links.push_back({G(v[0], v[1]), G(v[2], v[3])});
-    } else if (k == "apronlane" && v.size() >= 4) {
-      A.lane_a = G(v[0], v[1]);
-      A.lane_b = G(v[2], v[3]);
-    } else if (k == "stand" && v.size() >= 3) {
-      A.stands.push_back({G(v[0], v[1]), v[2]});
-    } else if (k == "terminal" && v.size() >= 2) {
-      A.terminal = G(v[0], v[1]);
+  for (Airport& A : airports_) {
+    A.connectors.clear();
+    A.apron_links.clear();
+    A.stands.clear();
+    for (const auto& [k, v] : A.raw) {
+      if (k == "runway" && v.size() >= 5) {
+        A.rwy_a = G(v[0], v[1]);
+        A.rwy_b = G(v[2], v[3]);
+        A.rwy_width = v[4];
+      } else if (k == "taxiway" && v.size() >= 4) {
+        A.twy_a = G(v[0], v[1]);
+        A.twy_b = G(v[2], v[3]);
+      } else if (k == "connector" && v.size() >= 4) {
+        A.connectors.push_back({G(v[0], v[1]), G(v[2], v[3])});
+      } else if (k == "apronlink" && v.size() >= 4) {
+        A.apron_links.push_back({G(v[0], v[1]), G(v[2], v[3])});
+      } else if (k == "apronlane" && v.size() >= 4) {
+        A.lane_a = G(v[0], v[1]);
+        A.lane_b = G(v[2], v[3]);
+      } else if (k == "stand" && v.size() >= 3) {
+        A.stands.push_back({G(v[0], v[1]), v[2]});
+      } else if (k == "terminal" && v.size() >= 2) {
+        A.terminal = G(v[0], v[1]);
+      }
     }
+    // light aircraft parking: west end of the apron, in front of the hangars, nose to the runway
+    const V3 ux = norm(sub(A.rwy_b, A.rwy_a)), nx = norm(sub(A.twy_a, A.rwy_a));
+    const double at = dot(sub(A.terminal, A.rwy_a), ux);
+    const double tw = len(sub(A.twy_a, A.rwy_a));
+    A.ga_stand = add(add(A.rwy_a, mul(ux, at - 330.0)), mul(nx, tw + 160.0));
+    if (auto h = world.terrainHeight(A.ga_stand.x, A.ga_stand.y)) A.ga_stand.z = *h;
+    A.ga_heading = std::atan2(-nx.x, -nx.y) / kDeg;
   }
-  ground_z_ = A.terminal.z;
-  // light aircraft parking: west end of the apron, in front of the hangars, nose to the runway
-  const V3 ux = norm(sub(A.rwy_b, A.rwy_a)), nx = norm(sub(A.twy_a, A.rwy_a));
-  const double at = dot(sub(A.terminal, A.rwy_a), ux);
-  A.ga_stand = add(add(A.rwy_a, mul(ux, at - 330.0)), mul(nx, 350.0));
-  if (auto h = world.terrainHeight(A.ga_stand.x, A.ga_stand.y)) A.ga_stand.z = *h;
-  A.ga_heading = std::atan2(-nx.x, -nx.y) / kDeg;
   if (!placed_) {
+    // one aircraft on the route, starting at each end (the flights alternate)
     Airliner a;
     a.id = 1;
-    a.stand = std::min<int>(1, static_cast<int>(A.stands.size()) - 1);
+    a.from = 0;
+    a.to = airports_.size() > 1 ? 1 : 0;
+    a.stand = std::min<int>(1, static_cast<int>(airports_[0].stands.size()) - 1);
     a.phase = Airliner::Phase::AtStand;
     a.timer = 150.0;
     jets_.push_back(a);
-    Airliner b;
-    b.id = 2;
-    b.stand = std::min<int>(4, static_cast<int>(A.stands.size()) - 1);
-    b.phase = Airliner::Phase::Offmap;
-    b.timer = 260.0;
-    jets_.push_back(b);
-    plane_.reset(A.ga_stand, A.ga_heading, world);
+    if (airports_.size() > 1) {
+      Airliner b;
+      b.id = 2;
+      b.from = 1;
+      b.to = 0;
+      b.stand = 0;
+      b.phase = Airliner::Phase::AtStand;
+      b.timer = 520.0;
+      jets_.push_back(b);
+    }
+    plane_.reset(airports_[0].ga_stand, airports_[0].ga_heading, world);
   }
   for (auto& a : jets_) {  // (moving jets are carried over a rebase by shiftOrigin)
-    const auto& st = A.stands[static_cast<size_t>(a.stand)];
+    const Airport& A = airports_[static_cast<size_t>(a.from)];
+    const auto& st = A.stands[static_cast<size_t>(std::min<int>(a.stand, static_cast<int>(A.stands.size()) - 1))];
     if (a.phase == Airliner::Phase::AtStand) {
       a.pos = {st.pos.x, st.pos.y, st.pos.z + kJetRefZ};
       a.yaw = static_cast<float>(st.heading * kDeg);
@@ -158,7 +185,22 @@ void Aviation::place(const World& world) {
   placed_ = true;
 }
 
-void Aviation::resetPlane(const World& world) { plane_.reset(airport_.ga_stand, airport_.ga_heading, world); }
+void Aviation::resetPlane(const World& world) { plane_.reset(airports_[0].ga_stand, airports_[0].ga_heading, world); }
+
+rj::geo::Vec3d Aviation::landside(int airport) const {
+  const Airport& ap = airports_[static_cast<size_t>(std::clamp<int>(airport, 0, static_cast<int>(airports_.size()) - 1))];
+  const V3 nxv{ap.twy_a.x - ap.rwy_a.x, ap.twy_a.y - ap.rwy_a.y, 0};
+  const double nl = std::max(1.0, std::hypot(nxv.x, nxv.y));
+  return {ap.terminal.x + nxv.x / nl * 140.0, ap.terminal.y + nxv.y / nl * 140.0, ap.terminal.z};
+}
+
+int Aviation::airportNear(const rj::geo::Vec3d& p, double r) const {
+  for (int i = 0; i < static_cast<int>(airports_.size()); ++i) {
+    const V3 l = landside(i);
+    if (std::hypot(p.x - l.x, p.y - l.y) < r) return i;
+  }
+  return -1;
+}
 
 void Aviation::shiftOrigin(const rj::geo::Rigid3d& X) {
   for (auto& a : jets_) {
@@ -201,8 +243,9 @@ void Aviation::pointAt(const Airliner& a, double s, V3& p, double& heading, doub
 }
 
 void Aviation::buildTaxiOut(Airliner& a) const {
-  const Airport& A = airport_;
+  const Airport& A = airports_[static_cast<size_t>(a.from)];
   const V3 ux = norm(sub(A.rwy_b, A.rwy_a)), nx = norm(sub(A.twy_a, A.rwy_a));
+  const double tw = len(sub(A.twy_a, A.rwy_a));
   auto along = [&](const V3& p) { return dot(sub(p, A.rwy_a), ux); };
   auto at = [&](double s, double n) {
     V3 p = add(add(A.rwy_a, mul(ux, s)), mul(nx, n));
@@ -214,14 +257,15 @@ void Aviation::buildTaxiOut(Airliner& a) const {
   const double lane_n = dot(sub(A.lane_a, A.rwy_a), nx);
   const double link_s = A.apron_links.empty() ? s_st : along(A.apron_links.front().first);
   const double conn_s = A.connectors.empty() ? 150.0 : along(A.connectors.front().first);
-  std::vector<V3> p = {at(s_st, lane_n), at(link_s, lane_n), at(link_s, 190.0), at(conn_s, 190.0), at(conn_s, 0.0), at(conn_s + 60.0, 0.0)};
+  std::vector<V3> p = {at(s_st, lane_n), at(link_s, lane_n), at(link_s, tw), at(conn_s, tw), at(conn_s, 0.0), at(conn_s + 60.0, 0.0)};
   for (auto& q : p) q.z += kJetRefZ;
   setPath(a, fillet(p, 35.0));
 }
 
 void Aviation::buildTaxiIn(Airliner& a, double stop_along) const {
-  const Airport& A = airport_;
+  const Airport& A = airports_[static_cast<size_t>(a.to)];
   const V3 ux = norm(sub(A.rwy_b, A.rwy_a)), nx = norm(sub(A.twy_a, A.rwy_a));
+  const double tw = len(sub(A.twy_a, A.rwy_a));
   auto along = [&](const V3& p) { return dot(sub(p, A.rwy_a), ux); };
   auto at = [&](double s, double n) {
     V3 p = add(add(A.rwy_a, mul(ux, s)), mul(nx, n));
@@ -237,7 +281,19 @@ void Aviation::buildTaxiIn(Airliner& a, double stop_along) const {
       break;
     }
   }
-  const auto& st = A.stands[static_cast<size_t>(a.stand)];
+  // a stand not taken by the other aircraft
+  int stand = 0;
+  for (int k = 0; k < static_cast<int>(A.stands.size()); ++k) {
+    bool used = false;
+    for (const auto& o : jets_)
+      if (&o != &a && o.phase == Airliner::Phase::AtStand && o.from == a.to && o.stand == k) used = true;
+    if (!used) {
+      stand = k;
+      break;
+    }
+  }
+  a.stand = stand;
+  const auto& st = A.stands[static_cast<size_t>(stand)];
   const double s_st = along(st.pos);
   const double lane_n = dot(sub(A.lane_a, A.rwy_a), nx);
   double link_s = s_st, best = 1e30;
@@ -246,51 +302,76 @@ void Aviation::buildTaxiIn(Airliner& a, double stop_along) const {
       best = std::fabs(along(l.first) - s_st);
       link_s = along(l.first);
     }
-  std::vector<V3> p = {a.pos, at(exit_s - 30.0, 0.0), at(exit_s, 0.0), at(exit_s, 190.0), at(link_s, 190.0), at(link_s, lane_n), at(s_st, lane_n),
+  std::vector<V3> p = {a.pos, at(exit_s - 30.0, 0.0), at(exit_s, 0.0), at(exit_s, tw), at(link_s, tw), at(link_s, lane_n), at(s_st, lane_n),
                        {st.pos.x, st.pos.y, st.pos.z + kJetRefZ}};
   p[0].z = A.rwy_a.z + kJetRefZ;
   setPath(a, fillet(p, 35.0));
 }
 
+namespace {
+constexpr double kApproachDist = 12000.0;  // final approach from about 2,100 ft on a 3-degree path
+constexpr double kCruiseAgl = 1800.0;      // short hop: cruise about 6,000 ft
+}  // namespace
+
 void Aviation::buildClimb(Airliner& a) const {
-  // straight out climbing ~7 deg, then a left turn towards the mainland (north-west), up to 3,000 m
+  // straight out climbing ~7 deg, a turn towards the destination's approach fix, cruise, then a
+  // descent reaching the fix at the start of the final approach
+  const Airport& D = airports_[static_cast<size_t>(a.to)];
+  const Airport& O = airports_[static_cast<size_t>(a.from)];
+  const V3 dux = norm(sub(D.rwy_b, D.rwy_a));
+  const double fix_z = D.rwy_a.z + 15.0 + kApproachDist * std::tan(3.0 * kDeg) + kJetRefZ;
+  const V3 fix{D.rwy_a.x - dux.x * kApproachDist, D.rwy_a.y - dux.y * kApproachDist, fix_z};
+  const double cruise = std::max(O.terminal.z, D.terminal.z) + kCruiseAgl;
   const V3 start = a.pos;
   double hd = a.yaw;
-  const double target = 315.0 * kDeg;
   std::vector<V3> p = {start};
   V3 q = start;
   auto fwd = [&](double dist, double climb) {
     const int n = std::max(1, static_cast<int>(dist / 200.0));
     for (int i = 0; i < n; ++i) {
-      q = {q.x + std::sin(hd) * dist / n, q.y + std::cos(hd) * dist / n, std::min(q.z + dist / n * std::tan(climb), ground_z_ + 3000.0)};
+      q = {q.x + std::sin(hd) * dist / n, q.y + std::cos(hd) * dist / n, std::min(q.z + dist / n * std::tan(climb), cruise)};
       p.push_back(q);
     }
   };
   fwd(4500.0, 7.0 * kDeg);
+  // turn (radius 3.5 km) until heading for the fix
   const double R = 3500.0;
-  const double turn = wrap(target - hd);
-  const int steps = std::max(1, static_cast<int>(std::fabs(turn) / (5.0 * kDeg)));
-  for (int i = 0; i < steps; ++i) {
-    const double d = turn / steps;
-    const double arc = R * std::fabs(d);
-    hd += d * 0.5;
-    q = {q.x + std::sin(hd) * arc, q.y + std::cos(hd) * arc, std::min(q.z + arc * std::tan(5.0 * kDeg), ground_z_ + 3000.0)};
-    hd += d * 0.5;
+  for (int i = 0; i < 72; ++i) {
+    const double want = std::atan2(fix.x - q.x, fix.y - q.y);
+    const double d = wrap(want - hd);
+    if (std::fabs(d) < 3.0 * kDeg) break;
+    const double step = std::clamp(d, -5.0 * kDeg, 5.0 * kDeg);
+    const double arc = R * std::fabs(step);
+    hd += step * 0.5;
+    q = {q.x + std::sin(hd) * arc, q.y + std::cos(hd) * arc, std::min(q.z + arc * std::tan(5.0 * kDeg), cruise)};
+    hd += step * 0.5;
     p.push_back(q);
   }
-  fwd(26000.0, 4.0 * kDeg);
-  setPath(a, p);
+  // cruise and descent (about 3 degrees) to the fix, then join the final approach track
+  const double dist = std::hypot(fix.x - q.x, fix.y - q.y);
+  const int n = std::max(2, static_cast<int>(dist / 400.0));
+  const V3 q0 = q;
+  for (int i = 1; i <= n; ++i) {
+    const double t = static_cast<double>(i) / n;
+    const double remain = dist * (1.0 - t);
+    V3 r{q0.x + (fix.x - q0.x) * t, q0.y + (fix.y - q0.y) * t, 0.0};
+    const double climb_z = std::min(cruise, q0.z + dist * t * std::tan(4.0 * kDeg));
+    r.z = std::max(fix.z, std::min(climb_z, fix.z + remain * std::tan(3.0 * kDeg)));
+    p.push_back(r);
+  }
+  setPath(a, fillet(p, 2500.0));
 }
 
 void Aviation::buildApproach(Airliner& a) const {
-  // 3-degree glide path onto threshold A, flare, touchdown ~350 m in, landing roll
-  const Airport& A = airport_;
+  // 3-degree glide path onto threshold A of the destination, flare, touchdown ~350 m in, landing roll
+  const Airport& A = airports_[static_cast<size_t>(a.to)];
   const V3 ux = norm(sub(A.rwy_b, A.rwy_a));
   const double L = len(sub(A.rwy_b, A.rwy_a));
   const double tz = A.rwy_a.z;
   auto rw = [&](double s, double h) { return V3{A.rwy_a.x + ux.x * s, A.rwy_a.y + ux.y * s, tz + h}; };
   std::vector<V3> p;
-  for (double s = -24000.0; s < 0.0; s += 1500.0) p.push_back(rw(s, 15.0 + (-s) * std::tan(3.0 * kDeg) + kJetRefZ));
+  p.push_back(a.pos);
+  for (double s = -kApproachDist + 1500.0; s < 0.0; s += 1500.0) p.push_back(rw(s, 15.0 + (-s) * std::tan(3.0 * kDeg) + kJetRefZ));
   p.push_back(rw(0.0, 15.0 + kJetRefZ));
   p.push_back(rw(200.0, 5.0 + kJetRefZ));
   p.push_back(rw(330.0, 1.0 + kJetRefZ));
@@ -300,30 +381,32 @@ void Aviation::buildApproach(Airliner& a) const {
 }
 
 void Aviation::refreshHeights(const World& world) {
-  // the airport may be far from where the game started: take the ground heights once loaded
-  bool ok = true;
-  auto fix = [&](rj::geo::Vec3d& p) {
-    if (auto h = world.terrainHeight(p.x, p.y)) p.z = *h;
-    else ok = false;
-  };
-  Airport& A = airport_;
-  fix(A.rwy_a);
-  fix(A.rwy_b);
-  fix(A.twy_a);
-  fix(A.twy_b);
-  fix(A.lane_a);
-  fix(A.lane_b);
-  fix(A.terminal);
-  fix(A.ga_stand);
-  for (auto& c : A.connectors) fix(c.first), fix(c.second);
-  for (auto& c : A.apron_links) fix(c.first), fix(c.second);
-  for (auto& s : A.stands) fix(s.pos);
-  if (ok) {
-    ground_z_ = A.terminal.z;
-    for (auto& a : jets_)
-      if (a.phase == Airliner::Phase::AtStand) a.pos.z = A.stands[static_cast<size_t>(a.stand)].pos.z + kJetRefZ;
+  // the airports may be far from where the game started: take the ground heights once loaded
+  bool all = true;
+  for (Airport& A : airports_) {
+    bool ok = true;
+    auto fix = [&](rj::geo::Vec3d& p) {
+      if (auto h = world.terrainHeight(p.x, p.y)) p.z = *h;
+      else ok = false;
+    };
+    fix(A.rwy_a);
+    fix(A.rwy_b);
+    fix(A.twy_a);
+    fix(A.twy_b);
+    fix(A.lane_a);
+    fix(A.lane_b);
+    fix(A.terminal);
+    fix(A.ga_stand);
+    for (auto& c : A.connectors) fix(c.first), fix(c.second);
+    for (auto& c : A.apron_links) fix(c.first), fix(c.second);
+    for (auto& s : A.stands) fix(s.pos);
+    if (ok)
+      for (auto& a : jets_)
+        if (a.phase == Airliner::Phase::AtStand && &airports_[static_cast<size_t>(a.from)] == &A)
+          a.pos.z = A.stands[static_cast<size_t>(a.stand)].pos.z + kJetRefZ;
+    all = all && ok;
   }
-  heights_ok_ = ok;
+  heights_ok_ = all;
 }
 
 void Aviation::update(double dt, const World& world) {
@@ -333,9 +416,11 @@ void Aviation::update(double dt, const World& world) {
     refreshHeights(world);
   }
   dt = std::min(dt, 0.1);
-  const Airport& A = airport_;
-  const V3 ux = norm(sub(A.rwy_b, A.rwy_a));
   for (auto& a : jets_) {
+    const Airport& A = airports_[static_cast<size_t>(a.from)];  // departure airport (until landing)
+    const Airport& D = airports_[static_cast<size_t>(a.to)];
+    const V3 ux = norm(sub(A.rwy_b, A.rwy_a));
+    const V3 dux = norm(sub(D.rwy_b, D.rwy_a));
     const float yaw0 = a.yaw;
     double hd = a.yaw, grade = 0;
     V3 p = a.pos;
@@ -403,17 +488,17 @@ void Aviation::update(double dt, const World& world) {
           if (a.phase == Airliner::Phase::TaxiOut) {
             // lined up: take-off roll along the runway
             const double L = len(sub(A.rwy_b, A.rwy_a));
-            const double s0 = dot(sub(a.pos, A.rwy_a), ux);
             V3 end = {A.rwy_a.x + ux.x * (L - 50.0), A.rwy_a.y + ux.y * (L - 50.0), a.pos.z};
             V3 beyond = {A.rwy_a.x + ux.x * (L + 2500.0), A.rwy_a.y + ux.y * (L + 2500.0), a.pos.z + 2500.0 * std::tan(7.0 * kDeg)};
-            (void)s0;
             setPath(a, {a.pos, end, beyond});
             a.phase = Airliner::Phase::Takeoff;
             a.timer = 6.0;  // hold on the runway briefly
           } else {
+            // arrived: this aircraft now stands at the destination; the next leg goes back
+            std::swap(a.from, a.to);
             a.phase = Airliner::Phase::AtStand;
-            a.timer = 180.0;
-            hd = A.stands[static_cast<size_t>(a.stand)].heading * kDeg;
+            a.timer = 300.0;
+            hd = airports_[static_cast<size_t>(a.from)].stands[static_cast<size_t>(a.stand)].heading * kDeg;
           }
         }
         break;
@@ -432,6 +517,7 @@ void Aviation::update(double dt, const World& world) {
         const double s_rw = dot(sub(p, A.rwy_a), ux);
         if (a.v < 76.0 && s_rw < L - 60.0) p.z = a.pos.z;
         else {
+          a.pos = p;
           buildClimb(a);
           a.phase = Airliner::Phase::Climb;
           a.timer = 0;
@@ -440,37 +526,34 @@ void Aviation::update(double dt, const World& world) {
       }
       case Airliner::Phase::Climb: {
         a.timer += dt;
-        // initial climb about 165 kt, speeding up above 3,000 ft (typical departure procedure)
-        a.v = std::min(a.pos.z - ground_z_ < 900.0 ? 85.0 : 125.0, a.v + 1.1 * dt);
+        // initial climb about 165 kt, faster above 3,000 ft; slowing to 180 kt before the approach
+        const double remain = a.cum.back() - a.s;
+        const double vt = remain < 6000.0 ? 90.0 : (a.pos.z - A.terminal.z < 900.0 ? 85.0 : 125.0);
+        a.v = a.v < vt ? std::min(vt, a.v + 1.1 * dt) : std::max(vt, a.v - 0.8 * dt);
         a.s += a.v * dt;
         pointAt(a, a.s, p, hd, grade);
-        if (a.timer > 7.0) a.gear = std::max(0.0f, a.gear - static_cast<float>(dt) / 8.0f);
+        if (a.timer > 7.0 && remain > 9000.0) a.gear = std::max(0.0f, a.gear - static_cast<float>(dt) / 8.0f);
         if (a.v > 95.0) a.flaps = std::max(0.0f, a.flaps - static_cast<float>(dt) / 12.0f);
+        if (remain < 5000.0) a.flaps = std::min(0.5f, a.flaps + static_cast<float>(dt) / 20.0f);
         hd = a.yaw + std::clamp(wrap(hd - a.yaw), -3.0 * kDeg * dt, 3.0 * kDeg * dt);
         if (a.s >= a.cum.back() - 1.0) {
-          a.phase = Airliner::Phase::Offmap;
-          a.timer = 300.0;
+          a.pos = p;
+          buildApproach(a);
+          a.phase = Airliner::Phase::Approach;
+          a.gear = 1;
+          a.flaps = 1;
         }
         break;
       }
-      case Airliner::Phase::Offmap:
-        a.timer -= dt;
-        if (a.timer <= 0) {
-          buildApproach(a);
-          a.phase = Airliner::Phase::Approach;
-          a.v = 75.0;
-          a.gear = 1;
-          a.flaps = 1;
-          pointAt(a, 0.0, p, hd, grade);
-          a.pos = p;
-          a.yaw = static_cast<float>(hd);
-        }
+      case Airliner::Phase::Offmap:  // (not used in the country: every flight lands on the map)
+        a.phase = Airliner::Phase::Approach;
         break;
       case Airliner::Phase::Approach: {
-        a.v = std::max(70.0, a.v - 0.3 * dt);
+        a.v = std::max(70.0, a.v - 0.5 * dt);
         a.s += a.v * dt;
         pointAt(a, a.s, p, hd, grade);
-        const double s_rw = dot(sub(p, A.rwy_a), ux);
+        hd = a.yaw + std::clamp(wrap(hd - a.yaw), -3.0 * kDeg * dt, 3.0 * kDeg * dt);
+        const double s_rw = dot(sub(p, D.rwy_a), dux);
         if (s_rw >= 380.0) a.phase = Airliner::Phase::Landing;
         break;
       }
@@ -480,7 +563,7 @@ void Aviation::update(double dt, const World& world) {
         pointAt(a, a.s, p, hd, grade);
         if (a.v <= 11.5) {
           a.pos = p;
-          buildTaxiIn(a, dot(sub(p, A.rwy_a), ux));
+          buildTaxiIn(a, dot(sub(p, D.rwy_a), dux));
           a.phase = Airliner::Phase::TaxiIn;
           a.flaps = 0;
         }
@@ -490,7 +573,7 @@ void Aviation::update(double dt, const World& world) {
     // attitude: path grade plus angle of attack, bank from the turn rate
     const bool airborne = a.phase == Airliner::Phase::Climb || a.phase == Airliner::Phase::Approach;
     double pitch = std::atan(grade);
-    if (a.phase == Airliner::Phase::Climb) pitch += 5.0 * kDeg;
+    if (a.phase == Airliner::Phase::Climb) pitch += (grade > 0.02 ? 5.0 : 2.0) * kDeg;
     if (a.phase == Airliner::Phase::Approach) pitch += 2.5 * kDeg;
     if (a.phase == Airliner::Phase::Takeoff && a.v > 68.0) pitch = std::min(8.0, (a.v - 68.0) * 1.2) * kDeg;
     a.pitch += static_cast<float>((pitch - a.pitch) * std::min(1.0, dt * 1.5));
@@ -509,9 +592,9 @@ const Airliner* Aviation::airliner(int id) const {
   return nullptr;
 }
 
-const Airliner* Aviation::boardable() const {
+const Airliner* Aviation::boardable(int airport) const {
   for (const auto& a : jets_)
-    if (a.phase == Airliner::Phase::AtStand && a.timer > 15.0) return &a;
+    if (a.phase == Airliner::Phase::AtStand && a.from == airport && a.timer > 15.0) return &a;
   return nullptr;
 }
 
@@ -520,10 +603,7 @@ void Aviation::setAboard(int id, bool on) {
     if (a.id == id) a.player_aboard = on;
 }
 
-void Aviation::fastForwardOffmap(int id) {
-  for (auto& a : jets_)
-    if (a.id == id && a.phase == Airliner::Phase::Offmap) a.timer = std::min(a.timer, 4.0);
-}
+void Aviation::fastForwardOffmap(int) {}
 
 // ------------------------------------------------------------------------------------------------
 // Light aircraft

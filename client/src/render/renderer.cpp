@@ -7,6 +7,7 @@
 #include "raymath.h"
 #include "game/driving.hpp"
 #include "game/station_names.hpp"
+#include "render/farview.hpp"
 #include "render/foliage.hpp"
 #include "render/shaders.hpp"
 #include "rlgl.h"
@@ -18,7 +19,7 @@ namespace {
 
 // Texture units reserved for per-frame textures (slot 0 = material diffuse, 1-4 = rlgl batch).
 constexpr int kSlotAO = 5, kSlotNoise = 6, kSlotAsphalt = 7, kSlotAsphaltN = 8, kSlotPaving = 9, kSlotPavingN = 10,
-              kSlotShadow0 = 11, kSlotShadow1 = 12;
+              kSlotShadow0 = 11, kSlotShadow1 = 12, kSlotLand = 13, kSlotSnow = 14;
 
 float g_near = 0.3f, g_far = 3000.0f;
 
@@ -38,6 +39,39 @@ void setF(Shader& s, const char* n, float v) { SetShaderValue(s, GetShaderLocati
 void set2(Shader& s, const char* n, Vector2 v) { SetShaderValue(s, GetShaderLocation(s, n), &v, SHADER_UNIFORM_VEC2); }
 void set3(Shader& s, const char* n, Vector3 v) { SetShaderValue(s, GetShaderLocation(s, n), &v, SHADER_UNIFORM_VEC3); }
 
+}  // namespace
+
+// OpenGL 1.1 entry points from the system library (exported by opengl32.dll / libGL): rlgl only
+// clears colour and depth together, and lets the driver pick the depth texture's precision.
+extern "C" {
+void glClear(unsigned int mask);
+void glGenTextures(int n, unsigned int* textures);
+void glBindTexture(unsigned int target, unsigned int texture);
+void glTexImage2D(unsigned int target, int level, int internalformat, int width, int height, int border, unsigned int format,
+                  unsigned int type, const void* pixels);
+void glTexParameteri(unsigned int target, unsigned int pname, int param);
+}
+
+namespace {
+
+// Scene depth as a sized 24-bit texture: an unsized request may get 16 bits, whose steps at
+// 50-150 m (the ground seen from a train or a low flight) show up as bands in the SSAO.
+unsigned int loadDepthTexture24(int w, int h) {
+  constexpr unsigned int kTex2D = 0x0DE1, kDepth = 0x1902, kDepth24 = 0x81A6, kUInt = 0x1405;
+  constexpr unsigned int kMin = 0x2801, kMag = 0x2800, kWrapS = 0x2802, kWrapT = 0x2803, kNearest = 0x2600, kClampEdge = 0x812F;
+  unsigned int id = 0;
+  glGenTextures(1, &id);
+  if (!id) return rlLoadTextureDepth(w, h, false);
+  glBindTexture(kTex2D, id);
+  glTexImage2D(kTex2D, 0, static_cast<int>(kDepth24), w, h, 0, kDepth, kUInt, nullptr);
+  glTexParameteri(kTex2D, kMin, kNearest);
+  glTexParameteri(kTex2D, kMag, kNearest);
+  glTexParameteri(kTex2D, kWrapS, kClampEdge);
+  glTexParameteri(kTex2D, kWrapT, kClampEdge);
+  glBindTexture(kTex2D, 0);
+  return id;
+}
+
 RenderTexture2D makeTarget(int w, int h, bool depth_texture) {
   RenderTexture2D t{};
   t.id = rlLoadFramebuffer();
@@ -49,7 +83,7 @@ RenderTexture2D makeTarget(int w, int h, bool depth_texture) {
   t.texture.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
   t.texture.mipmaps = 1;
   if (depth_texture) {
-    t.depth.id = rlLoadTextureDepth(w, h, false);
+    t.depth.id = loadDepthTexture24(w, h);
     t.depth.format = 19;
   } else {
     t.depth.id = rlLoadTextureDepth(w, h, true);  // renderbuffer
@@ -208,6 +242,9 @@ bool Renderer::init() {
   setI(lit_, "texPavingN", kSlotPavingN);
   setI(lit_, "shadowMap0", kSlotShadow0);
   setI(lit_, "shadowMap1", kSlotShadow1);
+  setI(lit_, "texLand", kSlotLand);
+  setI(lit_, "texSnow", kSlotSnow);
+  setI(lit_, "landOn", 0);
   setI(lit_, "materialOverride", -1);
   setI(sky_, "texNoise", kSlotNoise);
   if (!tex_.generate(512)) return false;
@@ -276,6 +313,11 @@ void Renderer::shutdown() {
   ready_ = false;
 }
 
+void Renderer::clearDepth() {
+  rlDrawRenderBatchActive();
+  glClear(0x00000100u);  // GL_DEPTH_BUFFER_BIT
+}
+
 void Renderer::setClipPlanes(float near_m, float far_m) {
   g_near = near_m;
   g_far = far_m;
@@ -316,6 +358,8 @@ void Renderer::bindGlobalTextures() {
   bind(kSlotAO, rlGetTextureIdDefault());
   bind(kSlotShadow0, shadow_valid_ && shadow_[0].depth.id ? shadow_[0].depth.id : rlGetTextureIdDefault());
   bind(kSlotShadow1, shadow_valid_ && shadow_[1].depth.id ? shadow_[1].depth.id : rlGetTextureIdDefault());
+  bind(kSlotLand, rlGetTextureIdDefault());
+  bind(kSlotSnow, snow_tex_.id ? snow_tex_.id : rlGetTextureIdDefault());
   rlActiveTextureSlot(0);
 }
 
@@ -418,6 +462,12 @@ void Renderer::applyFrameUniforms(const Camera3D& cam, const Lighting& L, float 
   setI(lit_, "materialOverride", -1);
   set3(lit_, "emissiveTint", Vector3{0, 0, 0});
   set3(lit_, "selfLight", Vector3{0, 0, 0});
+  set3(lit_, "snowU", snow_u_);
+  set3(lit_, "snowV", snow_v_);
+  setF(lit_, "snowSeason", snow_tex_.id ? season_snow_ : 0.0f);
+  setF(lit_, "cropStage", season_crop_);
+  setF(lit_, "leafStage", season_leaf_);
+  setI(lit_, "landOn", 0);
 }
 
 void Renderer::beginScene(const RenderOptions& o, const Lighting& L, const Camera3D& cam, float time_s) {
@@ -546,17 +596,28 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, bool photo_tex
   rlDisableBackfaceCulling();
   // Terrain: ground raster classified into asphalt / paving / paint / greenery with detail maps.
   mode(1, 1);
+  const int loc_land = GetShaderLocation(lit_, "landOn");
   for (const auto& [code, c] : world.cells()) {
     if (!c->gpu.terrain.vaoId) continue;
     rlActiveTextureSlot(kSlotAO);
     rlEnableTexture(c->gpu.detail.ao.id ? c->gpu.detail.ao.id : rlGetTextureIdDefault());
+    rlActiveTextureSlot(kSlotLand);
+    rlEnableTexture(c->gpu.detail.landcover.id ? c->gpu.detail.landcover.id : rlGetTextureIdDefault());
     rlActiveTextureSlot(0);
+    const int land_on = c->gpu.detail.landcover.id ? 1 : 0;
+    SetShaderValue(lit_, loc_land, &land_on, SHADER_UNIFORM_INT);
     mat_.maps[MATERIAL_MAP_DIFFUSE].texture = c->gpu.ground;
     mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     DrawMesh(c->gpu.terrain, mat_, c->model);
     ++draw_calls_;
     triangles_ += c->gpu.terrain.triangleCount;
   }
+  {
+    const int off = 0;
+    SetShaderValue(lit_, loc_land, &off, SHADER_UNIFORM_INT);
+  }
+  rlActiveTextureSlot(kSlotLand);
+  rlEnableTexture(rlGetTextureIdDefault());
   rlActiveTextureSlot(kSlotAO);
   rlEnableTexture(rlGetTextureIdDefault());
   rlActiveTextureSlot(0);
@@ -711,6 +772,78 @@ void Renderer::drawOcean(const Camera3D& cam, float sea_y) {
   DrawMesh(ocean_, mat_, MatrixTranslate(gx, sea_y, gz));
   ++draw_calls_;
   setI(lit_, "materialOverride", -1);
+}
+
+void Renderer::drawCellSeas(const World& world) {
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", kMatWater);
+  rlDisableBackfaceCulling();
+  for (const auto& [code, c] : world.cells())
+    if (c->gpu.sea.vaoId) {
+      DrawMesh(c->gpu.sea, mat_, c->model);
+      ++draw_calls_;
+    }
+  rlEnableBackfaceCulling();
+  setI(lit_, "materialOverride", -1);
+}
+
+void Renderer::drawFarView(const FarView& far, const World& world, const Camera3D& cam, float sea_y, float fog_density) {
+  if (!far.ready() || !world.hasOrigin()) return;
+  bindGlobalTextures();
+  setF(lit_, "fogDensity", fog_density);
+  const rj::geo::Vec3d cp = rlToEnu(cam.position);
+  const Vector3 fr = Vector3Normalize(Vector3Subtract(cam.target, cam.position));
+  const rj::geo::Vec3d fw = rlToEnu(fr);
+  rlDisableBackfaceCulling();
+  // ocean to the horizon (the near pass draws its own around the camera)
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", kMatWater);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  {
+    const float gx = std::round(cam.position.x / 500.0f) * 500.0f, gz = std::round(cam.position.z / 500.0f) * 500.0f;
+    DrawMesh(ocean_, mat_, MatrixMultiply(MatrixScale(3.0f, 1.0f, 3.0f), MatrixTranslate(gx, sea_y - 0.3f, gz)));
+    ++draw_calls_;
+  }
+  setI(lit_, "materialOverride", -1);
+  const auto& O = world.origin().frame();
+  // terrain tiles standing in for cells that are not loaded
+  setI(lit_, "surfaceMode", 4);
+  setI(lit_, "useTexture", 1);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = far.colorMap();
+  std::vector<std::pair<const FarView::Tile*, Matrix>> near_boxes;
+  for (const auto& t : far.tiles()) {
+    if (world.cells().count(t.mesh)) continue;
+    const rj::geo::Rigid3d X = O.transformFrom(t.frame);
+    const rj::geo::Vec3d c = X.apply({0.0, 0.0, t.zmax * 0.5});
+    const rj::geo::Vec3d d{c.x - cp.x, c.y - cp.y, c.z - cp.z};
+    const double dist = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    if (dist > 85000.0) continue;
+    if (d.x * fw.x + d.y * fw.y + d.z * fw.z < -t.radius - t.zmax) continue;  // behind the camera
+    const Matrix M = rigidToRaylib(X);
+    if (t.terrain.vaoId) {
+      DrawMesh(t.terrain, mat_, M);
+      ++draw_calls_;
+      triangles_ += t.terrain.triangleCount;
+    }
+    if (!t.boxes.empty() && dist < 30000.0) near_boxes.push_back({&t, M});
+  }
+  // building boxes (vertex colours, material from the vertices)
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  for (const auto& [t, M] : near_boxes)
+    for (const auto& m : t->boxes) {
+      DrawMesh(m, mat_, M);
+      ++draw_calls_;
+      triangles_ += m.triangleCount;
+    }
+  rlEnableBackfaceCulling();
+  setF(lit_, "fogDensity", frame_L_.fog_density);
 }
 
 void Renderer::drawShips(const Ferries& ferries, const Camera3D& cam, const Lighting& L) {

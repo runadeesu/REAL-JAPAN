@@ -28,6 +28,16 @@ python3 pipeline/cook_slice.py pipeline/slices/shibuya.json      # 写真テク�
 出力：`game/data/world/shibuya/`（`cells/*.rjcell`, `client.txt`, `sources.json`, `pois.json`, `residents.csv`, `slice.json`）。
 生データは `data/raw/`（git 管理外）。写真テクスチャ無しで速く試す場合は `--no-textures`。
 
+### 架空の国「秋津国」（既定のワールド）
+
+```bash
+python3 pipeline/cook_country.py              # 全国（約 2,700 セル）を生成して game/data/world/country/ へ
+                                              # 4 プロセス並列で約 40 分、出力 約 600 MB（外部データ不要）
+python3 pipeline/cook_country.py --preview --only 50405559,50405569   # 地形 40 m の簡易版で一部だけ（確認用）
+python3 pipeline/tools_preview_country.py out.png                     # 国全体の地図のプレビュー
+```
+設計と出力ファイルの説明は [COUNTRY.md](COUNTRY.md)。
+
 ## 4. コアのテスト
 
 ```bash
@@ -46,10 +56,12 @@ cmake --build build-linux
 Windows x64（Release, 配布用）:
 ```bash
 tools/package_windows.sh
-# -> dist/RealJapan-0.1.0-win64.zip（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
+# -> dist/RealJapan-0.5.0-win64*.zip（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
 ```
 
 ## 6. 自動スクリーンショット（起動確認用）
+
+秋津国の各機能・各地方：`tools/shots_country.sh build-linux <出力先>`（`ONLY="air_shion ride_main"` で一部だけ）。
 
 ```bash
 xvfb-run -s "-screen 0 1600x900x24" ./build-linux/RealJapan \

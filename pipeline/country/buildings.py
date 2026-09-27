@@ -341,7 +341,8 @@ def make_building(pc, terrain, rng, near_scramble: float, near_station: float) -
     """One building on a parcel, by district style. Returns None for an empty lot."""
     style = pc.style
     poly = pc.poly
-    setback = {"center": 0.25, "business": 3.0, "shitamachi": 0.35, "residential": 1.2, "bay": 6.0, "islet": 8.0}[style]
+    setback = {"center": 0.25, "business": 3.0, "shitamachi": 0.35, "residential": 1.2, "bay": 6.0, "islet": 8.0,
+               "kyoto": 0.15, "kyoto_center": 0.3, "port": 5.0, "onsen": 0.6, "snowtown": 1.8, "village": 4.0}[style]
     if style == "residential" and pc.poly.area > 180:
         setback = 1.6
     fp = poly.buffer(-setback, join_style=2).simplify(0.25)
@@ -464,6 +465,9 @@ def make_building(pc, terrain, rng, near_scramble: float, near_station: float) -
         _flat_top(g, gear, fp, ground + h, ground, st, rgb, rng, big=True)
         return result(h, fl, 401 if style == "business" else 404, "office")
 
+    if style in ("kyoto", "kyoto_center", "port", "onsen", "snowtown", "village"):
+        return _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result)
+
     if style in ("shitamachi", "residential"):
         if r < (0.04 if style == "shitamachi" else 0.06):
             return None  # parking / garden / field
@@ -567,3 +571,201 @@ def _led_screen(g: Geo, poly: Polygon, front, ground, h, rng):
     p0, p1 = c - dd * w / 2, c + dd * w / 2
     g.quad((p0[0], p0[1], z0), (p1[0], p1[1], z0), (p1[0], p1[1], z0 + sh), (p0[0], p0[1], z0 + sh), LED,
            NEON_COL[rng.integers(len(NEON_COL))], [(1024 - w / 2, 0), (1024 + w / 2, 0), (1024 + w / 2, sh), (1024 - w / 2, sh)])
+
+
+# --------------------------------------------------------------------------------------------
+# Regional towns (all generic designs): the old capital's machiya streets, the port's sheds, the
+# hot-spring inns, the snow country's steep roofs and the farm villages.
+def _gable_house(g, rect, ground, fl, storey, wall_style, wall_rgb, roof_style, roof_rgb, pitch, overhang, hip, sink=1.5):
+    rp = Polygon(rect)
+    rring = np.asarray(orient(rp, 1.0).exterior.coords)
+    eave = ground + 0.4 + fl * storey
+    walls(g, rring, ground - sink, eave, ground, wall_style, wall_rgb)
+    pitched_roof(g, rect, eave, pitch, overhang, roof_style, roof_rgb, wall_style, wall_rgb, ground, hip=hip)
+    return rring[:-1], eave
+
+
+def _street_parallel(rect, front):
+    """Rotate the rectangle's corner order so its first edge runs along the street (ridge parallel
+    to the street, as on machiya), when the frontage direction is known."""
+    if front == (0.0, 0.0):
+        return rect
+    f = np.array(front)
+    best, k = -1.0, 0
+    for i in range(4):
+        e = rect[(i + 1) % 4] - rect[i]
+        e = e / (np.linalg.norm(e) + 1e-9)
+        par = 1.0 - abs(float(e @ f))
+        if par > best:
+            best, k = par, i
+    return np.roll(rect, -k, axis=0)
+
+
+def _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result):
+    area = fp.area
+    front = pc.front_dir
+    rect = _rect_of(fp)
+    rect_area = Polygon(rect).area
+    rectish = rect_area > 0 and area / rect_area > 0.8
+    r = rng.random()
+    if style == "kyoto":
+        if r < 0.05:
+            return None
+        if r < 0.66 and rectish:
+            # machiya: two low storeys, dark timber, latticed front, tiled gable roof along the street
+            wrgb = _jit(PALETTE_WALL["wooden"][rng.integers(4)], rng, 6)
+            rr = _street_parallel(rect, front)
+            e0 = np.linalg.norm(rr[1] - rr[0])
+            e1 = np.linalg.norm(rr[2] - rr[1])
+            if e0 < e1:  # ridge along the longer side facing the street is typical; keep the long axis
+                pass
+            fpo, eave = _gable_house(g, rr, ground, 2, 2.55, WOODEN, wrgb, ROOF_TILE, _jit((64, 66, 70), rng, 5),
+                                     rng.uniform(21, 26), 0.6, hip=False)
+            return BuildingOut(g, gear, fpo, ground, eave - ground + 2.2, 2, 402 if rng.random() < 0.35 else 411, "", "machiya")
+        if r < 0.82:
+            fl = int(rng.integers(3, 6))
+            h = 4.2 + (fl - 1) * 3.1
+            wrgb = _jit(PALETTE_WALL["commercial"][rng.integers(8)], rng)
+            walls(g, ring, ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+            _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
+            return result(h, fl, 402, "shop")
+        if r < 0.95 or not rectish:
+            fl = 2
+            wrgb = _jit(PALETTE_WALL["house"][rng.integers(7)], rng, 8)
+            if rectish:
+                fpo, eave = _gable_house(g, rect, ground, fl, 2.85, HOUSE, wrgb, ROOF_TILE,
+                                         _jit(ROOF_TILE_COL[rng.integers(5)], rng, 6), rng.uniform(22, 28), 0.5, hip=rng.random() < 0.5)
+                return BuildingOut(g, gear, fpo, ground, eave - ground + 2.4, fl, 411, "", "house")
+            eave = ground + 0.4 + fl * 2.85
+            walls(g, ring, ground - 1.5, eave, ground, HOUSE, wrgb)
+            _flat_top(g, gear, fp, eave, ground, HOUSE, wrgb, rng)
+            return result(eave - ground, fl, 411, "house")
+        # small temple / sub-temple: white walls between vermilion posts, deep hip roof
+        fpo, eave = _gable_house(g, rect, ground, 1, 4.2, TEMPLE, (236, 230, 216), ROOF_TILE, (56, 58, 62),
+                                 30, 1.6, hip=True, sink=1.0)
+        return BuildingOut(g, gear, fpo, ground, eave - ground + 5.0, 1, 422, "", "subtemple")
+    if style == "kyoto_center":
+        if r < 0.05:
+            return None
+        fl = int(np.clip(rng.normal(6, 1.6), 3, 9))  # height limits in the old capital
+        h = 4.6 + (fl - 1) * 3.6
+        wrgb = _jit(PALETTE_WALL["commercial"][rng.integers(8)], rng)
+        st = COMMERCIAL if rng.random() < 0.7 else OFFICE_GRID
+        walls(g, ring, ground - 2, ground + h, ground, st, wrgb)
+        _flat_top(g, gear, fp, ground + h, ground, st, wrgb, rng, big=True)
+        if rng.random() < 0.35:
+            _neon_sign(g, fp, front, ground + 4.0, ground + min(h, 22), ground, rng)
+        return result(h, fl, 402 if rng.random() < 0.7 else 401, "commercial")
+    if style == "port":
+        if r < 0.1:
+            return None
+        if r < 0.72:  # warehouse / shed
+            h = rng.uniform(9, 17)
+            rgb = _jit(PALETTE_WALL["warehouse"][rng.integers(4)], rng)
+            walls(g, ring, ground - 2, ground + h, ground, WAREHOUSE, rgb)
+            if rectish and rng.random() < 0.5:
+                pitched_roof(g, rect, ground + h, 8, 0.4, ROOF_METAL, _jit((150, 155, 160), rng, 8), WAREHOUSE, rgb, ground, hip=False)
+            else:
+                cap(g, fp, ground + h, ROOF_METAL, _jit((150, 155, 160), rng, 8))
+            return result(h, 2, 441, "warehouse")
+        if r < 0.86:  # container stacks on the yard (vertex-coloured boxes)
+            c = np.asarray(fp.centroid.coords[0])
+            e = rect[1] - rect[0]
+            f = e / (np.linalg.norm(e) + 1e-9)
+            side = np.array([f[1], -f[0]])
+            cols = [(40, 90, 150), (170, 40, 40), (200, 120, 40), (60, 120, 70), (120, 120, 125), (210, 200, 60)]
+            for i in range(-3, 4):
+                for j in range(-1, 2):
+                    for lev in range(int(rng.integers(1, 5))):
+                        p = c + f * i * 12.6 + side * j * 2.6
+                        box(gear, (p[0], p[1], ground + 1.3 + lev * 2.6), (float(f[0]), float(f[1])), (6.0, 1.2, 1.3), PLAIN,
+                            cols[rng.integers(len(cols))], ground)
+            fpo = np.array([c + f * 45 + side * 4.5, c - f * 45 + side * 4.5, c - f * 45 - side * 4.5, c + f * 45 - side * 4.5])
+            return BuildingOut(g, gear, fpo, ground, 10.4, 1, 441, "", "containers")
+        fl = int(rng.integers(3, 7))
+        h = 4.2 + (fl - 1) * 3.6
+        rgb = _jit(PALETTE_WALL["office"][rng.integers(5)], rng)
+        walls(g, ring, ground - 2, ground + h, ground, OFFICE_RIBBON, rgb)
+        _flat_top(g, gear, fp, ground + h, ground, OFFICE_RIBBON, rgb, rng, big=True)
+        return result(h, fl, 401, "office")
+    if style == "onsen":
+        if r < 0.05:
+            return None
+        if r < 0.22 and area > 380:
+            # hot-spring hotel: concrete block with balconies (rooms face the valley)
+            fl = int(rng.integers(4, 10))
+            h = 4.4 + (fl - 1) * 3.1
+            wrgb = _jit(PALETTE_WALL["apt"][rng.integers(5)], rng)
+            walls(g, ring, ground - 1.5, ground + h, ground, APT_FRONT, wrgb)
+            _flat_top(g, gear, fp, ground + h, ground, APT_FRONT, wrgb, rng, big=True)
+            _balconies(g, fp, front, ground, ground + 4.4, ground + h, 3.1, wrgb, rng)
+            return result(h, fl, 403, "hotel")
+        if r < 0.72 and rectish:
+            # traditional inn: timber, two or three storeys, tiled hip roof
+            fl = 2 if rng.random() < 0.6 else 3
+            wrgb = _jit(PALETTE_WALL["wooden"][rng.integers(4)], rng, 6)
+            fpo, eave = _gable_house(g, rect, ground, fl, 2.9, WOODEN, wrgb, ROOF_TILE, _jit((60, 62, 66), rng, 5),
+                                     rng.uniform(24, 30), 0.9, hip=True)
+            return BuildingOut(g, gear, fpo, ground, eave - ground + 3.0, fl, 403, "", "ryokan")
+        fl = 2
+        h = 4.0 + 3.0
+        wrgb = _jit(PALETTE_WALL["pencil"][rng.integers(6)], rng)
+        walls(g, ring, ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+        _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
+        if rng.random() < 0.5:
+            _neon_sign(g, fp, front, ground + 3.0, ground + h, ground, rng)
+        return result(h, fl, 402, "shop")
+    if style == "snowtown":
+        if r < 0.06:
+            return None
+        if r < 0.8 and rectish and area < 320:
+            # snow-country house: steep metal gable roof (snow slides off), raised ground floor
+            fl = 2
+            wrgb = _jit(PALETTE_WALL["house"][rng.integers(7)], rng, 8)
+            rgb_r = _jit(ROOF_METAL_COL[rng.integers(6)], rng, 6)
+            fpo, eave = _gable_house(g, rect, ground + 0.6, fl, 2.9, HOUSE, wrgb, ROOF_METAL, rgb_r, rng.uniform(30, 38), 0.7,
+                                     hip=False, sink=2.1)
+            return BuildingOut(g, gear, fpo, ground, eave - ground + 3.5, fl, 411, "", "house")
+        if r < 0.9:
+            fl = int(rng.integers(2, 4))
+            h = 4.2 + (fl - 1) * 3.0
+            wrgb = _jit(PALETTE_WALL["house"][rng.integers(7)], rng)
+            walls(g, ring, ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+            _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
+            return result(h, fl, 402, "shop")
+        fl = int(rng.integers(3, 6))
+        h = 3.6 + (fl - 1) * 3.0
+        wrgb = _jit(PALETTE_WALL["apt"][rng.integers(5)], rng)
+        walls(g, ring, ground - 1.5, ground + h, ground, APT_BACK, wrgb)
+        _flat_top(g, gear, fp, ground + h, ground, APT_BACK, wrgb, rng)
+        return result(h, fl, 412, "apartment")
+    if style == "village":
+        if r < 0.22:
+            return None  # garden / field / empty lot
+        # farmhouse: a big two-storey house with a heavy tiled hip roof, often with a shed beside it
+        c = np.asarray(fp.centroid.coords[0])
+        e = rect[1] - rect[0]
+        e2 = rect[2] - rect[1]
+        f = e / (np.linalg.norm(e) + 1e-9)
+        sd = e2 / (np.linalg.norm(e2) + 1e-9)
+        hl, hw = min(np.linalg.norm(e) / 2 - 1.0, rng.uniform(6.5, 9.5)), min(np.linalg.norm(e2) / 2 - 1.0, rng.uniform(5.0, 7.0))
+        if hl < 3.5 or hw < 3.0:
+            return None
+        hc = c - sd * (np.linalg.norm(e2) / 2 - hw - 1.0) * 0.5
+        hrect = np.array([hc - f * hl - sd * hw, hc + f * hl - sd * hw, hc + f * hl + sd * hw, hc - f * hl + sd * hw])
+        wrgb = _jit(PALETTE_WALL["house" if rng.random() < 0.6 else "wooden"][rng.integers(4)], rng, 8)
+        tile = rng.random() < 0.7
+        fpo, eave = _gable_house(g, hrect, ground, 2 if rng.random() < 0.7 else 1, 2.9,
+                                 HOUSE if wrgb[0] > 140 else WOODEN, wrgb, ROOF_TILE if tile else ROOF_METAL,
+                                 _jit(ROOF_TILE_COL[rng.integers(5)] if tile else ROOF_METAL_COL[rng.integers(6)], rng, 6),
+                                 rng.uniform(24, 31), 0.8, hip=rng.random() < 0.7)
+        # shed / barn (metal) at the side
+        room = np.linalg.norm(e) / 2 - hl
+        if room > 7 and rng.random() < 0.7:
+            sc = c + f * (hl + room / 2) * (1 if rng.random() < 0.5 else -1)
+            sl, sw = min(room / 2 - 0.8, 4.5), min(hw, 4.0)
+            srect = np.array([sc - f * sl - sd * sw, sc + f * sl - sd * sw, sc + f * sl + sd * sw, sc - f * sl + sd * sw])
+            _gable_house(g, srect, ground, 1, 3.2, WAREHOUSE, _jit((150, 150, 145), rng, 10), ROOF_METAL,
+                         _jit(ROOF_METAL_COL[rng.integers(6)], rng, 6), 16, 0.3, hip=False, sink=0.5)
+        return BuildingOut(g, gear, fpo, ground, eave - ground + 3.5, 2, 411, "", "farmhouse")
+    return None

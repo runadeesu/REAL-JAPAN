@@ -31,6 +31,11 @@ struct Poi {
   float height = 0;
   std::string name;
 };
+struct Place {  // town / village name for the map (fictional country)
+  double lat = 0, lon = 0;
+  bool city = false;
+  std::string name, name_en;
+};
 struct SourceMeta {
   std::string license, attribution;
 };
@@ -41,6 +46,7 @@ struct SliceMeta {
   bool fictional = false;  // "world fictional": an invented island (sea all around, no source data)
   std::vector<CellMeta> cells;
   std::vector<Poi> pois;
+  std::vector<Place> places;
   std::vector<SourceMeta> sources;
   std::vector<InteriorMeta> interiors;
 };

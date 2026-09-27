@@ -8,6 +8,7 @@
 
 #include "platform/paths.hpp"
 #include "util/text.hpp"
+#include "world/canopy.hpp"
 #include "world/coords.hpp"
 
 namespace rjc {
@@ -106,6 +107,19 @@ bool World::loadMeta(const std::filesystem::path& dir, std::string& err) {
         }
         for (auto& im : meta_.interiors)
           if (im.id == v.at(0) && ring.size() >= 3) im.openings.push_back(std::move(ring));
+      } else if (k == "place") {  // place <lat> <lon> <city|village> <name>|<english>
+        const auto v = splitWs(head[1], 4);
+        Place pl;
+        pl.lat = std::stod(v.at(0));
+        pl.lon = std::stod(v.at(1));
+        pl.city = v.at(2) == "city";
+        const std::string names = v.size() > 3 ? v[3] : "";
+        const auto bar = names.find('|');
+        pl.name = names.substr(0, bar);
+        if (bar != std::string::npos) pl.name_en = names.substr(bar + 1);
+        meta_.places.push_back(pl);
+      } else if (k == "reading") {
+        // (station / place readings: read by Trains from rail.txt)
       } else if (k == "poi") {
         const auto v = splitWs(head[1], 5);
         meta_.pois.push_back({std::stod(v.at(0)), std::stod(v.at(1)), std::stoi(v.at(2)), std::stof(v.at(3)),
@@ -200,6 +214,7 @@ void World::requestLoad(const rj::stream::StreamKey& key) {
       if (!parseDetail(*det, c->detail, err)) TraceLog(LOG_WARNING, "RJ: street detail parse failed: %s", err.c_str());
       c->bytes += det->size();
     }
+    buildCanopy(*c);  // forest crowns from the land-cover map (fictional country)
     return c;
   });
   jobs_.push_back(std::move(j));

@@ -69,6 +69,7 @@ struct CellGpu {
   std::vector<int> chunk_page;
   std::vector<Texture2D> pages;
   Mesh terrain{};
+  Mesh sea{};  // sea-level surface over the cell where its ground dips below the sea (fictional world)
   Texture2D ground{};
   CellDetailGpu detail;
   bool uploaded = false;

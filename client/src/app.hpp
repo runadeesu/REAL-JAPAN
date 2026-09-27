@@ -27,6 +27,7 @@
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
 #include "i18n/i18n.hpp"
+#include "render/farview.hpp"
 #include "render/renderer.hpp"
 #include "rj/econ/ledger.hpp"
 #include "rj/sim/calendar.hpp"
@@ -164,10 +165,16 @@ class App {
   Trains trains_;
   Crowd crowd_;  // passengers in the cars and on the platforms near the camera
   int ride_train_ = -1, ride_car_ = 0;  // riding a train (id, car)
+  int ride_board_station_ = -1;         // where the ride began (fare by distance at the end)
+  FarView far_;                         // the country beyond the streamed cells (fictional world)
+  void updateFarMapping();
+  void updateSeason();
   float ride_look_yaw_ = 0.0f, ride_look_pitch_ = 0.0f;
   void updateTransportActions();
   Camera3D rideCamera() const;
   std::string lineName(int line) const;
+  static int64_t railFare(bool shinkansen, double km);  // game fare (yen) for a ride of km
+  std::string airportName(int i) const;
   Aviation aviation_;
   int ride_jet_ = -1;                    // aboard this scheduled flight (id)
   bool jet_flown_ = false;               // the flight has left the stand (alighting then ends the trip)

@@ -125,6 +125,16 @@ uniform vec3 partTop;         // per-person colours (sRGB 0..1): clothing top / 
 uniform vec3 partBottom;
 uniform vec3 partSkin;
 uniform vec3 partHair;
+// Fictional country: land cover of the terrain being drawn, snow potential of the whole country,
+// the season (snow, rice paddies, leaves) - see Renderer::setSeason
+uniform sampler2D texLand;    // RGBA weights: forest, paddy, field, bare (terrain draws, same UV as the ground)
+uniform int landOn;
+uniform sampler2D texSnow;    // snow potential over the country (0..1)
+uniform vec3 snowU;           // snow-map u = dot(vec3(x, z, 1), snowU) (raylib x, z)
+uniform vec3 snowV;
+uniform float snowSeason;     // 0 no snow lying .. 1 deep winter
+uniform float cropStage;      // 0 winter stubble, 1 flooded with seedlings, 2 green, 3 golden
+uniform float leafStage;      // 0 green, 1 autumn colours, 2 bare (deciduous trees)
 out vec4 finalColor;
 float litFrom(float p) {
   float cat = floor(p);
@@ -216,6 +226,19 @@ vec3 interiorBehind(vec3 ng, bool shop, float lit) {
   return mix(wall, vec3(0.86, 0.84, 0.77), curtain * 0.7) * (0.2 + 0.8 * lit);
 }
 
+// Lying snow at this point (0..1): the country's snow potential times the season, on surfaces that
+// face upwards, patchy at the margins.
+float snowAt(vec3 p, vec3 n) {
+  if (snowSeason <= 0.001) return 0.0;
+  vec2 uv = vec2(dot(vec3(p.x, p.z, 1.0), snowU), dot(vec3(p.x, p.z, 1.0), snowV));
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
+  float pot = texture(texSnow, uv).r;
+  float patchy = texture(texNoise, p.xz / 37.0).r * 0.35 + texture(texNoise, p.xz / 5.3).g * 0.15;
+  float s = smoothstep(0.30, 0.62, pot * snowSeason * 1.25 + patchy - 0.25);
+  return s * smoothstep(0.35, 0.75, n.y);
+}
+vec3 snowAlbedo(vec2 wuv) { return vec3(0.80, 0.83, 0.88) * (0.92 + 0.08 * texture(texNoise, wuv / 1.7).b); }
+
 Surf material(int id, vec3 ng, vec2 wuv) {
   Surf s;
   vec3 vc = pow(fragColor.rgb * colDiffuse.rgb, vec3(2.2));
@@ -229,6 +252,8 @@ Surf material(int id, vec3 ng, vec2 wuv) {
     vec4 A = texture(texPaving, puv), N = texture(texPavingN, puv);
     s.albedo = A.rgb * (id == 2 ? 1.0 : 0.85);
     s.rough = A.a; s.n = tangentNormal(ng, N.rg, 0.6); s.ao = mix(1.0, N.a, 0.8); s.porosity = 0.7;
+    float sn = snowAt(fragPos, ng) * 0.8;
+    s.albedo = mix(s.albedo, snowAlbedo(wuv), sn); s.rough = mix(s.rough, 0.6, sn);
   } else if (id == 3) {     // tactile paving (yellow, raised dots)
     vec2 g = fract(wuv / 0.3) - 0.5;
     vec2 d = fract(wuv / 0.06) - 0.5;
@@ -327,9 +352,19 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   }
   else if (id == 17) {  // forest canopy seen from afar: clumpy crowns
     vec4 c = texture(texNoise, wuv / 6.0);
-    s.albedo = vec3(0.045, 0.075, 0.03) * (0.6 + 0.8 * c.r) * (fragColor.r * 2.0);
+    vec3 green = vec3(0.045, 0.075, 0.03) * (0.6 + 0.8 * c.r);
+    // mixed forest: evergreen conifers (cedar / cypress plantations) and broadleaf stands in patches;
+    // the broadleaf trees turn red and yellow in autumn and are bare in winter
+    float broad = smoothstep(0.45, 0.65, texture(texNoise, wuv / 180.0).g);
+    float hueN = texture(texNoise, wuv / 23.0).b;
+    vec3 autumn = mix(vec3(0.30, 0.06, 0.02), vec3(0.34, 0.20, 0.03), hueN);
+    vec3 bare = vec3(0.07, 0.055, 0.045) * (0.7 + 0.6 * c.r);
+    vec3 leaf = leafStage < 1.0 ? mix(green, autumn, leafStage) : mix(autumn, bare, leafStage - 1.0);
+    s.albedo = mix(green, leaf, broad) * (fragColor.r * 2.0);
     s.n = normalize(ng + vec3(c.g - 0.5, 0.0, c.b - 0.5) * 0.9);
     s.rough = 0.8; s.porosity = 0.2;
+    float sn = snowAt(fragPos, ng) * (0.55 + 0.45 * c.r);
+    s.albedo = mix(s.albedo, snowAlbedo(wuv), sn * 0.85);
   }
   else if (id == 18) {  // asphalt deck (bridges)
     vec4 A = texture(texAsphalt, wuv / 3.5);
@@ -339,6 +374,18 @@ Surf material(int id, vec3 ng, vec2 wuv) {
     float sl = step(0.62, fract(wuv.x / 0.6 + wuv.y / 0.6));
     s.albedo = mix(vec3(0.18, 0.17, 0.16) * (0.7 + 0.6 * nz.r), vec3(0.22, 0.2, 0.18), sl * 0.6);
     s.rough = 0.9; s.porosity = 0.5;
+  }
+  else if (id == 41) {  // far-view building box: plain walls, lit windows at night, snow on the roof
+    s.rough = 0.85;
+    if (abs(ng.y) < 0.5) {
+      vec2 cell = floor(vec2(fragPos.x + fragPos.z, fragPos.y) / vec2(3.2, 3.2));
+      float lit = step(hash12(cell), mix(occupancy.y, occupancy.x, 0.5) * 0.85);
+      float win = step(0.25, fract((fragPos.x + fragPos.z) / 3.2)) * step(0.3, fract(fragPos.y / 3.2));
+      s.albedo *= mix(1.0, 0.55, win * 0.6);
+      s.emit = vec3(1.0, 0.86, 0.62) * lit * win * nightFactor * 0.9;
+    } else {
+      s.albedo = mix(s.albedo, snowAlbedo(wuv), snowAt(fragPos, ng));
+    }
   }
   else if (id == 34) { s.albedo *= 0.8 + 0.3 * nz.b; s.rough = 0.92; s.porosity = 0.5; } // bark
   else if (id == 35) { s.albedo = pow(fragColor.rgb, vec3(2.2)); s.rough = 0.45; s.porosity = 0.0; }  // untinted
@@ -391,6 +438,9 @@ Surf facade(vec3 ng) {
       s.albedo = wall * (0.72 + 0.4 * nz.b) * (1.0 - 0.25 * (1.0 - joint));
       s.rough = 0.9; s.porosity = 0.6;
     }
+    // snow lies on the roofs in the snow country (steep metal roofs shed some of it)
+    float sn = snowAt(fragPos, ng) * (st == 102 ? 0.8 : 1.0);
+    s.albedo = mix(s.albedo, vec3(0.80, 0.83, 0.88), sn); s.rough = mix(s.rough, 0.6, sn); s.metal *= 1.0 - sn;
     return s;
   }
   if (st >= 200) {  // ---- special surfaces ----
@@ -602,6 +652,115 @@ Surf terrainSurface(vec3 ng, vec2 wuv) {
   s.emit = vec3(0.0);
   s.transmit = vec3(0.0);
   s.porosity = 0.8 * wRoad + 0.6 * wPave + 0.3 * wMark;
+  if (landOn == 1) {
+    // rural ground (fictional country): the land-cover weights say what grows here, the ground
+    // raster's key colours keep levees, farm roads and verges as they are
+    vec4 Lc = texture(texLand, fragUV);
+    float isForest = (1.0 - smoothstep(0.035, 0.08, distance(c, vec3(46.0, 62.0, 36.0) / 255.0))) * smoothstep(0.2, 0.5, Lc.r);
+    float isPaddy = (1.0 - smoothstep(0.03, 0.07, distance(c, vec3(92.0, 118.0, 64.0) / 255.0))) * smoothstep(0.2, 0.5, Lc.g);
+    // the raster's two field colours (soil / rows) blend when filtered: accept the whole segment between them
+    vec3 fk1 = vec3(124.0, 110.0, 76.0) / 255.0, fk2 = vec3(104.0, 92.0, 64.0) / 255.0, fe = fk2 - fk1;
+    float fdist = distance(c, fk1 + fe * clamp(dot(c - fk1, fe) / dot(fe, fe), 0.0, 1.0));
+    float isField = (1.0 - smoothstep(0.03, 0.07, fdist)) * smoothstep(0.2, 0.5, Lc.b);
+    float isBare = (1.0 - smoothstep(0.04, 0.09, distance(c, vec3(86.0, 66.0, 58.0) / 255.0))) * smoothstep(0.2, 0.5, Lc.a);
+    vec4 n1 = texture(texNoise, wuv / 2.3), n2 = texture(texNoise, wuv / 17.0);
+    if (isForest > 0.01) {  // forest floor: litter and moss in the shade of the crowns
+      vec3 a = vec3(0.034, 0.038, 0.020) * (0.7 + 0.6 * n1.r) * (0.85 + 0.3 * n2.g);
+      s.albedo = mix(s.albedo, a, isForest); s.rough = mix(s.rough, 0.95, isForest); s.ao *= mix(1.0, 0.75, isForest);
+    }
+    if (isPaddy > 0.01) {
+      // planting rows 30 cm apart along the plots (same orientation as the plot pattern)
+      float ang = 0.35;
+      vec2 ruv = vec2(wuv.x * cos(ang) + wuv.y * sin(ang), -wuv.x * sin(ang) + wuv.y * cos(ang));
+      float aaRow = smoothstep(0.2, 0.55, fwidth(ruv.x) / 0.3);  // rows finer than a few pixels: their mean
+      float row = mix(smoothstep(0.35, 0.05, abs(fract(ruv.x / 0.3) - 0.5) * 2.0), 0.2, aaRow);
+      float tuft = 0.75 + 0.25 * texture(texNoise, ruv * vec2(3.3, 0.9)).r;
+      // each plot (about 30 x 90 m) differs a little; late in the season some are already cut
+      float plot = hash12(floor(vec2(ruv.x / 30.0, ruv.y / 90.0)) + 17.0);
+      float cut = step(plot, clamp((cropStage - 2.75) * 3.0, 0.0, 1.0));
+      vec3 water = vec3(0.020, 0.028, 0.026);
+      vec3 mud = vec3(0.085, 0.070, 0.050) * (0.8 + 0.4 * n1.g);
+      // cut stalks in their rows (broken along the row) over mud strewn with chopped straw
+      float stalk = row * (0.5 + 0.5 * texture(texNoise, ruv * vec2(3.3, 7.0)).r);
+      float chopped = smoothstep(0.4, 0.85, texture(texNoise, wuv / 0.9).g);
+      vec3 stubble = mix(mud, vec3(0.16, 0.13, 0.08), clamp(0.2 + 0.4 * stalk + 0.35 * chopped, 0.0, 1.0));
+      vec3 seedl = mix(water, vec3(0.05, 0.10, 0.03), row * 0.35);
+      vec3 green = mix(water, vec3(0.055, 0.115, 0.028) * tuft, clamp(row * 1.4 + 0.45, 0.0, 1.0));
+      vec3 gold = vec3(0.20, 0.155, 0.058) * (0.8 + 0.4 * n1.b) * tuft * (0.85 + 0.3 * plot);
+      gold = mix(gold, vec3(0.13, 0.12, 0.05), smoothstep(0.35, 0.0, abs(fract(ruv.x / 0.3) - 0.5)) * 0.25 * (1.0 - aaRow));
+      float st = cropStage;
+      vec3 a = st < 1.0 ? mix(stubble, seedl, st) : st < 2.0 ? mix(seedl, green, st - 1.0) : mix(green, gold, st - 2.0);
+      a = mix(a, stubble, cut);
+      float r = st < 1.0 ? mix(0.9, 0.06, st) : st < 2.0 ? mix(0.06, 0.55, st - 1.0) : mix(0.55, 0.8, st - 2.0);
+      s.albedo = mix(s.albedo, a, isPaddy); s.rough = mix(s.rough, r, isPaddy);
+      s.porosity = mix(s.porosity, 0.0, isPaddy * step(0.5, st) * step(st, 1.6));
+      s.n = normalize(mix(s.n, ng, isPaddy));
+    }
+    if (isField > 0.01) {
+      // small upland plots (about 20 x 45 m) with their own crop and row direction: bare ploughed
+      // soil, vegetable rows (green most of the year) or fallow grass
+      float ang = -0.5;
+      vec2 puv = vec2(wuv.x * cos(ang) + wuv.y * sin(ang), -wuv.x * sin(ang) + wuv.y * cos(ang));
+      vec2 pid = floor(vec2(puv.x / 20.0, puv.y / 45.0));
+      float h1 = hash12(pid + 31.0), h2 = hash12(pid + 57.0);
+      bool across = h1 > 0.5;
+      float u = across ? puv.y : puv.x;
+      float period = 0.9 + 0.5 * h2;
+      float f = fract(u / period);
+      float aa = smoothstep(0.2, 0.55, fwidth(u) / period);  // rows finer than a few pixels fade to their mean
+      float ridge = mix(smoothstep(0.42, 0.12, abs(f - 0.5)), 0.5, aa);
+      float kind = hash12(pid + 83.0);  // < 0.35 bare, < 0.85 vegetables, else fallow
+      float grow = cropStage < 1.0 ? 0.35 : smoothstep(1.0, 1.8, cropStage);
+      vec3 soil = vec3(0.10, 0.075, 0.052) * (0.8 + 0.4 * n1.r) * (0.9 + 0.2 * h2);
+      vec3 leaves = vec3(0.045, 0.085, 0.028) * (0.8 + 0.4 * n1.g) * (0.85 + 0.3 * h1);
+      vec3 fallow = mix(vec3(0.07, 0.085, 0.035), vec3(0.11, 0.095, 0.05), step(2.6, cropStage) + step(cropStage, 0.9));
+      vec3 a = kind < 0.35 ? soil : kind < 0.85 ? mix(soil, leaves, ridge * grow) : fallow * (0.85 + 0.3 * n1.b);
+      s.albedo = mix(s.albedo, a, isField); s.rough = mix(s.rough, 0.92, isField);
+      // furrow profile: the surface slopes across the rows (not for fallow plots)
+      vec2 dirW = across ? vec2(-sin(ang), cos(ang)) : vec2(cos(ang), sin(ang));
+      float slope = cos(6.2831 * f) * 0.22 * (1.0 - aa) * step(kind, 0.85);
+      vec3 tilt = vec3(dirW.x, 0.0, -dirW.y) * slope;
+      s.n = normalize(mix(s.n, normalize(ng + tilt), isField));
+    }
+    if (isBare > 0.01) {  // volcanic scoria and rock
+      vec3 a = mix(vec3(0.09, 0.055, 0.045), vec3(0.13, 0.12, 0.11), smoothstep(0.4, 0.7, n2.r)) * (0.75 + 0.5 * n1.b);
+      s.albedo = mix(s.albedo, a, isBare); s.rough = mix(s.rough, 0.95, isBare);
+    }
+  }
+  // snow: open ground white; carriageways compacted and wet (tyre tracks)
+  float sn = snowAt(fragPos, ng);
+  if (sn > 0.001) {
+    float onRoad = wRoad * (1.0 - wGreen);
+    float amt = sn * mix(1.0, 0.45 + 0.35 * texture(texNoise, wuv / 3.1).r, onRoad);
+    s.albedo = mix(s.albedo, snowAlbedo(wuv) * mix(1.0, 0.8, onRoad), amt);
+    s.rough = mix(s.rough, mix(0.55, 0.3, onRoad), amt);
+    s.porosity = mix(s.porosity, 0.2, amt);
+  }
+  return s;
+}
+
+// Far-view terrain (coarse tiles beyond the streamed cells): colour map with season and snow.
+Surf farSurface(vec3 ng, vec2 wuv) {
+  Surf s;
+  vec3 c = texture(texture0, fragUV).rgb;
+  s.albedo = pow(c, vec3(2.2)) * 0.95; s.rough = 0.9; s.metal = 0.0; s.n = ng; s.ao = 1.0; s.emit = vec3(0.0);
+  s.porosity = 0.5; s.transmit = vec3(0.0);
+  float forest = 1.0 - smoothstep(0.04, 0.10, distance(c, vec3(40.0, 58.0, 32.0) / 255.0));
+  if (forest > 0.01) {  // broadleaf patches turn in autumn and are bare in winter (as the near canopy)
+    float broad = smoothstep(0.45, 0.65, texture(texNoise, wuv / 900.0).g);
+    vec3 autumn = mix(vec3(0.26, 0.06, 0.02), vec3(0.30, 0.18, 0.03), texture(texNoise, wuv / 300.0).b);
+    vec3 bare = vec3(0.07, 0.055, 0.045);
+    vec3 leaf = leafStage < 1.0 ? mix(s.albedo, autumn, leafStage) : mix(autumn, bare, leafStage - 1.0);
+    s.albedo = mix(s.albedo, leaf, broad * forest);
+  }
+  float paddy = 1.0 - smoothstep(0.03, 0.08, distance(c, vec3(92.0, 118.0, 64.0) / 255.0));
+  if (paddy > 0.01) {
+    vec3 a = cropStage < 1.0 ? vec3(0.10, 0.08, 0.055) : cropStage < 2.0 ? mix(vec3(0.03, 0.045, 0.04), s.albedo, cropStage - 1.0)
+                              : mix(s.albedo, vec3(0.28, 0.22, 0.07), cropStage - 2.0);
+    s.albedo = mix(s.albedo, a, paddy);
+  }
+  float sn = snowAt(fragPos, ng);
+  s.albedo = mix(s.albedo, vec3(0.80, 0.83, 0.88), sn); s.rough = mix(s.rough, 0.6, sn);
   return s;
 }
 
@@ -615,6 +774,8 @@ void main() {
     s = terrainSurface(ng, wuv);
   } else if (surfaceMode == 3) {
     s = facade(ng);
+  } else if (surfaceMode == 4) {
+    s = farSurface(ng, wuv);
   } else {
     s = material(id, ng, wuv);
     if (useTexture == 1) {
@@ -841,12 +1002,17 @@ vec3 viewPos(vec2 uv) {
 }
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
-  vec2 uv = fragTexCoord;
+  // This pass runs at half resolution: its pixel centres fall on the corners of the full-resolution
+  // depth texels, where nearest sampling rounds either way from row to row (bands on flat ground).
+  vec2 uv = (floor(fragTexCoord / invRes) + 0.5) * invRes;
   float d0 = linDepth(uv);
   if (d0 > farZ * 0.9) { finalColor = vec4(1.0); return; }
   vec3 P = viewPos(uv);
-  vec3 Px = viewPos(uv + vec2(invRes.x, 0.0)) - P;
-  vec3 Py = viewPos(uv + vec2(0.0, invRes.y)) - P;
+  // normal from the neighbour on the flatter side in each axis (no false creases at depth steps and silhouettes)
+  vec3 Pr = viewPos(uv + vec2(invRes.x, 0.0)) - P, Pl = P - viewPos(uv - vec2(invRes.x, 0.0));
+  vec3 Pu = viewPos(uv + vec2(0.0, invRes.y)) - P, Pd = P - viewPos(uv - vec2(0.0, invRes.y));
+  vec3 Px = abs(Pr.z) < abs(Pl.z) ? Pr : Pl;
+  vec3 Py = abs(Pu.z) < abs(Pd.z) ? Pu : Pd;
   vec3 N = normalize(cross(Px, Py));
   float radius = clamp(0.6 + d0 * 0.02, 0.6, 3.0);  // metres, grows with distance
   float ang = hash12(gl_FragCoord.xy) * 6.2831;
@@ -894,7 +1060,7 @@ float linDepth(vec2 uv) {
 vec3 viewPos(vec2 uv) { float d = linDepth(uv); return vec3((uv * 2.0 - 1.0) * tanHalf * d, -d); }
 vec2 project(vec3 p) { return (p.xy / (-p.z) / tanHalf) * 0.5 + 0.5; }
 void main() {
-  vec2 uv = fragTexCoord;
+  vec2 uv = (floor(fragTexCoord / invRes) + 0.5) * invRes;  // full-resolution texel centre (see the SSAO pass)
   float amt = texture(texture0, uv).a;
   if (amt < 0.01) { finalColor = vec4(0.0); return; }
   vec3 P = viewPos(uv);
@@ -974,7 +1140,7 @@ uniform float saturation;
 uniform float contrast;
 uniform float vignette;
 uniform float rainOverlay;
-uniform int debugView;       // 1 = reflection amount (scene alpha)
+uniform int debugView;       // 1 = reflection amount (scene alpha), 2 = SSAO, 3 = SSR
 uniform float timeSec;
 uniform vec2 invRes;
 out vec4 finalColor;
@@ -1025,6 +1191,8 @@ void main() {
   }
   c += (hash12(gl_FragCoord.xy + timeSec) - 0.5) / 255.0;  // dither against banding
   if (debugView == 1) c = vec3(texture(texture0, uv).a);
+  if (debugView == 2) c = vec3(ao);
+  if (debugView == 3) c = ssr.rgb * ssr.a * 4.0;
   finalColor = vec4(c, 1.0);
 }
 )";

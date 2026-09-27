@@ -25,7 +25,7 @@ void applyKv(Settings& s, const std::map<std::string, std::string>& kv) {
     if (auto x = get(k)) try { v = std::stof(*x); } catch (...) {}
   };
   if (auto x = get("language")) s.language = (*x == "en") ? "en" : "ja";
-  if (auto x = get("world")) s.world = (*x == "shibuya") ? "shibuya" : "island";
+  if (auto x = get("world")) s.world = (*x == "shibuya") ? "shibuya" : "country";  // ("island": the earlier fictional world)
   i("width", s.width);
   i("height", s.height);
   b("fullscreen", s.fullscreen);

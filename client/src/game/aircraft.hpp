@@ -1,11 +1,13 @@
 #pragma once
-// Aviation at the fictional island's airport (data/world/island/transport.txt: runway, taxiways,
-// apron, stands, terminal).
+// Aviation between the fictional country's airports (data/world/country/transport.txt: per airport
+// runway, taxiways, apron, stands, terminal).
 //
-//  * Scheduled regional jets (a fictional airline, generic aircraft): boarding at the stand,
-//    pushback, taxi along the real taxiway layout, take-off roll and rotation, climb-out and a turn
-//    towards the mainland (off the map), and later a 3-degree approach, flare, landing roll and
-//    taxi back to a stand. The player can buy a ticket at the terminal and ride at a window seat.
+//  * Scheduled regional jets (a fictional airline, generic aircraft) flying between the capital's
+//    airport and the southern island's: boarding at the stand, pushback, taxi along the taxiway
+//    layout, take-off roll and rotation, climb-out, a turn onto the route, cruise, descent, a
+//    3-degree approach, flare, landing roll and taxi to a stand at the destination; after the
+//    turnaround the flight goes back. The player can buy a ticket at either terminal and ride at a
+//    window seat.
 //  * A light aircraft (generic high-wing four-seater) parked on the apron that the player can fly:
 //    six-degree-of-freedom rigid body with lift (angle of attack, stall), induced and parasitic
 //    drag, propeller thrust falling with airspeed, side force; pitch / roll / yaw moments with
@@ -26,6 +28,7 @@ class World;
 
 struct Airport {
   bool ok = false;
+  std::string name, name_en;
   rj::geo::Vec3d rwy_a, rwy_b;  // thresholds (origin ENU, ground level)
   double rwy_width = 45;
   rj::geo::Vec3d twy_a, twy_b;
@@ -45,7 +48,8 @@ struct Airport {
 // A scheduled flight (regional jet).
 struct Airliner {
   int id = 0;
-  int stand = 0;
+  int stand = 0;       // stand at the airport it is at (`from` before departure, `to` after landing)
+  int from = 0, to = 1;  // this leg (airport indices)
   enum class Phase { AtStand, Pushback, TaxiOut, Takeoff, Climb, Offmap, Approach, Landing, TaxiIn } phase = Phase::AtStand;
   double timer = 0;
   std::vector<rj::geo::Vec3d> path;  // current leg
@@ -110,13 +114,18 @@ class LightPlane {
 class Aviation {
  public:
   bool load(const std::filesystem::path& transport, std::string& err);
-  bool loaded() const { return airport_.ok; }
+  bool loaded() const { return !airports_.empty() && airports_.front().ok; }
   void place(const World& world);
   void update(double dt, const World& world);
-  const Airport& airport() const { return airport_; }
+  const Airport& airport() const { return airports_.front(); }  // the capital's (light aircraft)
+  const std::vector<Airport>& airports() const { return airports_; }
   const std::vector<Airliner>& airliners() const { return jets_; }
   const Airliner* airliner(int id) const;
-  const Airliner* boardable() const;  // at a stand, boarding open
+  const Airliner* boardable(int airport = 0) const;  // at a stand of that airport, boarding open
+  // the landside entrance of an airport's terminal (where tickets are bought) and the airport whose
+  // entrance is within r of p (-1: none)
+  rj::geo::Vec3d landside(int airport) const;
+  int airportNear(const rj::geo::Vec3d& p, double r) const;
   void setAboard(int id, bool on);
   void fastForwardOffmap(int id);
   // player's light aircraft (parked when not flown)
@@ -135,11 +144,10 @@ class Aviation {
   void buildApproach(Airliner& a) const;
   void setPath(Airliner& a, std::vector<rj::geo::Vec3d> pts) const;
   void pointAt(const Airliner& a, double s, rj::geo::Vec3d& p, double& heading, double& grade) const;
-  Airport airport_;
+  std::vector<Airport> airports_;
   std::vector<Airliner> jets_;
   LightPlane plane_;
   bool placed_ = false;
-  double ground_z_ = 0;
 };
 
 }  // namespace rjc

@@ -1,5 +1,6 @@
 #include "world/detail.hpp"
 
+#include <cstdlib>
 #include <cstring>
 
 #include "render/foliage.hpp"
@@ -31,6 +32,7 @@ class Reader {
     else p_ += n;
   }
   const unsigned char* here() const { return d_ + p_; }
+  size_t remaining() const { return ok_ ? n_ - p_ : 0; }
 
  private:
   const unsigned char* d_;
@@ -172,6 +174,20 @@ bool parseDetail(const std::vector<unsigned char>& file, CellDetailCpu& out, std
       out.trees.push_back(t);
     }
     tris(out.hedges);
+    // Land cover (appended section; fictional worlds only).
+    if (r.ok() && r.remaining() >= 4) {
+      const uint32_t lc_len = r.get<uint32_t>();
+      if (r.ok() && lc_len > 0 && lc_len <= r.remaining()) {
+        std::vector<unsigned char> png(lc_len);
+        r.bytes(png.data(), lc_len);
+        if (r.ok()) {
+          out.landcover = LoadImageFromMemory(".png", png.data(), static_cast<int>(lc_len));
+          if (std::getenv("RJ_LC_DEBUG")) TraceLog(LOG_INFO, "RJ: land cover %dx%d fmt %d", out.landcover.width, out.landcover.height, out.landcover.format);
+          if (out.landcover.data && out.landcover.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+            ImageFormat(&out.landcover, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+        }
+      }
+    }
   }
   if (!r.ok() && !out.chunks.empty()) {
     // tolerate packages without the vegetation section
@@ -224,6 +240,13 @@ void uploadDetail(CellDetailCpu& cpu, CellDetailGpu& gpu) {
     gpu.trees.push_back(g);
   }
   if (!cpu.hedges.empty()) gpu.hedge = buildHedge(cpu.hedges.data(), static_cast<int>(cpu.hedges.size() / 9), 0.9f);
+  if (cpu.landcover.data) {
+    gpu.landcover = LoadTextureFromImage(cpu.landcover);
+    SetTextureFilter(gpu.landcover, TEXTURE_FILTER_BILINEAR);
+    SetTextureWrap(gpu.landcover, TEXTURE_WRAP_CLAMP);
+    UnloadImage(cpu.landcover);
+    cpu.landcover = Image{};
+  }
   if (cpu.ao.data) {
     gpu.ao = LoadTextureFromImage(cpu.ao);
     GenTextureMipmaps(&gpu.ao);
@@ -240,6 +263,8 @@ void unloadDetail(CellDetailGpu& gpu) {
   gpu.mats.clear();
   if (gpu.ao.id) UnloadTexture(gpu.ao);
   gpu.ao = Texture2D{};
+  if (gpu.landcover.id) UnloadTexture(gpu.landcover);
+  gpu.landcover = Texture2D{};
   for (auto& t : gpu.trees) {
     if (t.bark.vaoId) UnloadMesh(t.bark);
     if (t.leaves.vaoId) UnloadMesh(t.leaves);

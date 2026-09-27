@@ -1,7 +1,8 @@
 #pragma once
-// Ferries of the fictional island (data/world/island/transport.txt): a short-route ferry between
-// the harbour and the islet, and a larger car ferry that leaves for the mainland (off the map) and
-// comes back. Fictional services with no published timetable.
+// Ferries of the fictional country (data/world/country/transport.txt): a short-route ferry between
+// the capital's harbour and the islet, a high-speed ferry from the capital to the southern island,
+// and a car ferry from the port city to the southern island. Fictional services with no published
+// timetable.
 //
 // Harbour manoeuvres: each trip starts by backing away from the berth, turning on the spot (bow
 // thrusters) and then following the route at cruising speed; ships slow down in the harbour and
@@ -24,6 +25,8 @@ struct Pier {
   double heading = 0;     // degrees, pointing out to sea
   double length = 120.0;
   rj::geo::Vec3d pos;     // origin ENU (deck height is 2.4 m above sea level)
+  std::string name;       // e.g. 島ノ浦港
+  int ships = 0;          // ships berthing here (each takes one side of the pier)
 };
 
 struct ShipClass {
@@ -37,6 +40,8 @@ struct Ferry {
   int id = 0;
   int route = 0;
   int cls = 0;              // 0 small (62 m), 1 large car ferry (110 m)
+  double cruise = 8.5;      // service speed (m/s): high-speed ferries run much faster
+  int side_a = 1, side_b = -1;  // which side of each pier it berths at
   // path in origin ENU; trip goes from path[0] to path.back() (dir +1) or back (dir -1)
   std::vector<rj::geo::Vec3d> path;
   std::vector<double> cum;
@@ -87,6 +92,7 @@ class Ferries {
   struct Route {
     std::vector<rj::geo::Geodetic> via;  // intermediate points (between the pier heads)
     bool offmap_end = false;
+    std::string kind = "short";          // short | jet (high-speed) | car
   };
   std::vector<Route> routes_;
   std::vector<Ferry> ships_;
