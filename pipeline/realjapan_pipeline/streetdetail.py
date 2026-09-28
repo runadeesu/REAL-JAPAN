@@ -458,7 +458,7 @@ def parse_vegetation(path: str, frame, to_local, terrain) -> tuple[list, list]:
 
 
 def encode(geos: dict, walk_tris: list, lights: list, signals: list, cross_tris: list, ao_png: bytes = b"",
-           trees: list = (), hedges: list = (), landcover: bytes = b"") -> tuple[bytes, dict]:
+           trees: list = (), hedges: list = (), landcover: bytes = b"", sections: list = ()) -> tuple[bytes, dict]:
     body = bytearray()
     chunks = []
     for name, g in geos.items():
@@ -518,8 +518,10 @@ def encode(geos: dict, walk_tris: list, lights: list, signals: list, cross_tris:
         body += struct.pack("<5fI", *base, h, r, k)
     H = np.concatenate(hedges).astype(np.float32) if hedges else np.zeros((0, 3, 3), np.float32)
     body += struct.pack("<I", len(H)) + H.tobytes()
-    if landcover:  # appended section (fictional worlds): RGBA land-cover PNG (forest, paddy, field, bare)
+    if landcover or sections:  # appended section (fictional worlds): RGBA land-cover PNG (forest, paddy, field, bare)
         body += struct.pack("<I", len(landcover)) + landcover
+    for tag, payload in sections:  # tagged sections: 4-byte tag, u32 length, payload (e.g. WALL collision walls)
+        body += tag[:4].ljust(4, b" ") + struct.pack("<I", len(payload)) + payload
     comp = zlib.compressobj(9, zlib.DEFLATED, -15)
     data = comp.compress(bytes(body)) + comp.flush()
     stats = {"chunks": len(chunks), "vertices": nv_total, "walk_tris": len(W), "lights": len(lights), "trees": len(trees),

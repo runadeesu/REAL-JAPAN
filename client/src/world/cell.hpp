@@ -17,6 +17,8 @@ namespace rjc {
 // vertex alpha = facade style (see facade() in render/shaders.hpp).
 constexpr int kPageProcedural = -2;
 
+constexpr uint8_t kBuildingWalkIn = 4;
+
 struct BuildingInfo {
   std::string id;
   std::string name;
@@ -28,6 +30,7 @@ struct BuildingInfo {
   uint8_t lod = 0;
   uint8_t geometry_status = 0;  // 0 = VERIFIED_EXTERIOR
   uint8_t interior_status = 2;  // 2 = UNKNOWN
+  uint8_t flags = 0;            // kBuildingWalkIn: no footprint collision (the player walks in)
   uint32_t source_index = 0;
   float ground_z = 0.0f;
   float bmin[3] = {0, 0, 0}, bmax[3] = {0, 0, 0};  // cell-local ENU

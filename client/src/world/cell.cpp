@@ -126,7 +126,7 @@ bool parseCell(const std::vector<unsigned char>& file, CellCpu& c, std::string& 
     b.lod = r.get<uint8_t>();
     b.geometry_status = r.get<uint8_t>();
     b.interior_status = r.get<uint8_t>();
-    r.get<uint8_t>();  // flags
+    b.flags = r.get<uint8_t>();
     b.source_index = r.get<uint32_t>();
     b.ground_z = r.get<float>();
     for (float& v : b.bmin) v = r.get<float>();

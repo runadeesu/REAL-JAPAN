@@ -70,9 +70,12 @@ struct LoadedCell {
   std::vector<float> deck;                 // bridge decks (drivable, 9 floats per triangle)
   std::unordered_map<int64_t, std::vector<uint32_t>> deck_hash;
   std::unordered_set<int64_t> mark_hash;   // 2 m buckets holding surveyed road markings
+  std::vector<float> walls;                // collision walls: x0, y0, x1, y1, z low, z high (origin ENU)
+  std::unordered_map<int64_t, std::vector<uint32_t>> wall_hash;  // 4 m buckets -> wall index
   struct Light {
     rj::geo::Vec3d pos;
     float range;
+    int kind = 0;  // 3: indoor light (station concourse), on by day too
   };
   std::vector<Light> lights;
   struct Signal {
@@ -110,6 +113,12 @@ class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
   bool hasSurveyedMarking(double x, double y, double radius) const;
   bool pointInBuilding(double x, double y) const;  // inside any PLATEAU footprint
   void collide(rj::geo::Vec3d& p, double radius) const;
+  // The walkable surface a walker at height zref stands on: the highest of the raised walkways,
+  // decks (platforms, stairs, bridges, concourse floors) and the terrain that is not above zref.
+  std::optional<double> floorBelow(double x, double y, double zref) const;
+  // Push a walker (feet at p.z, 1.7 m tall) out of the cells' collision walls (and extra ones:
+  // x0, y0, x1, y1, z low, z high per wall).
+  void collideWalls(rj::geo::Vec3d& p, double radius, const std::vector<float>* extra = nullptr) const;
   struct Hit {
     const BuildingInfo* building = nullptr;
     const LoadedCell* cell = nullptr;

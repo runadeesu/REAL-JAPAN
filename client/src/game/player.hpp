@@ -1,4 +1,6 @@
 #pragma once
+
+#include <vector>
 // Player controller: walking on the real terrain with building collision,
 // running, jumping, and a free-fly exploration mode. First/third person.
 
@@ -35,7 +37,7 @@ struct Player {
   // inside: the verified interior the player is in; nearby (when outside): an interior whose
   // stairwell parapets should block. Sets left_interior when the player stepped out onto the street.
   void update(float dt, const World& world, const Settings& s, bool input_enabled, const Interior* inside = nullptr,
-              const Interior* nearby = nullptr);
+              const Interior* nearby = nullptr, const std::vector<float>* extra_walls = nullptr);
   void snapToGround(const World& world);
   Camera3D camera(float fov_deg, float third_person_dist = 4.5f) const;
   rj::geo::Vec3d eyeEnu() const { return {pos.x, pos.y, pos.z + kEyeHeight}; }

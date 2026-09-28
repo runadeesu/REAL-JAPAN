@@ -36,7 +36,10 @@ class Crowd {
  public:
   // cam: camera position; ride_train / ride_car: the car the player sits in (-1: none; their own
   // seat stays free); hour: local time; weekend: fewer commuters
-  void update(double now, const Trains& trains, const rj::geo::Vec3d& cam, int ride_train, int ride_car, int hour, bool weekend);
+  void update(double now, const Trains& trains, const rj::geo::Vec3d& cam, int ride_train, int ride_car, int hour, bool weekend,
+              int player_seat = -1);
+  // Is seat `seat` (car_layout.hpp order) of car k of train `train_id` taken by a passenger right now?
+  bool seatTaken(const Trains& trains, int train_id, int k, int seat) const;
   const std::vector<CrowdPerson>& people() const { return people_; }
   // passengers in the airliner the player flies in (call after update): most seats taken, not the player's
   void jetCabin(const struct Airliner& a);
@@ -45,6 +48,8 @@ class Crowd {
   void carPassengers(const Trains& trains, int train_index, int k, bool ridden, float busy);
   void platformQueues(double now, const Trains& trains, int station, const rj::geo::Vec3d& cam, float busy);
   std::vector<CrowdPerson> people_;
+  float busy_ = 0.4f;     // how busy the trains are now (set by update)
+  int player_seat_ = -1;  // the seat the player sits on in the car ridden (kept free)
   std::map<int, int> trip_;            // train id -> stops made (the passengers change at each)
   std::map<int, int> last_at_;         // train id -> station it stood at last update
   std::map<int, double> opened_;       // train id -> when its doors opened at the current stop

@@ -207,7 +207,7 @@ def cook_cell(mesh: str):
                           storeys_above=int(b.storeys), storeys_below=0, lod=2, geometry_status=GEOM_UNVERIFIED,
                           interior_status=INTERIOR_FICTIONAL, source_index=0, ground_z=gz,
                           bmin=tuple(allp.min(0)), bmax=tuple(allp.max(0)), footprint=[tuple(p) for p in fp_local],
-                          chunk=ch, first_index=fidx, index_count=cnt)
+                          chunk=ch, first_index=fidx, index_count=cnt, flags=4 if getattr(b, "walk_in", False) else 0)
         w.buildings.append(rec)
         cx, cy = b.footprint.mean(axis=0)
         bla, blo = fi.to_geodetic(cx, cy)
@@ -252,7 +252,11 @@ def cook_cell(mesh: str):
     size = TEX if (w.buildings or (rp is not None and rp.whole.area > 20000)) else (TEX_RURAL if has_land else TEX_SEA)
     w.ground_png, ao_png = ground_raster(ctry, spec, lc, rp, cpoly, M, blds, size)
     lc_png = landcover_png(lc, M) if has_land else b""
-    det, dst = encode_detail(geos, extra.decks, [], [], [], ao_png, extra.trees, [], landcover=lc_png)
+    sections = []
+    if extra.walls:  # collision walls (x0, y0, x1, y1, z low, z high), cell ENU
+        sections.append((b"WALL", np.asarray(extra.walls, np.float32).tobytes()))
+    det, dst = encode_detail(geos, extra.decks, extra.lights, [], [], ao_png, extra.trees, [], landcover=lc_png,
+                             sections=sections)
     with open(os.path.join(out, "cells", f"{mesh}.rjdet"), "wb") as f:
         f.write(det)
     data = w.to_bytes()

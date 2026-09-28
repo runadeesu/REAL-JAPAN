@@ -98,6 +98,8 @@ struct CellDetailCpu {
   // land cover (fictional country): RGBA weights of forest, rice paddy, upland field, bare ground,
   // same UV as the ground texture; the forest canopy is built from it on the loader thread
   Image landcover{};
+  // collision walls (tagged WALL section): x0, y0, x1, y1, z low, z high per wall (cell ENU)
+  std::vector<float> walls;
   bool present = false;
 };
 

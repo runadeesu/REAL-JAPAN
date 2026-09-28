@@ -16,7 +16,7 @@ rj::geo::Vec3d Player::forwardEnu() const {
 }
 
 void Player::snapToGround(const World& world) {
-  if (auto h = world.surfaceHeight(pos.x, pos.y)) {
+  if (auto h = world.floorBelow(pos.x, pos.y, pos.z + 0.55)) {
     pos.z = *h;
     vel_z = 0;
     grounded = true;
@@ -24,7 +24,7 @@ void Player::snapToGround(const World& world) {
 }
 
 void Player::update(float dt, const World& world, const Settings& s, bool input, const Interior* inside,
-                    const Interior* nearby) {
+                    const Interior* nearby, const std::vector<float>* extra_walls) {
   dt = std::min(dt, 0.1f);
   if (input) {
     const Vector2 md = GetMouseDelta();
@@ -91,8 +91,11 @@ void Player::update(float dt, const World& world, const Settings& s, bool input,
       }
     } else {
       world.collide(pos, kRadius);
+      world.collideWalls(pos, kRadius, extra_walls);  // station walls, gates, railings, platform edges
       if (nearby) nearby->collide(pos, kRadius);  // stairwell parapets that stand above the pavement
-      ground = world.surfaceHeight(pos.x, pos.y);  // raised sidewalks / islands where the data has them
+      // the surface under the feet (a step up of up to 0.55 m): platforms and concourses over the
+      // street, stairs, sidewalks, the terrain (not the deck of a tunnel under the hill)
+      ground = world.floorBelow(pos.x, pos.y, pos.z + 0.55);
     }
     if (!ground) {
       // Outside the loaded data: stay on the edge.

@@ -1589,16 +1589,30 @@ Camera3D App::titleCamera() const {
 
 std::vector<PointLight> App::collectLights(const Camera3D& cam) const {
   std::vector<PointLight> out;
-  if (lighting_.night < 0.03f || lighting_.indoor > 0.9f) return out;
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   struct Cand {
     double d2;
     PointLight l;
   };
   std::vector<Cand> cand;
+  // indoor lights (station concourses) are on all day
+  for (const auto& [code, cell] : world_.cells())
+    for (const auto& l : cell->lights) {
+      if (l.kind != 3) continue;
+      const double dx = l.pos.x - c.x, dy = l.pos.y - c.y, dz = l.pos.z - c.z;
+      const double d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > 60.0 * 60.0) continue;
+      cand.push_back({d2 * 0.25, {enuToRl(l.pos), l.range * 1.3f, Vector3Scale(Vector3{0.96f, 0.98f, 1.0f}, 14.0f)}});
+    }
+  if (lighting_.night < 0.03f || lighting_.indoor > 0.9f) {
+    std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
+    for (size_t i = 0; i < cand.size() && out.size() < 8; ++i) out.push_back(cand[i].l);
+    return out;
+  }
   const float k = lighting_.night;
   for (const auto& [code, cell] : world_.cells())
     for (const auto& l : cell->lights) {  // real street-light heads (PLATEAU frn 4200)
+      if (l.kind == 3) continue;
       const double dx = l.pos.x - c.x, dy = l.pos.y - c.y;
       const double d2 = dx * dx + dy * dy;
       if (d2 > 180.0 * 180.0) continue;

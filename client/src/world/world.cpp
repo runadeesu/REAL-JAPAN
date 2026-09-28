@@ -329,8 +329,23 @@ void World::placeCell(LoadedCell& c) {
     const auto p = toO(m);
     c.mark_hash.insert(bucketKey(static_cast<int>(std::floor(p.x / 2.0)), static_cast<int>(std::floor(p.y / 2.0))));
   }
+  c.walls.clear();
+  c.wall_hash.clear();
+  for (size_t w = 0; w + 5 < det.walls.size(); w += 6) {
+    const float a[3] = {det.walls[w], det.walls[w + 1], det.walls[w + 4]};
+    const float b[3] = {det.walls[w + 2], det.walls[w + 3], det.walls[w + 5]};
+    const auto A = toO(a), B = toO(b);
+    const size_t i = c.walls.size() / 6;
+    c.walls.insert(c.walls.end(), {static_cast<float>(A.x), static_cast<float>(A.y), static_cast<float>(B.x), static_cast<float>(B.y),
+                                   static_cast<float>(A.z), static_cast<float>(B.z)});
+    const float x0 = static_cast<float>(std::min(A.x, B.x)) - 0.5f, x1 = static_cast<float>(std::max(A.x, B.x)) + 0.5f;
+    const float y0 = static_cast<float>(std::min(A.y, B.y)) - 0.5f, y1 = static_cast<float>(std::max(A.y, B.y)) + 0.5f;
+    for (int bx = static_cast<int>(std::floor(x0 / 4.0)); bx <= static_cast<int>(std::floor(x1 / 4.0)); ++bx)
+      for (int by = static_cast<int>(std::floor(y0 / 4.0)); by <= static_cast<int>(std::floor(y1 / 4.0)); ++by)
+        c.wall_hash[bucketKey(bx, by)].push_back(static_cast<uint32_t>(i));
+  }
   c.lights.clear();
-  for (const auto& l : det.lights) c.lights.push_back({toO(l.pos), l.range});
+  for (const auto& l : det.lights) c.lights.push_back({toO(l.pos), l.range, static_cast<int>(l.kind)});
   c.signals.clear();
   for (const auto& sg : det.signals)
     c.signals.push_back({toO(sg.pos), sg.axis_yaw, sg.facing_yaw, sg.length, static_cast<int>(sg.kind), sg.group,
@@ -477,6 +492,63 @@ std::optional<double> World::roadHeight(double x, double y) const {
   return terrainHeight(x, y);
 }
 
+std::optional<double> World::floorBelow(double x, double y, double zref) const {
+  std::optional<double> best, above;  // highest surface not above zref / lowest one above it
+  auto consider = [&](double z) {
+    if (z <= zref) {
+      if (!best || z > *best) best = z;
+    } else if (!above || z < *above) {
+      above = z;
+    }
+  };
+  const int64_t k = bucketKey(static_cast<int>(std::floor(x / 4.0)), static_cast<int>(std::floor(y / 4.0)));
+  for (const auto& [code, c] : loaded_) {
+    if (auto it = c->walk_hash.find(k); it != c->walk_hash.end())
+      for (uint32_t t : it->second)
+        if (auto z = triZ(&c->walk[static_cast<size_t>(t) * 9], x, y)) consider(*z);
+    if (auto it = c->deck_hash.find(k); it != c->deck_hash.end())
+      for (uint32_t t : it->second)
+        if (auto z = triZ(&c->deck[static_cast<size_t>(t) * 9], x, y)) consider(*z);
+  }
+  if (auto t = terrainHeight(x, y)) consider(*t);
+  return best ? best : above;  // (below every surface, e.g. just after a teleport: climb onto the lowest)
+}
+
+void World::collideWalls(rj::geo::Vec3d& p, double radius, const std::vector<float>* extra) const {
+  auto push = [&](const float* w) {
+    const double feet = p.z;
+    if (feet > w[5] - 0.3 || feet + 1.7 < w[4]) return;  // stepped over / passes under
+    const double ax = w[0], ay = w[1], bx = w[2], by = w[3];
+    const double dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    double t = l2 > 1e-9 ? ((p.x - ax) * dx + (p.y - ay) * dy) / l2 : 0.0;
+    t = std::clamp(t, 0.0, 1.0);
+    const double cx = ax + dx * t, cy = ay + dy * t;
+    double nx = p.x - cx, ny = p.y - cy;
+    const double d = std::hypot(nx, ny);
+    if (d >= radius) return;
+    if (d < 1e-6) {  // on the line: push along its normal
+      const double l = std::sqrt(std::max(l2, 1e-9));
+      nx = -dy / l;
+      ny = dx / l;
+    } else {
+      nx /= d;
+      ny /= d;
+    }
+    p.x = cx + nx * (radius + 0.001);
+    p.y = cy + ny * (radius + 0.001);
+  };
+  for (int iter = 0; iter < 2; ++iter) {
+    const int64_t k = bucketKey(static_cast<int>(std::floor(p.x / 4.0)), static_cast<int>(std::floor(p.y / 4.0)));
+    for (const auto& [code, c] : loaded_) {
+      auto it = c->wall_hash.find(k);
+      if (it == c->wall_hash.end()) continue;
+      for (uint32_t i : it->second) push(&c->walls[static_cast<size_t>(i) * 6]);
+    }
+    if (extra)
+      for (size_t i = 0; i + 5 < extra->size(); i += 6) push(&(*extra)[i]);
+  }
+}
+
 bool World::pointInBuilding(double x, double y) const {
   auto it = hash_.find(bucketKey(static_cast<int>(std::floor(x / kBucket)), static_cast<int>(std::floor(y / kBucket))));
   if (it == hash_.end()) return false;
@@ -516,6 +588,7 @@ void World::collide(rj::geo::Vec3d& p, double radius) const {
         auto it = hash_.find(bucketKey(bx + dx, by + dy));
         if (it == hash_.end()) continue;
         for (const auto& [cell, b] : it->second) {
+          if (cell->cpu->buildings[static_cast<size_t>(b)].flags & kBuildingWalkIn) continue;  // stations: walls section instead
           if (p.z > cell->zmax[static_cast<size_t>(b)] + 0.3 || p.z + 1.8 < cell->zmin[static_cast<size_t>(b)]) continue;
           const auto& poly = cell->fp[static_cast<size_t>(b)];
           const Vector2 q{static_cast<float>(p.x), static_cast<float>(p.y)};

@@ -187,6 +187,19 @@ bool parseDetail(const std::vector<unsigned char>& file, CellDetailCpu& out, std
             ImageFormat(&out.landcover, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
         }
       }
+      // Tagged sections: 4-byte tag, u32 length, payload.
+      while (r.ok() && r.remaining() >= 8) {
+        char tag[4];
+        r.bytes(tag, 4);
+        const uint32_t len = r.get<uint32_t>();
+        if (!r.ok() || len > r.remaining()) break;
+        if (std::memcmp(tag, "WALL", 4) == 0 && len % 24 == 0) {
+          out.walls.resize(len / 4);
+          r.bytes(out.walls.data(), len);
+        } else {
+          r.skip(len);
+        }
+      }
     }
   }
   if (!r.ok() && !out.chunks.empty()) {

@@ -69,12 +69,15 @@ class Spec:
     canopy: Polygon = None
     tunnel_flags: list = field(default_factory=list)  # per rail line: bool per point (in a tunnel)
     portal_holes: Polygon = None                      # ground cut away at the tunnel mouths
+    stations: list = field(default_factory=list)      # walk-in stations (dicts, see station.py)
 
 
 class CellExtra:
     def __init__(self):
         self.decks = []
         self.trees = []
+        self.walls = []   # collision walls (x0, y0, x1, y1, z low, z high), cell ENU
+        self.lights = []  # ((x, y, z), range, kind): kind 3 = indoor light (always on)
 
 
 def _named(g: Geo, ring, ground, h, usage, name, kind, storeys=1):
@@ -82,29 +85,22 @@ def _named(g: Geo, ring, ground, h, usage, name, kind, storeys=1):
                        h, storeys, usage, name, kind)
 
 
-def _station(name, x, y, hd, terrain, big, deck=RAIL_DECK):
-    """Station building: a concourse under the elevated platforms when there is room (deck = rail
-    level above the ground), else a building beside the tracks; the main station also has a tall
-    station building (department store + offices)."""
-    ground = float(terrain.sample(x, y))
-    th = math.radians(hd)
-    side = np.array([math.cos(th), -math.sin(th)])
-    clear = RAIL_DECK if deck is None else float(deck)
-    if clear >= 5.0:
-        c = np.array([x, y])
-        rect = affinity.rotate(sbox(x - 16, y - 105, x + 16, y + 105), -hd, origin=(x, y))
-        top = min(6.5, clear - 1.0)
-    else:  # low line (or in a cutting): station house beside the platforms, on the right-hand side
-        c = np.array([x, y]) + side * 26
-        ground = float(terrain.sample(*c))
-        rect = affinity.rotate(sbox(c[0] - 8, c[1] - 20, c[0] + 8, c[1] + 20), -hd, origin=tuple(c))
-        top = 6.0
-    rect = orient(rect, 1.0)
+def _station(st, terrain, big):
+    """Station building record: the walk-in concourse under the platforms (its walls, gates and
+    stairs are street detail, see station.py; the record carries the name and the roof), and the
+    main station's tall station building (department store + offices)."""
+    from . import station as S
+    name, x, y, hd, ground = st["name"], st["x"], st["y"], st["hd"], st["ground"]
+    F = S.Frame(x, y, hd)
+    H = S.concourse_height(ground, st["ztop"])
+    rect = orient(Polygon([F.xy(S.CU0, -S.CV), F.xy(S.CU1, -S.CV), F.xy(S.CU1, S.CV), F.xy(S.CU0, S.CV)]), 1.0)
     ring = np.asarray(rect.exterior.coords)
     g = Geo()
-    walls(g, ring, ground - 1.5, ground + top, ground, PUBLIC, (200, 198, 190))
-    cap(g, rect, ground + top, ROOF_FLAT, (150, 150, 146))
-    out = [_named(g, ring, ground, top, 431, name, "station", 2)]
+    cap(g, rect, ground + H + 0.05, ROOF_FLAT, (150, 150, 146))
+    b = _named(g, ring, ground, H, 431, name, "station", 1)
+    b.walk_in = True
+    out = [b]
+    side = F.r
     if big:
         c = np.array([x, y]) + side * 44
         trect = orient(affinity.rotate(sbox(c[0] - 22, c[1] - 60, c[0] + 22, c[1] + 60), -hd, origin=tuple(c)), 1.0)
@@ -457,10 +453,20 @@ def build_all(ctry, terrain, rng) -> Spec:
     # rail lines (smoothed centre lines, grade-limited profiles with level stations)
     lines = rail_lines2d()
     st_all = stations_aligned(lines)
+    # station yards: level ground under each concourse and its entrances, before the rail levels
+    from . import station as S
+    from .generate import flatten_pad
+    yard_z = []
+    for name, x, y, hd, li, k in st_all:
+        F = S.Frame(x, y, hd)
+        yard = Polygon([F.xy(S.CU0 - 4, -S.CV - 6), F.xy(S.CU1 + 4, -S.CV - 6), F.xy(S.CU1 + 4, S.CV + 6), F.xy(S.CU0 - 4, S.CV + 6)])
+        yard_z.append(flatten_pad(terrain, yard, z=float(terrain.sample(x, y)), verge=30.0))
     for li, ln in enumerate(L.RAIL_LINES):
         P = lines[li]
         ks = [k for (_, _, _, _, l2, k) in st_all if l2 == li]
-        z = rail_profile(P, ln["kind"], ln["closed"], terrain, ks, PLATFORM_LEN[li])
+        # the platforms stand high enough over the yard for the concourse under them
+        zmin = [yard_z[i] + (9.0 if ln["kind"] == "shinkansen" else 6.2) for i, s_ in enumerate(st_all) if s_[4] == li]
+        z = rail_profile(P, ln["kind"], ln["closed"], terrain, ks, PLATFORM_LEN[li], zmin)
         spec.rails.append(np.column_stack([P, z]))
         spec.rail_kinds.append(ln["kind"])
         spec.tunnel_flags.append(_tunnels(P, z, terrain))
@@ -484,8 +490,10 @@ def build_all(ctry, terrain, rng) -> Spec:
         R = spec.rails[li]
         kind = spec.rail_kinds[li]
         ztop = float(R[k, 2]) + 1.1
-        spec.buildings.extend(_station(name, x, y, hd, terrain, big=(name == "千景中央駅"),
-                                       deck=None if kind == "shinkansen" else ztop - 1.1 - float(terrain.sample(x, y))))
+        st = dict(index=si, name=name, x=x, y=y, hd=hd, line=li, ground=float(terrain.sample(x, y)), ztop=ztop,
+                  off=S.platform_offset(kind == "shinkansen"), shink=kind == "shinkansen")
+        spec.stations.append(st)
+        spec.buildings.extend(_station(st, terrain, big=(name == "千景中央駅")))
         length = PLATFORM_LEN[li]
         path = track_piece(R, k, length / 2, closed=L.RAIL_LINES[li]["closed"])
         spec.platforms.append((x, y, hd, length, 5.0, ztop, li, name, path))
@@ -727,9 +735,11 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
     carr_p = (rp if rp is not None else isl.net.polys(clip)).carriage.intersection(clip.buffer(50))
     shapely.prepare(carr_p)
     # --- station platforms (walkable) with canopies ---
-    for x, y, hd, length, width, ztop, line_i, _name, path in spec.platforms:
-        if not clip.buffer(length).contains(Point(x, y)):
+    from . import station as S
+    for pi_, (x, y, hd, length, width, ztop, line_i, _name, path) in enumerate(spec.platforms):
+        if not cpoly.contains(Point(x, y)):  # a station's platforms and concourse go in the cell of its centre
             continue
+        st = spec.stations[pi_]
         kind_i = 2 if L.RAIL_LINES[line_i]["kind"] == "shinkansen" else 0
         th = math.radians(hd)
         fwd = np.array([math.sin(th), math.cos(th)])
@@ -738,6 +748,10 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
         off = 6.6 if kind_i < 2 else 7.4
         # the centre line under the platform, with the right-hand normal at each point (curved platforms follow it)
         C = np.asarray(path, float)
+        # resampled finely so the platform bands can leave the stair openings out
+        cum0 = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(C, axis=0).T))])
+        tt = np.arange(0.0, cum0[-1] + 1e-6, 0.25)
+        C = np.column_stack([np.interp(tt, cum0, C[:, 0]), np.interp(tt, cum0, C[:, 1])])
         T = np.gradient(C, axis=0)
         T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-9)
         if float(T[len(T) // 2] @ fwd) < 0:  # orient along the station heading
@@ -747,12 +761,16 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
         u = cum - cum[len(cum) // 2]  # distance along the platform from the station centre
 
         def strip(o0, o1, z, mat, lo=-1e9, hi=1e9, walk=False, col=None):
-            """A band from offset o0 to o1 (right of the centre line) between u = lo and hi."""
-            for a in range(len(C) - 1):
-                if u[a + 1] <= lo or u[a] >= hi:
-                    continue
-                pa, pb = C[a], C[a + 1]
-                q = [pa + Nr[a] * o0, pb + Nr[a + 1] * o0, pb + Nr[a + 1] * o1, pa + Nr[a] * o1]
+            """A band from offset o0 to o1 (right of the centre line) between u = lo and hi (2 m pieces,
+            ends at the 0.25 m resolution of the centre line)."""
+            sel = np.nonzero((u[1:] > lo) & (u[:-1] < hi))[0]
+            if len(sel) == 0:
+                return
+            a0, a1 = int(sel[0]), int(sel[-1]) + 1
+            marks = list(range(a0, a1, 8)) + [a1]
+            for a, b in zip(marks[:-1], marks[1:]):
+                pa, pb = C[a], C[b]
+                q = [pa + Nr[a] * o0, pb + Nr[b] * o0, pb + Nr[b] * o1, pa + Nr[a] * o1]
                 V = xf.p([[p[0], p[1], z] for p in q])
                 if col is None:
                     _dquad(geos, mat, V if o1 > o0 else V[::-1])
@@ -760,9 +778,11 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
                     _dquad(geos, mat, V if o1 > o0 else V[::-1], col)
                 if walk:
                     ex.decks.append(np.array([[V[0], V[1], V[2]], [V[0], V[2], V[3]]]))
+        S.build(geos, ex, xf, st, isl.terrain)
         for sg in (-1, 1):
             o_in, o_out = sg * (off - width / 2), sg * (off + width / 2)
-            strip(min(o_in, o_out), max(o_in, o_out), ztop, "sidewalk", walk=True)
+            S.platform_items(geos, ex, xf, st, C, Nr, u, sg, o_in, o_out, length,
+                             lambda o0, o1, z, mat, lo, hi, walk: strip(o0, o1, z, mat, lo, hi, walk=walk))
             # platform faces (1.1 m down to the track bed) along both edges and across the ends, facing out
             for o in (o_in, o_out):
                 out = 1.0 if o > (o_in + o_out) / 2 else -1.0  # +: the face looks to the right of the heading
@@ -1109,6 +1129,9 @@ def write_extra(spec: Spec, out: str, fi) -> None:
             f.write(f"station {kind_i} {la:.8f} {lo:.8f} {hd} {ztop:.2f} {name}\n")
         for key, (kana, roman) in L.READINGS.items():
             f.write(f"reading {key} {kana} {roman}\n")
+        from . import station as S
+        for st in spec.stations:  # ticket gate rows (walk-in concourses)
+            f.write(S.gate_record(st, fi) + "\n")
     g2 = lambda p: "%.8f %.8f" % fi.to_geodetic(float(p[0]), float(p[1]))  # noqa: E731
     with open(os.path.join(out, "transport.txt"), "w", encoding="utf-8") as f:
         for apd in L.AIRPORTS:

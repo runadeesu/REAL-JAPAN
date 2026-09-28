@@ -138,8 +138,9 @@ def _lipschitz(z, g, pinned, lb):
     return z
 
 
-def rail_profile(P, kind, closed, terrain, station_ks, platform_len):
-    """Rail level (m above sea) for every point of centre line P (6 m spacing)."""
+def rail_profile(P, kind, closed, terrain, station_ks, platform_len, station_zmin=None):
+    """Rail level (m above sea) for every point of centre line P (6 m spacing). station_zmin: the
+    lowest rail level at each station (its concourse fits under the platforms)."""
     gz = np.maximum(terrain.sample(P[:, 0], P[:, 1]), 2.0)
     deck = np.array([L.rail_deck(kind, x, y) for x, y in P[:, :2]])
     target = gaussian_filter1d(gz, 8, mode="wrap" if closed else "nearest") + gaussian_filter1d(deck, 20, mode="nearest")
@@ -160,9 +161,10 @@ def rail_profile(P, kind, closed, terrain, station_ks, platform_len):
     # ... with level track through the stations
     pinned = np.zeros(len(z), bool)
     half = int((platform_len / 2 + 60.0) / step)
-    for k in station_ks:
+    for i, k in enumerate(station_ks):
         lo, hi = max(0, k - half), min(len(z), k + half + 1)
-        z[lo:hi] = max(z[k], lb[k])
+        zmin = station_zmin[i] if station_zmin is not None else -1e9
+        z[lo:hi] = max(z[k], lb[k], zmin)
         pinned[lo:hi] = True
     z = _lipschitz(z, g, pinned, lb)
     return z

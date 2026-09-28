@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "game/aircraft.hpp"
+#include "game/car_layout.hpp"
 #include "game/trains.hpp"
 #include "raymath.h"
 #include "render/aircraft.hpp"
@@ -80,19 +81,31 @@ Frame carFrame(const Trains& trains, const Train& t, int k) {
 
 }  // namespace
 
+namespace {
+uint64_t carBase(const Train& t, int k, int trip) {
+  return mix(static_cast<uint64_t>(t.id) * 131 + static_cast<uint64_t>(k) * 7919 + static_cast<uint64_t>(trip) * 104729);
+}
+double seatOccupancy(bool shink, float busy) { return shink ? 0.25 + 0.45 * busy : std::min(1.0, 0.08 + 1.05 * busy); }
+}  // namespace
+
+bool Crowd::seatTaken(const Trains& trains, int train_id, int k, int seat) const {
+  const Train* t = trains.train(train_id);
+  if (!t) return false;
+  const bool shink = trains.lines()[static_cast<size_t>(t->line)].kind == LineKind::Shinkansen;
+  auto it = trip_.find(t->id);
+  const uint64_t base = carBase(*t, k, it == trip_.end() ? 0 : it->second);
+  return u01(mix(base + static_cast<uint64_t>(seat) + 1)) < seatOccupancy(shink, busy_);
+}
+
 void Crowd::carPassengers(const Trains& trains, int ti, int k, bool ridden, float busy) {
   const Train& t = trains.trains()[static_cast<size_t>(ti)];
   const bool shink = trains.lines()[static_cast<size_t>(t.line)].kind == LineKind::Shinkansen;
   const Frame F = carFrame(trains, t, k);
   const bool end = k == 0 || k == t.cars - 1;
-  const uint64_t base = mix(static_cast<uint64_t>(t.id) * 131 + static_cast<uint64_t>(k) * 7919 + static_cast<uint64_t>(trip_[t.id]) * 104729);
-  const double floor_z = 1.15;  // car floor above the rail (as modelled)
-  float ex = 0, ey = 0;
-  rideEye(shink, ex, ey);  // the player's seat in this car (kept free), in the car's own frame
+  const uint64_t base = carBase(t, k, trip_[t.id]);
+  const CarLayout L = carLayout(shink, end);
   auto add = [&](double x, double y, double facing_model, int pose, uint64_t seed) {
-    if (ridden && std::hypot(x - ex, y - ey) < 0.5) return;
-    const V3 w = F.at(x, y, floor_z);
-
+    const V3 w = F.at(x, y, L.floor_z);
     CrowdPerson p;
     p.pos = w;
     p.yaw = F.yaw + static_cast<float>(facing_model);
@@ -101,49 +114,28 @@ void Crowd::carPassengers(const Trains& trains, int ti, int k, bool ridden, floa
     style(p, seed, busy > 0.7f);
     people_.push_back(p);
   };
-  if (shink) {
-    // 2 + 3 forward-facing seats in rows 1.04 m apart (as modelled); nose cars end at the cab
-    const double y0 = -12.5, y1 = end ? 1.0 : 12.5;
-    const double occ = 0.25 + 0.45 * busy;
-    int i = 0;
-    for (double y = y0 + 1.5; y < y1 - 1.0; y += 1.04)
-      for (double x : {-1.35, -0.9, 0.35, 0.82, 1.29}) {
-        const uint64_t h = mix(base + static_cast<uint64_t>(++i));
-        if (u01(h) < occ) add(x, y - 0.08, 0.0, 2, h);
-      }
-    return;
+  const double occ = seatOccupancy(shink, busy);
+  for (size_t i = 0; i < L.seats.size(); ++i) {
+    if (ridden && static_cast<int>(i) == player_seat_) continue;  // the player's seat
+    const uint64_t h = mix(base + static_cast<uint64_t>(i) + 1);
+    if (u01(h) < occ) add(L.seats[i].x, L.seats[i].y, L.seats[i].facing, 2, h);
   }
-  // commuter car: long benches between the four doors on each side (as modelled)
-  const double y0 = -10.0, y1 = end ? 10.0 - 1.6 : 10.0;  // (the cab takes the front 1.6 m)
-  std::vector<std::pair<double, double>> doors;
-  for (int d = 0; d < 4; ++d) {
-    const double yc = y0 + 2.45 + d * 5.03;
-    doors.push_back({yc - 0.65, yc + 0.65});
-  }
-  std::vector<double> cuts = {y0 + 0.4};
-  for (const auto& d : doors) cuts.insert(cuts.end(), {d.first - 0.15, d.second + 0.15});
-  cuts.push_back(y1 - 0.4);
-  const double occ = std::min(1.0, 0.08 + 1.05 * busy);
+  if (shink) return;
+  // standing passengers holding the straps when it is busy (commuter cars)
+  const double stand = std::clamp((busy - 0.55) / 0.45, 0.0, 1.0);
+  if (stand <= 0.0) return;
   int i = 0;
+  std::vector<float> cuts = {L.y0 + 0.4f};
+  for (const auto& d : L.doors) cuts.insert(cuts.end(), {d.first - 0.15f, d.second + 0.15f});
+  cuts.push_back(L.y1 - 0.4f);
   for (size_t c = 0; c + 1 < cuts.size(); c += 2) {
-    const double a = cuts[c], b = std::min(cuts[c + 1], y1 - 0.4);
+    const double a = cuts[c], b = std::min<double>(cuts[c + 1], L.y1 - 0.4);
     if (b - a < 0.6) continue;
-    const int n = static_cast<int>((b - a) / 0.46);
     for (double sx : {-1.0, 1.0})
-      for (int j = 0; j < n; ++j) {
-        const uint64_t h = mix(base + static_cast<uint64_t>(++i));
-        if (u01(h) >= occ) continue;
-        const double y = a + (b - a) * (j + 0.5) / n;
-        add(sx * 1.05, y, sx > 0 ? -kPi / 2 : kPi / 2, 2, h);  // facing across the car
+      for (double y = a + 0.2; y < b - 0.1; y += 0.64) {
+        const uint64_t h = mix(base + static_cast<uint64_t>(++i) * 3);
+        if (u01(h) < stand * 0.8) add(sx * 0.4, y, sx > 0 ? kPi / 2 : -kPi / 2, 3, h);  // facing the seats and windows
       }
-    // standing passengers holding the straps when it is busy
-    const double stand = std::clamp((busy - 0.55) / 0.45, 0.0, 1.0);
-    if (stand > 0.0)
-      for (double sx : {-1.0, 1.0})
-        for (double y = a + 0.2; y < b - 0.1; y += 0.64) {
-          const uint64_t h = mix(base + static_cast<uint64_t>(++i) * 3);
-          if (u01(h) < stand * 0.8) add(sx * 0.4, y, sx > 0 ? kPi / 2 : -kPi / 2, 3, h);  // facing the seats and windows
-        }
   }
 }
 
@@ -251,7 +243,9 @@ void Crowd::jetCabin(const Airliner& a) {
     }
 }
 
-void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_train, int ride_car, int hour, bool weekend) {
+void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_train, int ride_car, int hour, bool weekend, int player_seat) {
+  player_seat_ = player_seat;
+  busy_ = busyAt(hour, weekend);
   people_.clear();
   if (!trains.loaded()) return;
   const float busy = busyAt(hour, weekend);

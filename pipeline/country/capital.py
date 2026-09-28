@@ -100,7 +100,7 @@ STATIONS = [
 SHINKANSEN = [(-40, -1250), (-40, -700), (-40, -100), (60, 700), (260, 1250), (420, 1900), (520, 2650),
               (560, 3050), (600, 3900)]
 SHINKANSEN_DECK = 16.0
-SHINKANSEN_STATIONS = [("千景中央駅（新幹線）", -40, -760, 0), ("千景北駅", 545, 2900, 3)]
+SHINKANSEN_STATIONS = [("千景中央駅（新幹線）", -40, -760, 0), ("千景北駅", 608, 3500, 6)]  # 千景北: in the plain north of the ridge
 # Ferry piers (terminal on the south-east cape, and the islet).
 FERRY_PIERS = [(3150, -2325, 180), (2388, -2800, 70)]  # pier root at the coast, heading out to sea
 

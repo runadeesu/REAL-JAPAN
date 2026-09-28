@@ -218,6 +218,7 @@ class BuildingOut:
     usage: int
     name: str = ""
     kind: str = ""
+    walk_in: bool = False       # no footprint collision (the player walks in: stations)
 
 
 def _jit(rgb, rng, amt=10):
