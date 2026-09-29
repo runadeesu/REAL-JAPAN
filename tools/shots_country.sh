@@ -8,10 +8,10 @@ set -uo pipefail
 BIN="$1"; OUT="$2"; shift 2
 mkdir -p "$OUT"
 T="2026-09-26T11:00"
-shot() {  # name, env, args...   (SHOT_T=... overrides the time for one shot)
+shot() {  # name, env, args...   (SHOT_T=... / SHOT_W=... override the time / weather for one shot)
   local name="$1" envs="$2"; shift 2
   (cd "$BIN" && env $envs LANG=C.UTF-8 LC_ALL=C.UTF-8 timeout 2400 xvfb-run -a -s "-screen 0 1600x900x24" ./RealJapan "$@" \
-    --time "${SHOT_T:-$T}" --weather clear --screenshot "$OUT/$name.png" --frames 2 >/dev/null 2>&1) || echo "fail $name"
+    --time "${SHOT_T:-$T}" --weather "${SHOT_W:-clear}" --screenshot "$OUT/$name.png" --frames 2 >/dev/null 2>&1) || echo "fail $name"
 }
 ONLY="${ONLY:-}"  # optional: space-separated shot names to (re)take
 want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
@@ -41,11 +41,25 @@ want air_yukimi_winter && SHOT_T=2027-01-20T11:00 shot air_yukimi_winter "" --st
 # ferry: alongside the pier (from the pier), on deck under way
 want ferry_view && shot ferry_view "" --state ferryview --station 0
 want ferry_deck && shot ferry_deck "" --state ferry --station 0 --ride 160 --simspeed 16
-# scheduled flight: window seat during the climb
+# scheduled flight: seated in the cabin at the stand (walked up the stairs), window seat in the climb
+want jet_cabin && shot jet_cabin "RJ_JET_LOOK=-1.1,-0.18" --state jet --ride 5 --simspeed 72
 want jet_window && shot jet_window "RJ_JET_LOOK=-1.35,-0.42" --state jet --ride 430 --simspeed 72
 # light aircraft: after take-off, chase and cockpit
 want plane_chase && shot plane_chase "" --state fly --simspeed 8 --fly-script "1:0:0:15,1:0.5:0:3,1:0.12:0:10"
 want plane_cockpit && shot plane_cockpit "RJ_FLY_COCKPIT=1" --state fly --simspeed 8 --fly-script "1:0:0:15,1:0.5:0:3,1:0.12:0:10"
+# v0.6.0 roads: a coast road on a viaduct into a tunnel, inside the tunnel, the expressway, an
+# interchange from the air, a level crossing of the main line (barriers down: RJ_XING_TEST)
+want road_viaduct && shot road_viaduct "" --state game --pos 33.729651,140.917779 --yaw 203 --pitch -25 --fly --alt 60
+want road_tunnel && shot road_tunnel "" --state game --pos 33.728189,140.916712 --yaw 36 --pitch -2
+want expressway && shot expressway "" --state game --pos 33.822685,140.885932 --yaw 103
+want expressway_ic && shot expressway_ic "" --state walk --fly --alt 110 --pitch -32 --pos 33.820233,140.887123 --yaw 330
+want level_crossing && shot level_crossing "RJ_XING_TEST=1" --state game --pos 33.812081,140.884156 --yaw 8 --pitch -4
+# snow falling at the snow country's terminal in January (rain falls as snow there)
+want snowfall && SHOT_T=2027-01-20T11:00 SHOT_W=rain shot snowfall "RJ_PLATFORM_LOOK=16,40,0.6" --state platform --station 17
+# single trees near the player on the forested slopes of the hot-spring valley
+want forest_trees && shot forest_trees "" --state game --pos 33.902743,140.908098 --yaw 280 --pitch 6
+# the lake among the mountains from the air (the edge of the loaded area against the far view)
+want air_lake && shot air_lake "" --state walk --fly --alt 250 --pitch -18 --pos 33.883777,140.871366 --yaw 0
 # phone apps
 want phone_work && shot phone_work "" --state phone:work
 want phone_hobby && shot phone_hobby "" --state phone:hobby

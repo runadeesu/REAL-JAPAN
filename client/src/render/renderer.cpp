@@ -1174,6 +1174,7 @@ void Renderer::drawDistantTraffic(const Traffic& traffic, const Camera3D& cam, c
   const float base = kPerKm[std::clamp(hour, 0, 23)];
   rlDrawRenderBatchActive();
   rlDisableBackfaceCulling();
+  rlColorMask(true, true, true, false);  // (no reflections: keep the scene's mask)
   rlBegin(RL_QUADS);
   const auto& E = traffic.edges();
   for (size_t ei = 0; ei < E.size(); ++ei) {
@@ -1229,6 +1230,7 @@ void Renderer::drawDistantTraffic(const Traffic& traffic, const Camera3D& cam, c
   }
   rlEnd();
   rlDrawRenderBatchActive();
+  rlColorMask(true, true, true, true);
   rlEnableBackfaceCulling();
 }
 
@@ -1734,6 +1736,7 @@ void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
 void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s, float snow) {
   if (L.rain <= 0.01f || L.indoor > 0.5f) return;
   beginTransparent();
+  rlColorMask(true, true, true, false);  // keep the scene's reflection mask (alpha): drops and flakes do not reflect
   if (snow > 0.5f) {
     // snowflakes: slow, drifting, swaying; a 28 m volume snapped to the camera like the rain's
     const int n = static_cast<int>(900 + 3600 * L.rain);
@@ -1759,6 +1762,7 @@ void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s, fl
     }
     rlDrawRenderBatchActive();
     rlEnableDepthMask();
+    rlColorMask(true, true, true, true);
     return;
   }
   const int n = static_cast<int>(600 + 2600 * L.rain);
@@ -1782,6 +1786,7 @@ void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s, fl
   }
   rlDrawRenderBatchActive();
   rlEnableDepthMask();
+  rlColorMask(true, true, true, true);
 }
 
 void Renderer::fullscreen(Shader& sh, const Texture2D& src, RenderTexture2D& dst, bool flip_src) {
