@@ -1,5 +1,8 @@
 #include "app.hpp"
 
+#include "game/car_layout.hpp"
+#include "game/deck_layout.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <cmath>
@@ -1176,6 +1179,24 @@ void App::runSelfTest() {
     check(aviation_.loaded() && aviation_.airports().size() == 2 && aviation_.airport().stands.size() == 6 && aviation_.airliners().size() == 2,
           "two airports, stands and flights loaded");
     check(far_.ready() && !far_.tiles().empty(), "far view of the country built");
+    check(trains_.gates().size() == trains_.stations().size(), "every station has its ticket gates (walk-in concourse)");
+    check(!trains_.crossings().empty() && !trains_.crossings().front().sets.empty(), "level crossings on the main line, with barriers");
+    {
+      // the cars' interiors: seats to sit on, the aisle and the doorways walkable, the seat rows clear
+      const CarLayout sk = carLayout(true, false), cm = carLayout(false, false);
+      bool ok = !sk.seats.empty() && !cm.seats.empty();
+      for (const auto* L : {&sk, &cm}) {
+        for (const auto& st : L->seats) ok = ok && carWalkable(*L, st.fx, st.fy, false, false);
+        const float dy = (L->doors.front().first + L->doors.front().second) * 0.5f;
+        ok = ok && carWalkable(*L, -(L->half_w + 0.3f), dy, true, false) && !carWalkable(*L, -(L->half_w + 0.3f), dy, false, false);
+      }
+      check(ok, "train cars: seats reachable from the aisle, doors open to the platform only when open");
+      check(!jetSeats().empty() && jetCabinWalkable(0.0, 0.0, false) && jetCabinWalkable(-1.6, (kJetDoorY0 + kJetDoorY1) * 0.5, true) &&
+                !jetCabinWalkable(-1.6, (kJetDoorY0 + kJetDoorY1) * 0.5, false),
+            "airliner cabin: aisle walkable, the front door only when open");
+      const ShipClass& C = Ferries::shipClass(0);
+      check(!ferrySeats(C).empty() && ferryDeckWalkable(C, C.deck_x - 0.5, (C.house_y0 + C.house_y1) * 0.5), "ferry deck walkable, benches to sit on");
+    }
     {
       Driving d;
       Vehicle v;

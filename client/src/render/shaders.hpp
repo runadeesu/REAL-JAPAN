@@ -1087,6 +1087,17 @@ void main() {
   vec2 uv = (floor(fragTexCoord / invRes) + 0.5) * invRes;  // full-resolution texel centre (see the SSAO pass)
   float amt = texture(texture0, uv).a;
   if (amt < 0.01) { finalColor = vec4(0.0); return; }
+  if (texture(texDepth, uv).r > 0.99999) {
+    // drawn in the far pass (the depth was cleared after it): only the open sea there is glossy.
+    // Reflect off a level surface so it matches the near sea, which the march resolves the same way
+    // once nothing is hit.
+    vec3 Dv = normalize(vec3((uv * 2.0 - 1.0) * tanHalf, -1.0));
+    vec3 Nf = vec3(0.0, 1.0, 0.0) * mat3(invView);  // world up in view space
+    vec3 Rf = mat3(invView) * reflect(Dv, Nf);
+    vec3 skyf = mix(fbHorizon, fbZenith, pow(clamp(Rf.y, 0.0, 1.0), 0.5));
+    finalColor = vec4(mix(fbCity, skyf, smoothstep(0.04, 0.26, Rf.y)), amt);
+    return;
+  }
   vec3 P = viewPos(uv);
   vec3 N = normalize(cross(viewPos(uv + vec2(invRes.x, 0.0)) - P, viewPos(uv + vec2(0.0, invRes.y)) - P));
   if (dot(N, -P) < 0.0) N = -N;
