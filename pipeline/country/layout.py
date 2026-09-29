@@ -47,6 +47,8 @@ PARKS = list(C.PARKS)
 # Roads: the capital's arterials and the national / local roads.
 ARTERIALS = [(n, w, p) for n, w, p in C.ARTERIALS]
 NATIONAL_ROADS = [(n, w, p) for n, w, p in N.ROADS]
+EXPRESSWAY = N.EXPRESSWAY
+EXPRESSWAY_RAMPS = N.EXPRESSWAY_RAMPS
 
 # Rivers (the capital's 千景川 gets a longer upper course in the country) and lakes.
 LAKES = N.LAKES
@@ -69,6 +71,8 @@ def rail_deck(kind: str, x: float, y: float) -> float:
     in_capital = -4300 < x < 4300 and -3600 < y < 3900
     if kind == "shinkansen":
         return C.SHINKANSEN_DECK if in_capital else 10.0
+    if kind == "branch" and not in_capital and not urban(x, y):
+        return 0.6  # the main line runs at grade through the countryside (low bank, level crossings)
     return 9.0 if in_capital else 6.0
 
 

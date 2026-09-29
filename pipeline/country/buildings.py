@@ -18,6 +18,8 @@ import numpy as np
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
+from .shop import FLOOR_H
+
 U_SCALE, V_SCALE = 2048.0, 1024.0
 
 # ---- style codes (walls 0-99, roofs 100-199, special 200+) ----
@@ -218,7 +220,22 @@ class BuildingOut:
     usage: int
     name: str = ""
     kind: str = ""
-    walk_in: bool = False       # no footprint collision (the player walks in: stations)
+    walk_in: bool = False       # no footprint collision (the player walks in: stations, shops)
+    shop: dict | None = None    # walk-in ground floor (shop.py): built with the cell's street detail
+
+
+def _shop_floor(fp, front, ground, rng, p=0.7):
+    """A walk-in shop on the ground floor (shop.py), for most small shop buildings."""
+    if rng.random() > p:
+        return None
+    from .shop import plan
+    return plan(fp, front, ground, rng)
+
+
+def _with_shop(out: "BuildingOut", shop):
+    out.shop = shop
+    out.walk_in = shop is not None
+    return out
 
 
 def _jit(rgb, rng, amt=10):
@@ -504,15 +521,16 @@ def make_building(pc, terrain, rng, near_scramble: float, near_station: float) -
             fl = int(rng.integers(2, 5))
             h = 4.2 + (fl - 1) * 3.0
             wrgb = _jit(PALETTE_WALL["pencil" if style == "shitamachi" else "house"][rng.integers(6)], rng)
-            walls(g, ring, ground - 1.5, ground + h, ground, COMMERCIAL if fl > 2 else HOUSE, wrgb)
+            shop = _shop_floor(fp, front, ground, rng)
+            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL if fl > 2 else HOUSE, wrgb)
             if rectish and fl <= 2 and rng.random() < 0.5:
                 pitched_roof(g, rect, ground + h, 25, 0.5, ROOF_TILE, _jit(ROOF_TILE_COL[rng.integers(5)], rng, 6), HOUSE,
                              wrgb, ground, hip=True)
             else:
                 _flat_top(g, gear, fp, ground + h, ground, HOUSE, wrgb, rng)
             if rng.random() < 0.3:
-                _neon_sign(g, fp, front, ground + 3.0, ground + h, ground, rng)
-            return result(h, fl, 413, "shop")
+                _neon_sign(g, fp, front, ground + 3.6, ground + h, ground, rng)
+            return _with_shop(result(h, fl, 413, "shop"), shop)
         if rr < p_house + p_shop + p_apt + 0.2 * near_boost:
             fl = int(rng.integers(2, 5)) if rng.random() < 0.6 else int(rng.integers(5, 11))
             h = 3.4 + (fl - 1) * 3.0
@@ -627,9 +645,10 @@ def _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result):
             fl = int(rng.integers(3, 6))
             h = 4.2 + (fl - 1) * 3.1
             wrgb = _jit(PALETTE_WALL["commercial"][rng.integers(8)], rng)
-            walls(g, ring, ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+            shop = _shop_floor(fp, front, ground, rng)
+            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
             _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
-            return result(h, fl, 402, "shop")
+            return _with_shop(result(h, fl, 402, "shop"), shop)
         if r < 0.95 or not rectish:
             fl = 2
             wrgb = _jit(PALETTE_WALL["house"][rng.integers(7)], rng, 8)
@@ -711,11 +730,12 @@ def _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result):
         fl = 2
         h = 4.0 + 3.0
         wrgb = _jit(PALETTE_WALL["pencil"][rng.integers(6)], rng)
-        walls(g, ring, ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+        shop = _shop_floor(fp, front, ground, rng)
+        walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
         _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
         if rng.random() < 0.5:
-            _neon_sign(g, fp, front, ground + 3.0, ground + h, ground, rng)
-        return result(h, fl, 402, "shop")
+            _neon_sign(g, fp, front, ground + 3.6, ground + h, ground, rng)
+        return _with_shop(result(h, fl, 402, "shop"), shop)
     if style == "snowtown":
         if r < 0.06:
             return None
@@ -731,9 +751,10 @@ def _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result):
             fl = int(rng.integers(2, 4))
             h = 4.2 + (fl - 1) * 3.0
             wrgb = _jit(PALETTE_WALL["house"][rng.integers(7)], rng)
-            walls(g, ring, ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+            shop = _shop_floor(fp, front, ground, rng)
+            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
             _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
-            return result(h, fl, 402, "shop")
+            return _with_shop(result(h, fl, 402, "shop"), shop)
         fl = int(rng.integers(3, 6))
         h = 3.6 + (fl - 1) * 3.0
         wrgb = _jit(PALETTE_WALL["apt"][rng.integers(5)], rng)

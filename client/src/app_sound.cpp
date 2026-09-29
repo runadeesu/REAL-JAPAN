@@ -410,6 +410,20 @@ void App::updateSound(float dt) {
       snd_at_[t.id] = t.at_station;
     }
     if (snd_chime_t_ > 0.0f && (snd_chime_t_ -= dt) <= 0.0f && ride_train_ >= 0) audio_.cue(Cue::TrainChime, 0.45f);
+    // level crossings: the bell rings twice a second while the lamps flash (the nearest one heard)
+    snd_bell_t_ -= dt;
+    if (snd_bell_t_ <= 0.0f) {
+      snd_bell_t_ = 0.5f;
+      double best = 260.0;
+      const LevelCrossing* near = nullptr;
+      for (const auto& c : trains_.crossings())
+        if (c.warning)
+          if (const double d = dist3(c.pos, ear.pos); d < best) best = d, near = &c;
+      if (near) {
+        const float g = static_cast<float>(std::clamp(9.0 / std::max(best, 9.0), 0.0, 1.0)) * (ride_train_ >= 0 ? 0.35f : 0.8f);
+        audio_.cue(Cue::CrossingBell, g, panOf(ear, near->pos) * 0.6f);
+      }
+    }
   }
 
   // --- ferries -------------------------------------------------------------------------

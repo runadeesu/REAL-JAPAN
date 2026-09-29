@@ -138,9 +138,10 @@ def _lipschitz(z, g, pinned, lb):
     return z
 
 
-def rail_profile(P, kind, closed, terrain, station_ks, platform_len, station_zmin=None):
+def rail_profile(P, kind, closed, terrain, station_ks, platform_len, station_zmin=None, level_pins=()):
     """Rail level (m above sea) for every point of centre line P (6 m spacing). station_zmin: the
-    lowest rail level at each station (its concourse fits under the platforms)."""
+    lowest rail level at each station (its concourse fits under the platforms). level_pins: (k, z)
+    level crossings, where the rails lie flush with the road."""
     gz = np.maximum(terrain.sample(P[:, 0], P[:, 1]), 2.0)
     deck = np.array([L.rail_deck(kind, x, y) for x, y in P[:, :2]])
     target = gaussian_filter1d(gz, 8, mode="wrap" if closed else "nearest") + gaussian_filter1d(deck, 20, mode="nearest")
@@ -153,8 +154,8 @@ def rail_profile(P, kind, closed, terrain, station_ks, platform_len, station_zmi
             z[k] = min(z[k], z[k - 1] + g)
         for k in range(len(z) - 2, -1, -1):
             z[k] = min(z[k], z[k + 1] + g)
-    # ... smoothed into long even grades (bridges over dips) ...
-    z = gaussian_filter1d(z, 40, mode="wrap" if closed else "nearest")
+    # ... smoothed into long even grades (bridges over dips; the at-grade main line hugs the ground) ...
+    z = gaussian_filter1d(z, 14 if kind == "branch" else 40, mode="wrap" if closed else "nearest")
     # in the towns the viaduct clears the streets (no level crossings)
     lb = np.where(np.array([L.urban(x, y) for x, y in P[:, :2]]), gz + 6.0, -1e9)
     z = np.maximum(z, lb)
@@ -165,6 +166,10 @@ def rail_profile(P, kind, closed, terrain, station_ks, platform_len, station_zmi
         lo, hi = max(0, k - half), min(len(z), k + half + 1)
         zmin = station_zmin[i] if station_zmin is not None else -1e9
         z[lo:hi] = max(z[k], lb[k], zmin)
+        pinned[lo:hi] = True
+    for k, zp in level_pins:  # level crossings: the rail top flush with the road (short level stretch)
+        lo, hi = max(0, k - 2), min(len(z), k + 3)
+        z[lo:hi] = zp
         pinned[lo:hi] = True
     z = _lipschitz(z, g, pinned, lb)
     return z

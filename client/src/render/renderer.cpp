@@ -1,5 +1,7 @@
 #include "render/renderer.hpp"
 
+#include "game/traffic.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -8,6 +10,7 @@
 #include "game/driving.hpp"
 #include "game/station_names.hpp"
 #include "render/farview.hpp"
+#include "render/gpu_mesh.hpp"
 #include "render/foliage.hpp"
 #include "render/shaders.hpp"
 #include "rlgl.h"
@@ -273,6 +276,39 @@ bool Renderer::init() {
   }
   plane_ = GenMeshPlane(12000.0f, 12000.0f, 1, 1);
   ocean_ = GenMeshPlane(40000.0f, 40000.0f, 80, 80);
+  {
+    // the open sea to the horizon for the far view: a disc following the Earth's curvature below
+    // the camera (the streamed cells' own seas and the far terrain follow it too, so they meet
+    // without the flat plane rising over the far coasts or crossing the near seas)
+    constexpr int kSeg = 72, kRings = 40;
+    std::vector<float> pos, nrm, uv;
+    std::vector<unsigned short> idx;
+    std::vector<float> radii = {0.0f};
+    for (int r = 1; r <= kRings; ++r) radii.push_back(60.0f * std::pow(1.2f, static_cast<float>(r)) - 60.0f);
+    for (float r : radii)
+      for (int k = 0; k < kSeg; ++k) {
+        const float a = 6.2831853f * k / kSeg;
+        pos.insert(pos.end(), {r * std::cos(a), -r * r / (2.0f * 6371000.0f), r * std::sin(a)});
+        nrm.insert(nrm.end(), {0.0f, 1.0f, 0.0f});
+        uv.insert(uv.end(), {0.0f, 0.0f});
+      }
+    for (int r = 0; r + 1 < static_cast<int>(radii.size()); ++r)
+      for (int k = 0; k < kSeg; ++k) {
+        const auto a = static_cast<unsigned short>(r * kSeg + k), b = static_cast<unsigned short>(r * kSeg + (k + 1) % kSeg);
+        const auto c = static_cast<unsigned short>((r + 1) * kSeg + k), d = static_cast<unsigned short>((r + 1) * kSeg + (k + 1) % kSeg);
+        idx.insert(idx.end(), {a, c, d, a, d, b});
+      }
+    Mesh m{};
+    m.vertexCount = static_cast<int>(pos.size() / 3);
+    m.triangleCount = static_cast<int>(idx.size() / 3);
+    m.vertices = pos.data();
+    m.normals = nrm.data();
+    m.texcoords = uv.data();
+    m.indices = idx.data();
+    UploadMesh(&m, false);
+    releaseCpuArrays(m);
+    ocean_curved_ = m;
+  }
   body_ = GenMeshCylinder(0.25f, 1.35f, 12);
   legs_ = GenMeshCylinder(0.15f, 0.82f, 8);
   torso_ = GenMeshCylinder(0.21f, 0.64f, 10);
@@ -295,7 +331,7 @@ void Renderer::shutdown() {
   if (car_display_.id) UnloadRenderTexture(car_display_);
   car_display_ = RenderTexture2D{};
   signs_built_ = false;
-  for (Mesh* m : {&plane_, &ocean_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_, &unit_box_}) UnloadMesh(*m);
+  for (Mesh* m : {&plane_, &ocean_, &ocean_curved_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_, &unit_box_}) UnloadMesh(*m);
   for (auto& s : shadow_)
     if (s.id) {
       rlUnloadFramebuffer(s.id);
@@ -468,6 +504,7 @@ void Renderer::applyFrameUniforms(const Camera3D& cam, const Lighting& L, float 
   setF(lit_, "snowSeason", snow_tex_.id ? season_snow_ : 0.0f);
   setF(lit_, "cropStage", season_crop_);
   setF(lit_, "leafStage", season_leaf_);
+  setF(lit_, "canopyCut", canopy_cut_);
   setI(lit_, "landOn", 0);
 }
 
@@ -810,8 +847,9 @@ void Renderer::drawFarView(const FarView& far, const World& world, const Camera3
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
   {
-    const float gx = std::round(cam.position.x / 500.0f) * 500.0f, gz = std::round(cam.position.z / 500.0f) * 500.0f;
-    DrawMesh(ocean_, mat_, MatrixMultiply(MatrixScale(3.0f, 1.0f, 3.0f), MatrixTranslate(gx, sea_y - 0.3f, gz)));
+    // (centred on the camera: the curvature is relative to the point below it; the waves are in
+    // world coordinates, so the moving mesh does not drag them along)
+    DrawMesh(ocean_curved_, mat_, MatrixTranslate(cam.position.x, sea_y - 0.15f, cam.position.z));
     ++draw_calls_;
   }
   setI(lit_, "materialOverride", -1);
@@ -1088,6 +1126,110 @@ void Renderer::drawGates(const Trains& trains, const Camera3D& cam, int shut_gat
         drawBox(at(G, u, v, 1.07), yaw, {0.07f, 0.1f, 0.012f}, kMatSignalLamp, WHITE, e);
     }
   }
+}
+
+void Renderer::drawCrossings(const Trains& trains, const Camera3D& cam, float time_s) {
+  const rj::geo::Vec3d cp = rlToEnu(cam.position);
+  const bool odd = std::fmod(time_s, 1.0f) < 0.5f;  // the two lamps flash in turn, about once a second each
+  for (const auto& c : trains.crossings()) {
+    if (std::hypot(c.pos.x - cp.x, c.pos.y - cp.y) > 400.0) continue;
+    for (const auto& st : c.sets) {
+      // arm: yellow and black stripes from the pivot on the barrier machine (1.0 m up); raised it
+      // stands nearly upright, lowered it lies across the lanes
+      const double hd = st.arm_hd * DEG2RAD;
+      const double up = (1.0 - c.arm) * 82.0 * DEG2RAD;
+      const rj::geo::Vec3d piv{st.pos.x, st.pos.y, st.pos.z + 1.0};
+      const double fx = std::sin(hd) * std::cos(up), fy = std::cos(hd) * std::cos(up), fz = std::sin(up);
+      const int n = std::max(4, static_cast<int>(st.arm_len / 0.5));
+      const double seg = st.arm_len / n;
+      for (int k = 0; k < n; ++k) {
+        const double m = (k + 0.5) * seg;
+        const rj::geo::Vec3d cc{piv.x + fx * m, piv.y + fy * m, piv.z + fz * m};
+        drawBox(cc, static_cast<float>(hd), {0.045f, static_cast<float>(seg * 0.5), 0.045f}, kMatDefault,
+                k % 2 == 0 ? Color{240, 196, 20, 255} : Color{24, 24, 24, 255}, {0, 0, 0}, static_cast<float>(up));
+      }
+      // warning lamps (red), facing the approaching traffic, on the post 2.45 m up
+      const double f = st.facing * DEG2RAD;
+      const double fvx = std::sin(f), fvy = std::cos(f), svx = std::cos(f), svy = -std::sin(f);
+      for (int side = 0; side < 2; ++side) {
+        const double sd = side ? 0.36 : -0.36;
+        const rj::geo::Vec3d lp{st.pos.x + fvx * 0.23 + svx * sd, st.pos.y + fvy * 0.23 + svy * sd, st.pos.z + 2.45};
+        const bool lit = c.warning && (side == 0) == odd;
+        drawBox(lp, static_cast<float>(f), {0.13f, 0.02f, 0.13f}, kMatSignalLamp, WHITE, lit ? Vector3{9.0f, 0.25f, 0.1f} : Vector3{0.05f, 0.0f, 0.0f});
+      }
+      // the direction indicator (an arrow lamp under the lamps) lit while warning
+      const rj::geo::Vec3d ip{st.pos.x + fvx * 0.14, st.pos.y + fvy * 0.14, st.pos.z + 3.05};
+      drawBox(ip, static_cast<float>(f), {0.12f, 0.01f, 0.06f}, kMatSignalLamp, WHITE, c.warning ? Vector3{4.0f, 1.6f, 0.2f} : Vector3{0.02f, 0.01f, 0.0f});
+    }
+  }
+}
+
+void Renderer::drawDistantTraffic(const Traffic& traffic, const Camera3D& cam, const Lighting& L, float time_s, int hour) {
+  if (!traffic.loaded()) return;
+  const rj::geo::Vec3d cp = rlToEnu(cam.position);
+  const bool night = L.night > 0.35f;
+  const double r0 = 330.0, r1 = night ? 2600.0 : 950.0;
+  // cars per km per direction on a main road by the hour (a game assumption shaped like a weekday)
+  static const float kPerKm[24] = {3, 2, 1.5f, 1.5f, 2, 5, 12, 22, 24, 18, 16, 16, 16, 16, 16, 17, 19, 23, 22, 16, 12, 9, 7, 5};
+  const float base = kPerKm[std::clamp(hour, 0, 23)];
+  rlDrawRenderBatchActive();
+  rlDisableBackfaceCulling();
+  rlBegin(RL_QUADS);
+  const auto& E = traffic.edges();
+  for (size_t ei = 0; ei < E.size(); ++ei) {
+    const auto& e = E[ei];
+    if (e.pts.size() < 2 || e.width < 5.5f) continue;  // (lanes and alleys: nobody far off)
+    const auto& m = e.pts[e.pts.size() / 2];
+    const double dm = std::hypot(m.x - cp.x, m.y - cp.y);
+    if (dm < r0 - e.length || dm > r1 + e.length) continue;
+    const float per_km = base * std::clamp((e.width - 4.0f) / 6.0f, 0.3f, 2.0f);
+    const int n = static_cast<int>(e.length / 1000.0 * per_km + (static_cast<float>((ei * 2654435761u) % 1000u) / 1000.0f));
+    for (int dir = 0; dir < 2; ++dir)
+      for (int k = 0; k < n; ++k) {
+        const uint32_t h = static_cast<uint32_t>(ei * 7919u + static_cast<uint32_t>(k) * 104729u + static_cast<uint32_t>(dir) * 15485863u);
+        const double v = e.v0 * (0.75 + 0.3 * ((h >> 8) & 255u) / 255.0);
+        double s = std::fmod(((h & 0xffffu) / 65535.0) * e.length + time_s * v, e.length);
+        if (dir) s = e.length - s;
+        // position on the polyline, kept to the left of the direction of travel
+        size_t j = 1;
+        while (j + 1 < e.cum.size() && e.cum[j] < s) ++j;
+        const auto& A = e.pts[j - 1];
+        const auto& B = e.pts[j];
+        const double seg = std::max(1e-3, e.cum[j] - e.cum[j - 1]), t = std::clamp((s - e.cum[j - 1]) / seg, 0.0, 1.0);
+        double fx = (B.x - A.x) / seg, fy = (B.y - A.y) / seg;
+        if (dir) fx = -fx, fy = -fy;
+        const double lx = -fy, ly = fx, off = e.lane_w * 0.5;
+        const rj::geo::Vec3d p{A.x + (B.x - A.x) * t + lx * off, A.y + (B.y - A.y) * t + ly * off, A.z + (B.z - A.z) * t};
+        const double d = std::hypot(p.x - cp.x, p.y - cp.y);
+        if (d < r0 || d > r1) continue;
+        auto quad = [&](double ax, double ay, double az, double hw, double hh, Color c) {  // a small square facing the camera
+          const double vx = cp.x - ax, vy = cp.y - ay, vl = std::max(1e-3, std::hypot(vx, vy));
+          const double sx = -vy / vl * hw, sy = vx / vl * hw;
+          const Vector3 q0 = enuToRl({ax - sx, ay - sy, az - hh}), q1 = enuToRl({ax + sx, ay + sy, az - hh});
+          const Vector3 q2 = enuToRl({ax + sx, ay + sy, az + hh}), q3 = enuToRl({ax - sx, ay - sy, az + hh});
+          rlColor4ub(c.r, c.g, c.b, c.a);
+          rlVertex3f(q0.x, q0.y, q0.z);
+          rlVertex3f(q1.x, q1.y, q1.z);
+          rlVertex3f(q2.x, q2.y, q2.z);
+          rlVertex3f(q3.x, q3.y, q3.z);
+        };
+        if (night) {  // lamps, a little larger far off so they stay visible
+          const double sz = 0.25 + d * 0.0006;
+          quad(p.x + fx * 2.0, p.y + fy * 2.0, p.z + 0.8, sz, sz, Color{255, 246, 220, 255});
+          quad(p.x - fx * 2.0, p.y - fy * 2.0, p.z + 0.9, sz * 0.8, sz * 0.8, Color{255, 40, 30, 255});
+        } else {
+          static const Color kBody[6] = {{200, 200, 204, 255}, {40, 40, 44, 255}, {150, 152, 156, 255}, {230, 230, 226, 255}, {70, 80, 110, 255}, {120, 40, 40, 255}};
+          const Color c = kBody[(h >> 20) % 6];
+          const float fog = static_cast<float>(std::clamp((d - r0) / (r1 - r0), 0.0, 1.0)) * 0.6f;  // (fades into the haze)
+          const Color cf{static_cast<unsigned char>(c.r + (170 - c.r) * fog), static_cast<unsigned char>(c.g + (178 - c.g) * fog),
+                         static_cast<unsigned char>(c.b + (190 - c.b) * fog), 255};
+          quad(p.x, p.y, p.z + 0.75, 1.2, 0.72, cf);
+        }
+      }
+  }
+  rlEnd();
+  rlDrawRenderBatchActive();
+  rlEnableBackfaceCulling();
 }
 
 void Renderer::drawSignals(const TrafficSignals& ts, const Camera3D& cam) {
@@ -1589,9 +1731,36 @@ void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
   rlEnableBackfaceCulling();
 }
 
-void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s) {
+void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s, float snow) {
   if (L.rain <= 0.01f || L.indoor > 0.5f) return;
   beginTransparent();
+  if (snow > 0.5f) {
+    // snowflakes: slow, drifting, swaying; a 28 m volume snapped to the camera like the rain's
+    const int n = static_cast<int>(900 + 3600 * L.rain);
+    const Color col{236, 240, 246, static_cast<unsigned char>(150 + 80 * L.rain)};
+    rlSetBlendMode(BLEND_ALPHA);
+    rlDisableDepthMask();
+    const float S = 28.0f;
+    const float gx = std::floor(cam.position.x / S) * S, gz = std::floor(cam.position.z / S) * S;
+    for (int i = 0; i < n; ++i) {
+      const uint32_t h = static_cast<uint32_t>(i) * 2654435761u;
+      const float rx = ((h & 1023u) / 1023.0f - 0.5f) * S;
+      const float rz = (((h >> 10) & 1023u) / 1023.0f - 0.5f) * S;
+      const float ph = ((h >> 20) & 1023u) / 1023.0f;
+      const float fall = 0.9f + 0.5f * (((h >> 5) & 255u) / 255.0f);
+      const float y = 12.0f - std::fmod(ph * 14.0f + time_s * fall, 14.0f);
+      const float sway = std::sin(time_s * 0.9f + ph * 17.0f) * 0.45f;
+      float px = gx + rx + sway + time_s * 0.6f * L.wind, pz = gz + rz + std::cos(time_s * 0.7f + ph * 11.0f) * 0.35f;
+      px = cam.position.x + std::remainder(px - cam.position.x, S);
+      pz = cam.position.z + std::remainder(pz - cam.position.z, S);
+      const Vector3 p{px, cam.position.y - 3.0f + y, pz};
+      DrawLine3D(p, Vector3{p.x + 0.035f, p.y - 0.035f, p.z + 0.02f}, col);
+      DrawLine3D(Vector3{p.x + 0.035f, p.y, p.z}, Vector3{p.x, p.y - 0.035f, p.z + 0.02f}, col);
+    }
+    rlDrawRenderBatchActive();
+    rlEnableDepthMask();
+    return;
+  }
   const int n = static_cast<int>(600 + 2600 * L.rain);
   const float speed = 8.5f, len = 0.35f + 0.5f * L.rain;
   const Color col{190, 198, 210, static_cast<unsigned char>(60 + 60 * L.rain)};

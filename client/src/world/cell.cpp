@@ -253,13 +253,42 @@ void uploadCell(CellCpu& cpu, CellGpu& gpu) {
   }
   cpu.chunks.clear();
   if (!cpu.tidx.empty()) {
+    // skirts hanging 30 m down from the cell's edges (the far view's coarser ground, or a neighbour
+    // cell loaded later, never shows a crack or the sky through the seam)
+    std::vector<float> pos = cpu.tpos, nrm = cpu.tnrm, uv = cpu.tuv;
+    std::vector<unsigned short> idx = cpu.tidx;
+    {
+      const int nx = cpu.tnx, ny = cpu.tny;
+      auto skirt = [&](int i0, int j0, int di, int dj, int count, bool flip) {
+        for (int k = 0; k + 1 < count; ++k) {
+          const int a = (i0 + di * k) * nx + (j0 + dj * k), b = (i0 + di * (k + 1)) * nx + (j0 + dj * (k + 1));
+          if (pos.size() / 3 + 2 > 65535) return;
+          const auto base = static_cast<unsigned short>(pos.size() / 3);
+          for (int v : {a, b}) {
+            pos.insert(pos.end(), {cpu.tpos[static_cast<size_t>(v) * 3], cpu.tpos[static_cast<size_t>(v) * 3 + 1], cpu.tpos[static_cast<size_t>(v) * 3 + 2] - 30.0f});
+            nrm.insert(nrm.end(), {cpu.tnrm[static_cast<size_t>(v) * 3], cpu.tnrm[static_cast<size_t>(v) * 3 + 1], cpu.tnrm[static_cast<size_t>(v) * 3 + 2]});
+            uv.insert(uv.end(), {cpu.tuv[static_cast<size_t>(v) * 2], cpu.tuv[static_cast<size_t>(v) * 2 + 1]});
+          }
+          const auto A = static_cast<unsigned short>(a), B = static_cast<unsigned short>(b);
+          const auto A2 = base, B2 = static_cast<unsigned short>(base + 1);
+          if (flip) idx.insert(idx.end(), {A, A2, B2, A, B2, B});
+          else idx.insert(idx.end(), {A, B, B2, A, B2, A2});
+        }
+      };
+      if (nx >= 2 && ny >= 2 && static_cast<size_t>(nx * ny) == cpu.tpos.size() / 3) {
+        skirt(0, 0, 0, 1, nx, false);       // south edge
+        skirt(ny - 1, 0, 0, 1, nx, true);   // north edge
+        skirt(0, 0, 1, 0, ny, true);        // west edge
+        skirt(0, nx - 1, 1, 0, ny, false);  // east edge
+      }
+    }
     Mesh t{};
-    t.vertexCount = static_cast<int>(cpu.tpos.size() / 3);
-    t.triangleCount = static_cast<int>(cpu.tidx.size() / 3);
-    t.vertices = rlCopy(cpu.tpos);
-    t.normals = rlCopy(cpu.tnrm);
-    t.texcoords = rlCopy(cpu.tuv);
-    t.indices = rlCopy(cpu.tidx);
+    t.vertexCount = static_cast<int>(pos.size() / 3);
+    t.triangleCount = static_cast<int>(idx.size() / 3);
+    t.vertices = rlCopy(pos);
+    t.normals = rlCopy(nrm);
+    t.texcoords = rlCopy(uv);
+    t.indices = rlCopy(idx);
     UploadMesh(&t, false);
     releaseVertexCopies(t);
     gpu.terrain = t;

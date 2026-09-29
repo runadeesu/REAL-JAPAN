@@ -38,18 +38,20 @@ class Road:
     name: str
     width: float
     line: LineString
-    kind: str  # arterial | street | alley | mountain | rural | lane
+    kind: str  # arterial | street | alley | mountain | rural | lane | expressway | ramp
     district: str = ""
 
     @property
     def sidewalk(self) -> float:
-        if self.kind in ("rural", "mountain", "lane"):
+        if self.kind in ("rural", "mountain", "lane", "expressway", "ramp"):
             return 0.0
         w = self.width
         return 4.5 if w >= 30 else 3.5 if w >= 16 else 2.0 if w >= 9 else 0.0
 
     @property
     def median(self) -> float:
+        if self.kind == "expressway":
+            return 3.0
         return 2.5 if self.width >= 30 else 0.0
 
     @property
@@ -176,6 +178,13 @@ def build_roads(land, rivers, lakes, rng) -> RoadNet:
     roads = [Road(n, float(w), LineString(p), "arterial") for n, w, p in L.ARTERIALS]
     n, w, p = L.MOUNTAIN_ROAD
     roads.append(Road(n, float(w), LineString(p), "mountain"))
+    # the expressway (smooth, large-radius curves) and its interchange ramps
+    from .railgeom import chaikin, resample
+    n, w, p = L.EXPRESSWAY
+    ep = resample(chaikin(np.asarray(p, float), 4), 10.0)
+    roads.append(Road(n, float(w), LineString(ep), "expressway"))
+    for rn, rp in L.EXPRESSWAY_RAMPS:
+        roads.append(Road(rn, 8.0, LineString(resample(chaikin(np.asarray(rp, float), 3), 5.0)), "ramp"))
     towns = _towns()
     shapely.prepare(towns)
     # national / local roads: sidewalks inside the towns, a plain two-lane road with paved
@@ -299,15 +308,44 @@ def make_parcels(land: Polygon, net: RoadNet, rivers, reserved: Polygon, rng) ->
 
 
 # --------------------------------------------------------------------------------------------
+@dataclass
+class RoadStructure:
+    """A stretch of a country road on a structure: a tunnel through a ridge the grade-limited road
+    cannot climb over, or a viaduct across a valley it cannot descend into (where the road bed
+    would otherwise cut deeper than TUNNEL_CUT or fill higher than BRIDGE_FILL)."""
+    kind: str              # "tunnel" | "bridge"
+    pts: np.ndarray        # (n, 3) centre line with the road level
+    width: float
+    name: str = ""
+
+
+TUNNEL_CUT, BRIDGE_FILL = 14.0, 9.0
+
+
+def _runs(mask):
+    """(start, end) index pairs (end exclusive) of the True runs in a boolean array."""
+    d = np.diff(np.concatenate([[0], mask.astype(np.int8), [0]]))
+    return list(zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]))
+
+
 def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -3600, 4300, 3900)):
     """Road beds: across each road the ground is set to a smoothed, grade-limited profile along it
     (cuts into hillsides, fills over dips), blending back to the natural ground over the verges.
-    Not over rivers (the bridges have their own decks) and not in the capital (already gentle)."""
+    Not over rivers (the bridges have their own decks) and not in the capital (already gentle).
+    Where the profile runs deep under a ridge or high over a valley the country roads go through a
+    tunnel or over a viaduct instead (returned; the ground there is left as it is)."""
+    from scipy.ndimage import binary_closing, binary_opening
     R = terrain.RES
     water = unary_union([rv.poly.buffer(12) for rv in rivers])
     shapely.prepare(water)
+    structs: list[RoadStructure] = []
+    # (the expressway first: its ramps meet it at its level, and it bridges what it crosses)
+    roads = sorted(roads, key=lambda r: 0 if r.kind == "expressway" else 1 if r.kind == "ramp" else 2)
+    ex_profiles = []  # (LineString, z per sample, samples)
+    from .railgeom import rail_lines2d
+    others = [o.line for o in roads if o.kind not in ("expressway", "ramp")] + [LineString(P) for P in rail_lines2d()]
     for r in roads:
-        if r.kind not in ("rural", "mountain", "arterial", "lane", "street", "alley"):
+        if r.kind not in ("rural", "mountain", "arterial", "lane", "street", "alley", "expressway", "ramp"):
             continue
         x0b, y0b, x1b, y1b = r.line.bounds
         if skip_box[0] < x0b and x1b < skip_box[2] and skip_box[1] < y0b and y1b < skip_box[3]:
@@ -322,13 +360,57 @@ def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -
         if over.any():  # bridge spans: straight between the banks
             idx = np.arange(n)
             z[over] = np.interp(idx[over], idx[~over], z[~over])
-        z = ndimage.gaussian_filter1d(z, 5, mode="nearest")
-        g = (0.10 if r.kind in ("mountain", "rural", "lane") else 0.08) * (Lr / max(n - 1, 1))
-        for _ in range(2):
+        z = ndimage.gaussian_filter1d(z, 12 if r.kind == "expressway" else 5, mode="nearest")
+        grade = {"mountain": 0.10, "rural": 0.10, "lane": 0.10, "expressway": 0.05, "ramp": 0.07}.get(r.kind, 0.08)
+        g = grade * (Lr / max(n - 1, 1))
+        force = np.zeros(n, bool)  # stretches that must be a viaduct
+        pinned = np.zeros(n, bool)
+        if r.kind == "expressway":
+            # over every road and railway it crosses (7.5 m clear), and through built-up land
+            from . import layout as L_
+            step = Lr / max(n - 1, 1)
+            for o in others:
+                g_ = r.line.intersection(o)
+                for q in getattr(g_, "geoms", [g_]):
+                    if q.is_empty or q.geom_type != "Point":
+                        continue
+                    k = int(round(r.line.project(q) / step))
+                    lo, hi = max(0, k - int(45 / step)), min(n, k + int(45 / step) + 1)
+                    z[lo:hi] = np.maximum(z[lo:hi], float(terrain.sample(q.x, q.y)) + 7.5)
+                    force[lo:hi] = True
+            urb = np.array([L_.urban(x, y) for x, y in P])
+            ground_nat = terrain.sample(P[:, 0], P[:, 1]).astype(float)
+            z[urb] = np.maximum(z[urb], ground_nat[urb] + 9.5)
+            force |= urb | over  # (over the rivers too: its own viaduct, not a low river bridge)
+        if r.kind == "ramp" and ex_profiles:
+            # the end at the expressway sits at its level
+            for end in (0, n - 1):
+                for eline, ez, en in ex_profiles:
+                    if eline.distance(Point(P[end])) < 15.0:
+                        t = eline.project(Point(P[end])) / max(eline.length, 1e-9)
+                        z[end] = float(np.interp(t * (en - 1), np.arange(en), ez))
+                        pinned[end] = True
+        for _ in range(3 if (force.any() or pinned.any()) else 2):
             for k in range(1, n):
-                z[k] = min(max(z[k], z[k - 1] - g), z[k - 1] + g)
+                if not pinned[k]:
+                    z[k] = min(max(z[k], z[k - 1] - g), z[k - 1] + g)
             for k in range(n - 2, -1, -1):
-                z[k] = min(max(z[k], z[k + 1] - g), z[k + 1] + g)
+                if not pinned[k]:
+                    z[k] = min(max(z[k], z[k + 1] - g), z[k + 1] + g)
+        if r.kind == "expressway":
+            ex_profiles.append((r.line, z.copy(), n))
+        # tunnels and viaducts (country roads only; short runs closed / dropped)
+        ground = terrain.sample(P[:, 0], P[:, 1]).astype(float)
+        on_struct = np.zeros(n, bool)
+        if r.kind in ("rural", "mountain", "arterial", "expressway", "ramp") and r.width >= 6.0:
+            tun = binary_opening(binary_closing(ground - z > TUNNEL_CUT, structure=np.ones(6, bool)), structure=np.ones(10, bool))
+            brg = binary_opening(binary_closing((z - ground > BRIDGE_FILL) & ~over, structure=np.ones(3, bool)), structure=np.ones(4, bool))
+            brg = (brg | force) & ~tun
+            for kind, m in (("tunnel", tun), ("bridge", brg)):
+                for a, b in _runs(m):
+                    a0, b0 = max(0, a - 1), min(n, b + 1)  # (overlapping the approaches by one sample)
+                    structs.append(RoadStructure(kind, np.column_stack([P[a0:b0], z[a0:b0]]), r.width, r.name))
+                    on_struct[a:b] = True
         half = r.width / 2.0 + 1.0
         verge = 14.0
         pad = half + verge + 2 * R
@@ -353,9 +435,12 @@ def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -
         # Cuts and fills stay within what a road bed does (about 10 m down, 6 m up): where the
         # grade-limited profile cannot follow the ground (a slope steeper than the road may climb) the
         # ground is left as it is instead of being filled into a ridge hundreds of metres high.
-        prof = win + np.clip(prof - win, -10.0, 6.0)
+        lo, hi = (-TUNNEL_CUT, BRIDGE_FILL) if r.kind in ("rural", "mountain", "arterial", "expressway", "ramp") else (-10.0, 6.0)
+        prof = win + np.clip(prof - win, lo, hi)
         new = (prof * (1.0 - t) + win * t).astype(np.float32)
-        terrain.h[i0:i1, j0:j1] = np.where((d < half + verge) & ~wet & (win > 0.5), new, win)
+        keep = on_struct[np.clip(k, 0, n - 1)] & on_struct[np.clip(k + 1, 0, n - 1)]  # (under a viaduct, over a tunnel)
+        terrain.h[i0:i1, j0:j1] = np.where((d < half + verge) & ~wet & (win > 0.5) & ~keep, new, win)
+    return structs
 
 
 def flatten_pad(terrain: CountryTerrain, poly: Polygon, z: float | None = None, verge: float = 60.0):
@@ -393,6 +478,7 @@ class Country:
     reserved: Polygon       # stations, landmarks, rail corridors (special buildings)
     airport_z: list = field(default_factory=list)
     towns: Polygon = None   # built-up districts (yards between the buildings)
+    road_structs: list = field(default_factory=list)  # RoadStructure: road tunnels and viaducts
 
 
 def rail_corridors(lines) -> Polygon:
@@ -423,8 +509,9 @@ def generate(seed: int = 20260927, preview: bool = False) -> Country:
         (ax, ay), (bx, by), w = ap["runway"]
         strip = LineString([(ax, ay), (bx, by)]).buffer(150, cap_style=2).union(Point(*ap["terminal"]).buffer(420))
         airport_z.append(flatten_pad(terrain, strip, z=None if ap["reclaimed"] is None else 4.0))
-    flatten_for_roads(terrain, net.roads, rivers)
-    print(f"  road beds ({time.time() - t0:.0f}s)", flush=True)
+    road_structs = flatten_for_roads(terrain, net.roads, rivers)
+    print(f"  road beds ({time.time() - t0:.0f}s): {sum(s.kind == 'tunnel' for s in road_structs)} road tunnels, "
+          f"{sum(s.kind == 'bridge' for s in road_structs)} viaducts", flush=True)
     reserved = []
     from .railgeom import rail_lines2d, stations_aligned, track_piece
     lines = rail_lines2d()
@@ -444,4 +531,4 @@ def generate(seed: int = 20260927, preview: bool = False) -> Country:
     parcels = make_parcels(land, net, rivers, reserved_u, rng)
     print(f"  parcels: {len(parcels)} ({time.time() - t0:.0f}s)", flush=True)
     towns = unary_union([Polygon(p).buffer(0) for n, s, p in L.DISTRICTS if s not in ("airport", "village")])
-    return Country(land, main, south, islet, rivers, terrain, net, parcels, reserved_u, airport_z, towns)
+    return Country(land, main, south, islet, rivers, terrain, net, parcels, reserved_u, airport_z, towns, road_structs)

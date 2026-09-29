@@ -531,10 +531,10 @@ void App::updateFerryAboard(float dt) {
   float sit_drop = 0.0f;
   if (ferry_gang_ >= 0.0) {
     if (!gang) {  // the gangway is being taken in: off it at the nearer end
-      if (ferry_gang_ > 0.5) {
+      if (ferry_gang_ > 0.5) {  // (onto the pier where the player stands)
         ride_ferry_ = -1;
         ferry_gang_ = -1.0;
-        player_.pos = G;
+        player_.vel_z = 0;
         player_.snapToGround(world_);
         return;
       }

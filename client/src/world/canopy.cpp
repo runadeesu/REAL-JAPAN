@@ -63,6 +63,15 @@ void buildCanopy(CellCpu& c) {
       any |= in;
     }
   if (!any) return;
+  // the finer mask and the crown heights for the single trees near the player
+  constexpr int kM = 257;
+  c.forest_mask.assign(static_cast<size_t>(kM * kM), 0);
+  for (int a = 0; a < kM; ++a)
+    for (int b = 0; b < kM; ++b) {
+      const float u = static_cast<float>(b) / (kM - 1), v = 1.0f - static_cast<float>(a) / (kM - 1);
+      c.forest_mask[static_cast<size_t>(a * kM + b)] = sampleChannel(lc, u, v, 0) > 0.5f && !openGround(c.ground, u, v) ? 1 : 0;
+    }
+  c.canopy_h.assign(static_cast<size_t>(nx * ny), 0.0f);
   auto In = [&](int i, int j) {
     return i >= 0 && j >= 0 && i < ny && j < nx && inside[static_cast<size_t>(i * nx + j)];
   };
@@ -80,6 +89,7 @@ void buildCanopy(CellCpu& c) {
       // crown height: stands of different age (smooth noise) and single crowns (per point)
       const float wx = x + static_cast<float>(c.anchor[1] * 111000.0), wy = y + static_cast<float>(c.anchor[0] * 111000.0);
       const float h = 13.0f + 9.0f * valueNoise(wx / 45.0f, wy / 45.0f) + 2.5f * (hash2(static_cast<int>(wx), static_cast<int>(wy)) - 0.5f);
+      c.canopy_h[k] = h;
       vid[k] = static_cast<int>(ch.pos.size() / 3);
       ch.pos.insert(ch.pos.end(), {x, y, In(i, j) ? z + h : z - 0.5f});
       ch.uv.insert(ch.uv.end(), {0.0f, 0.0f});

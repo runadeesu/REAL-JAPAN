@@ -61,6 +61,11 @@ struct CellCpu {
   Image ground{};  // decoded ground texture (CPU)
   std::vector<Image> pages;  // decoded photo atlases (CPU), uploaded then freed
   CellDetailCpu detail;      // street-level detail (RJDET), optional
+  // forest (fictional country): where the canopy stands (257 x 257 over the terrain grid, row 0 =
+  // terrain row 0) and the crown height at each terrain grid vertex; the single trees near the
+  // player are planted from these (render/neartrees.cpp)
+  std::vector<unsigned char> forest_mask;
+  std::vector<float> canopy_h;
   size_t bytes = 0;
 };
 

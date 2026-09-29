@@ -134,6 +134,7 @@ uniform vec3 snowU;           // snow-map u = dot(vec3(x, z, 1), snowU) (raylib 
 uniform vec3 snowV;
 uniform float snowSeason;     // 0 no snow lying .. 1 deep winter
 uniform float cropStage;      // 0 winter stubble, 1 flooded with seedlings, 2 green, 3 golden
+uniform float canopyCut;      // > 0: the canopy mesh gives way to single trees within this radius of the camera
 uniform float leafStage;      // 0 green, 1 autumn colours, 2 bare (deciduous trees)
 out vec4 finalColor;
 float litFrom(float p) {
@@ -360,7 +361,8 @@ Surf material(int id, vec3 ng, vec2 wuv) {
                  * (0.6 + 0.8 * mix(c.r, 0.5, far)) * (0.8 + 0.4 * cs.g) * mix(1.0, 0.82, far);
     // mixed forest: evergreen conifers (cedar / cypress plantations) and broadleaf stands in patches;
     // the broadleaf trees turn red and yellow in autumn and are bare in winter
-    float broad = smoothstep(0.45, 0.65, texture(texNoise, wuv / 180.0).g);
+    // (single tree crowns flag broadleaf / conifer in the vertex colour's blue channel)
+    float broad = fragColor.b > 0.95 ? 1.0 : fragColor.b < 0.05 ? 0.0 : smoothstep(0.45, 0.65, texture(texNoise, wuv / 180.0).g);
     float hueN = texture(texNoise, wuv / 23.0).b;
     vec3 autumn = mix(vec3(0.30, 0.06, 0.02), vec3(0.34, 0.20, 0.03), hueN);
     vec3 bare = vec3(0.07, 0.055, 0.045) * (0.7 + 0.6 * c.r);
@@ -787,6 +789,10 @@ void main() {
   if (!gl_FrontFacing) ng = -ng;
   vec2 wuv = vec2(fragPos.x, -fragPos.z);  // world east / north (m)
   int id = materialOverride >= 0 ? materialOverride : int(fragMat.x + 0.5);
+  if (id == 17 && canopyCut > 0.0 && fragColor.b > 0.05 && fragColor.b < 0.95) {  // the canopy near the camera: single trees there
+    float d = length(fragPos.xz - viewPos.xz);
+    if (d < canopyCut) discard;
+  }
   Surf s;
   if (surfaceMode == 1) {
     s = terrainSurface(ng, wuv);

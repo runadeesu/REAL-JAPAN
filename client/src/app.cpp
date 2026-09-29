@@ -159,6 +159,7 @@ bool App::boot() {
 
 void App::shutdown() {
   audio_.shutdown();
+  near_trees_.clear();
   world_.unloadAll();
   renderer_.shutdown();
   ui_.unload();
@@ -353,6 +354,7 @@ void App::update(float dt) {
 
   // Stream the world around the current viewpoint.
   rj::geo::Vec3d focus = (in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0});
+  if (!in_session_ && opt_.has_pos && world_.hasOrigin()) focus = world_.toLocal({opt_.lat, opt_.lon, 0.0});  // (test aid: load where --pos is)
   const bool had_origin = world_.hasOrigin();
   const rj::geo::LocalFrame frame_before = had_origin ? world_.origin().frame() : rj::geo::LocalFrame(rj::geo::Geodetic{});
   if (world_.update(focus, settings_.view_distance_m)) {
@@ -418,7 +420,7 @@ void App::update(float dt) {
   if (screen_ == Screen::Loading) {
     // Small slices load completely; streamed worlds start once the cells around the spawn are in.
     if (world_.residentCount() >= world_.knownCount() ||
-        (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > (world_.knownCount() > 8 ? 20 : 600))) {
+        (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > (world_.knownCount() > 8 || opt_.has_pos ? 20 : 600))) {
       player_.snapToGround(world_);
       placeRoads();
       screen_ = Screen::Title;
@@ -566,8 +568,20 @@ void App::update(float dt) {
             nearby = in.get();
           }
       }
+      if (world_.meta().fictional && world_.hasOrigin()) {
+        far_.stitch(world_);  // far terrain edges onto the loaded cells' ground
+        near_trees_.update(world_, rlToEnu(listen_cam_.position));
+        renderer_.setCanopyCut(NearTrees::kCut);
+      }
       if (trains_.loaded()) trains_.update(std::min(dt, 0.1f));
-      for (int k = 0; k < opt_.sim_speed; ++k) {
+      if (trains_.loaded() && !trains_.crossings().empty()) {  // road traffic stops at the level crossings
+        std::vector<Traffic::CrossingStop> xs;
+        for (const auto& c : trains_.crossings())
+          if (std::hypot(c.pos.x - player_.pos.x, c.pos.y - player_.pos.y) < 600.0) xs.push_back({c.pos, static_cast<float>(c.half), c.warning || c.arm > 0.05f});
+        traffic_.setCrossings(std::move(xs));
+      }
+      const int sim_steps = simSteps();
+      for (int k = 0; k < sim_steps; ++k) {
         if (k > 0 && trains_.loaded()) trains_.update(std::min(dt, 0.1f));
         if (ferries_.loaded()) ferries_.update(std::min(dt, 0.1f), render_time_ + k * 0.1f, lighting_.wind);
         if (aviation_.loaded()) aviation_.update(std::min(dt, 0.1f), world_);
@@ -906,6 +920,15 @@ void App::updateSeason() {
   else leaf = 1.0f + ramp(doy, 330.0f, 350.0f);
   if (const char* e = std::getenv("RJ_SEASON")) std::sscanf(e, "%f,%f,%f", &snow, &crop, &leaf);  // test aid
   renderer_.setSeason(snow, crop, leaf);
+  // precipitation falls as snow in the season of lying snow, where the snow lies (the north side of
+  // the spine, the high ground): a game rule from the snow map, not a temperature model
+  snowfall_ = 0.0f;
+  if (far_.ready() && in_session_ && snow > 0.3f) {
+    const auto g = world_.toGeodetic(player_.pos);
+    const float pot = far_.snowPotential(g.lat_deg, g.lon_deg);
+    if (pot > 0.0f) snowfall_ = std::clamp((pot * snow - 0.2f) / 0.3f, 0.0f, 1.0f);
+  }
+  if (const char* e = std::getenv("RJ_SNOWFALL")) snowfall_ = static_cast<float>(std::atof(e));  // test aid
 }
 
 std::string App::airportName(int i) const {
@@ -1007,12 +1030,25 @@ void App::updateRideTest() {
     }
   }
   if (ride_train_ >= 0 || ride_ferry_ >= 0 || ride_jet_ >= 0) {
-    ride_test_t_ += std::min(GetFrameTime(), 0.1f) * static_cast<float>(opt_.sim_speed);
+    ride_test_t_ += std::min(GetFrameTime(), 0.1f) * static_cast<float>(simSteps());
     if (!opt_.alight && ride_test_t_ >= opt_.ride) ride_test_done_ = true;
   } else if (ride_test_t_ > 0.0f) {
     ride_test_t_ += std::min(GetFrameTime(), 0.1f);  // alighted: settle for a moment
     if (ride_test_t_ > opt_.ride + 1.0f) ride_test_done_ = true;
   }
+}
+
+int App::simSteps() const {
+  // test aid: the transport simulation runs --simspeed steps a frame, but only once the scripted
+  // passenger is settled (seated, or on deck): boarding and alighting happen in real time
+  if (ride_test_t_ >= 0.0f && !ride_test_done_) {
+    const bool settled = (ride_train_ >= 0 && drive_train_ >= 0) ||
+                         (ride_train_ >= 0 && ob_path_.empty() && ((ob_sitting_ && ob_sit_ >= 1.0f) || (ob_test_seated_ && !ob_sitting_))) ||
+                         (ride_ferry_ >= 0 && ferry_gang_ < 0.0 && ferry_test_walked_) ||
+                         (ride_jet_ >= 0 && jet_stair_ < 0.0 && jet_sitting_ && jet_sit_ >= 1.0f);
+    if (!settled) return 1;
+  }
+  return std::max(1, opt_.sim_speed);
 }
 
 bool App::scriptBusy() const {
@@ -1359,6 +1395,7 @@ void App::drawWorldView(const Camera3D& cam) {
   renderer_.setLights(collectLights(cam));
   BeginMode3D(cam);
   renderer_.drawWorld(cam, world_, settings_.photo_textures, !in && !world_.meta().fictional);
+  if (world_.meta().fictional && !deep) near_trees_.draw(renderer_);  // single trees in the forest near the camera
   // the sea is opaque (its alpha is the reflection amount): before the blended road markings
   if (world_.meta().fictional && !deep) {
     if (far_.ready()) {
@@ -1387,6 +1424,8 @@ void App::drawWorldView(const Camera3D& cam) {
     if (gate_closed_t_ > 0.0f || gate_flash_t_ > 0.0f)
       renderer_.drawGates(trains_, cam, gate_closed_t_ > 0.0f ? gate_closed_gate_ : -1, gate_closed_lane_, gate_flash_t_ > 0.0f ? gate_flash_gate_ : -1,
                           gate_flash_lane_, gate_flash_ok_);
+    if (!trains_.crossings().empty()) renderer_.drawCrossings(trains_, cam, render_time_);
+    if (world_.meta().fictional && in_session_) renderer_.drawDistantTraffic(traffic_, cam, lighting_, render_time_, jst().hour);
     renderer_.drawStationSigns(trains_, cam);
     renderer_.drawDepartureBoards(trains_, cam, render_time_);
     if (ride_train_ >= 0 && drive_train_ < 0) renderer_.drawCarDisplay(trains_, ride_train_, ride_car_);
@@ -1437,7 +1476,7 @@ void App::drawWorldView(const Camera3D& cam) {
   if (in_session_ && screen_ != Screen::Title && !deep && !photo_request_) drawWorldMarkers(cam);
   if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_)
     renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
-  renderer_.drawRain(cam, lighting_, render_time_);
+  renderer_.drawRain(cam, lighting_, render_time_, snowfall_);
   EndMode3D();
   renderer_.endScene(cam, lighting_, render_time_);
 }

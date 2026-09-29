@@ -69,6 +69,7 @@ class Traffic {
     int lanes = 1;                    // per direction
     double lane_w = 3.0;
     double v0 = 11.0;
+    double center_gap = 0.0;          // half the median (expressway): lanes start this far from the centre line
     float stop[2] = {-1.0f, -1.0f};   // stop-line distance from node a / node b (-1: default)
   };
   struct Node {
@@ -90,6 +91,14 @@ class Traffic {
     obstacle_on_ = on;
     obstacle_ = p;
   }
+  // Level crossings (centre, road half width, barrier down or warning): vehicles stop before a
+  // warning crossing and cross slowly otherwise (a Japanese driver stops, looks, then goes).
+  struct CrossingStop {
+    rj::geo::Vec3d pos;
+    float half = 3.5f;
+    bool closed = false;
+  };
+  void setCrossings(std::vector<CrossingStop> c) { crossings_ = std::move(c); }
   // Remove vehicle `id` from the simulation (the player takes the wheel); false if gone.
   bool take(int id, Vehicle& out);
   // Kerb-side lane pose nearest to p, travelling as close to `yaw_hint` as the road allows.
@@ -113,6 +122,7 @@ class Traffic {
   std::vector<float> cand_w_;
   rj::geo::Vec3d cand_at_{1e30, 1e30, 0};
   int warm_frames_ = 0;
+  std::vector<CrossingStop> crossings_;
   bool obstacle_on_ = false;
   rj::geo::Vec3d obstacle_{};
   float rnd();

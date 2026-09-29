@@ -90,6 +90,7 @@ enum class Cue : int {
   Rattle,           // omikuji box
   Crash,
   Horn,             // car horn
+  CrossingBell,     // level crossing warning bell (one stroke; rung twice a second)
   Click,            // phone tap
   Count
 };

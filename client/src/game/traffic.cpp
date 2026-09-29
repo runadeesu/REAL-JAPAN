@@ -86,6 +86,12 @@ bool Traffic::load(const std::filesystem::path& file, std::string& err) {
     e.lanes = std::clamp(static_cast<int>(w / 6.3f), 1, 3);
     e.lane_w = std::min(3.3, static_cast<double>(w) / (2.0 * e.lanes));
     e.v0 = w > 12.0f ? 50.0 / 3.6 : (w > 7.0f ? 40.0 / 3.6 : 25.0 / 3.6);
+    if (w >= 22.0f) {  // the expressway: two lanes each way beside a 3 m median, 90 km/h (a game value)
+      e.lanes = 2;
+      e.lane_w = 3.6;
+      e.center_gap = 2.0;
+      e.v0 = 90.0 / 3.6;
+    }
     nodes_[a].edges.push_back(static_cast<int>(i));
     if (b != a) nodes_[b].edges.push_back(static_cast<int>(i));
   }
@@ -138,7 +144,7 @@ void Traffic::samplePose(const Edge& e, int dir, int lane, double s, rj::geo::Ve
   }
   // Left-hand traffic: lanes lie to the left of the travel direction.
   const double lx = -ty, ly = tx;
-  const double off = e.lane_w * (e.lanes - lane - 0.5) + (e.lanes == 1 && e.width < 5.5 ? -e.lane_w * 0.25 : 0.0);
+  const double off = e.center_gap + e.lane_w * (e.lanes - lane - 0.5) + (e.lanes == 1 && e.width < 5.5 ? -e.lane_w * 0.25 : 0.0);
   p = {A.x + (B.x - A.x) * t + lx * off, A.y + (B.y - A.y) * t + ly * off, A.z + (B.z - A.z) * t};
   heading = std::atan2(tx, ty);
 }
@@ -359,6 +365,24 @@ void Traffic::update(double dt, const World& world, const TrafficSignals& signal
         if (g < gap) {
           gap = std::max(0.1, g);
           dv = v.v;
+        }
+      }
+    }
+    for (const auto& c : crossings_) {  // level crossings ahead in this lane
+      const double hx = std::sin(v.yaw), hy = std::cos(v.yaw);
+      const double rx = c.pos.x - v.pos.x, ry = c.pos.y - v.pos.y;
+      const double along = rx * hx + ry * hy, lat = std::fabs(rx * hy - ry * hx);
+      if (along < 0.0 || along > 60.0 || lat > c.half + 1.0) continue;
+      const double before = along - 8.5 - len * 0.5;  // the stop line, clear of the barrier
+      if (c.closed) {
+        if (before > -1.0 && before < gap) {
+          gap = std::max(0.1, before);
+          dv = v.v;
+        }
+      } else if (before > 0.5 && v.v > 3.0 && before < 14.0) {  // over the tracks at a crawl
+        if (before < gap) {
+          gap = std::max(0.1, before + 4.0);
+          dv = v.v - 3.0;
         }
       }
     }

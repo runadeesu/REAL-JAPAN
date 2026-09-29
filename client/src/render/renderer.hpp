@@ -109,6 +109,7 @@ class Renderer {
     snow_u_ = u;
     snow_v_ = v;
   }
+  void setCanopyCut(float r) { canopy_cut_ = r; }  // single trees replace the canopy within r of the camera
   void setSeason(float snow, float crop, float leaf) {
     season_snow_ = snow;
     season_crop_ = crop;
@@ -131,6 +132,12 @@ class Renderer {
   void drawBox(const rj::geo::Vec3d& c, float yaw, Vector3 half, int material, Color tint, Vector3 emissive = {0, 0, 0}, float pitch = 0.0f);
   // The ticket gates' shut flaps and the readers' flash (green: card accepted, red: refused).
   void drawGates(const Trains& trains, const Camera3D& cam, int shut_gate, int shut_lane, int flash_gate, int flash_lane, bool flash_ok);
+  // Level crossings: the barrier arms (raised / lowered) and the warning lamps flashing in turn.
+  void drawCrossings(const Trains& trains, const Camera3D& cam, float time_s);
+  // Traffic beyond the simulated vehicles (which exist only near the player): cars moving along the
+  // road graph out to a few km, drawn cheaply (small boxes by day, head / tail lights at night).
+  // Density by the hour and the road's width (a game assumption).
+  void drawDistantTraffic(const Traffic& traffic, const Camera3D& cam, const Lighting& L, float time_s, int hour);
   // Station name boards on the platforms (generic design: the name, its reading and romanisation,
   // the neighbouring stations on a band in the line colour). Built once into render textures with
   // the UI font (call outside the scene pass).
@@ -165,7 +172,8 @@ class Renderer {
   void drawVehicles(const Traffic& traffic, const Camera3D& cam, const Lighting& L, const Vehicle* extra = nullptr,
                     const CockpitView* cockpit = nullptr, bool extra_driven = false);
   void vehicleCasters(const Traffic& traffic, const Camera3D& cam, std::vector<Caster>& out, const Vehicle* extra = nullptr) const;
-  void drawRain(const Camera3D& cam, const Lighting& L, float time_s);
+  // rain streaks, or falling snow when `snow` (0..1: how much of the precipitation is snow)
+  void drawRain(const Camera3D& cam, const Lighting& L, float time_s, float snow = 0.0f);
   void endScene(const Camera3D& cam, const Lighting& L, float time_s);
   void beginTransparent();  // re-enable blending (rain, particles) after the opaque pass
 
@@ -201,6 +209,7 @@ class Renderer {
   RenderTexture2D car_display_{};
   std::string car_display_key_;
   Mesh ocean_{};
+  Mesh ocean_curved_{};  // far view: the sea following the Earth's curvature
   TrainModels train_models_;
   ShipModels ship_models_;
   AircraftModels aircraft_models_;
@@ -224,6 +233,7 @@ class Renderer {
   Texture2D snow_tex_{};
   Vector3 snow_u_{0, 0, 0}, snow_v_{0, 0, 0};
   float season_snow_ = 0.0f, season_crop_ = 2.0f, season_leaf_ = 0.0f;
+  float canopy_cut_ = 0.0f;
   float exposure_ = 1.0f;
   float exposure_override_ = 0.0f;
   int frame_ = 0;

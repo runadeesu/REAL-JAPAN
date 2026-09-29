@@ -235,6 +235,11 @@ def cook_cell(mesh: str):
     land_here = ctry.land.intersection(cpoly.buffer(20))
     has_land = land_here.area > 50.0
     rp = ctry.net.polys(cpoly) if has_land else None
+    if rp is not None and spec.road_struct_area is not None and spec.road_struct_area.intersects(cpoly.buffer(30)):
+        # no road painted (nor kerbs built) on the ground over a road tunnel or under a viaduct:
+        # the carriageway there is the structure's own deck
+        S_ = spec.road_struct_area
+        rp = type(rp)(rp.whole.difference(S_), rp.carriage.difference(S_), rp.sidewalk.difference(S_), rp.median.difference(S_), rp.plaza)
     geos, walk = {}, []
     if rp is not None and not rp.whole.is_empty:
         clip = cpoly.buffer(3)
@@ -247,6 +252,16 @@ def cook_cell(mesh: str):
         fps_local = [rec.footprint for rec in w.buildings]
         build_sidewalks([stub], fps_local, fc, to_local, ts, geos, walk)
     extra = specials.cell_detail(spec, ctry, cpoly, xf, ts, rng, geos, rp=rp)
+    from country import shop as shop_mod
+    for b in blds:  # walk-in shop ground floors
+        if getattr(b, "shop", None):
+            shop_mod.build(geos, extra, xf, b.shop)
+            if os.environ.get("RJ_COOK_SHOPS"):  # (debug: where the shops are)
+                r, fe = b.shop["ring"], b.shop["front_edge"]
+                a_, b_ = r[fe], r[(fe + 1) % len(r)]
+                la_, lo_ = fi.to_geodetic(float((a_[0] + b_[0]) / 2), float((a_[1] + b_[1]) / 2))
+                d_ = b_ - a_
+                print(f"SHOP {b.shop['kind']} {la_:.7f},{lo_:.7f} out {math.degrees(math.atan2(d_[1], -d_[0])) % 360:.0f}", flush=True)
     # ground raster, contact AO, land-cover map
     M = raster_mapper(fi, bounds)
     size = TEX if (w.buildings or (rp is not None and rp.whole.area > 20000)) else (TEX_RURAL if has_land else TEX_SEA)
@@ -432,13 +447,14 @@ def landcover_png(lc, M) -> bytes:
 # ---------------------------------------------------------------------------------------------
 def road_graph(net, fi: LocalFrame):
     """RJROAD from the generated centerlines (noded at crossings); width = carriageway width."""
-    lines, widths, full = [], [], []
+    lines, widths, full, kinds = [], [], [], []
     for r in net.roads:
         if r.carriage < 3.0:
             continue
         lines.append(r.line)
         widths.append(r.carriage)
         full.append(r.width)
+        kinds.append(r.kind)
     snap_tree = STRtree(lines)
     lines = [LineString(ln.coords) for ln in lines]
     inserts = {}
@@ -449,6 +465,11 @@ def road_graph(net, fi: LocalFrame):
             best = None
             for j in snap_tree.query(p.buffer(30.0)):
                 if j == i:
+                    continue
+                # (only the ramps join the expressway; nothing else ends on it)
+                if kinds[j] == "expressway" and kinds[i] != "ramp":
+                    continue
+                if kinds[i] == "expressway":
                     continue
                 d = lines[j].distance(p)
                 if 1e-6 < d < full[j] * 0.5 + 3.0 and (best is None or d < best[0]):
@@ -475,8 +496,16 @@ def road_graph(net, fi: LocalFrame):
             if math.hypot(xy[0] - o[-1][0], xy[1] - o[-1][1]) > 1e-6:
                 o.append(xy)
         lines[j] = LineString(o)
-    noded = unary_union(MultiLineString(lines))
-    segs = [g for g in getattr(noded, "geoms", [noded]) if isinstance(g, LineString) and g.length > 0.5]
+    # (the expressway and its ramps cross the other roads on bridges: they meet them only where a
+    # ramp ends on a road, so the two sets are noded apart)
+    exw = [k for k in range(len(lines)) if kinds[k] in ("expressway", "ramp")]
+    rest = [k for k in range(len(lines)) if kinds[k] not in ("expressway", "ramp")]
+    segs = []
+    for group in (rest, exw):
+        if not group:
+            continue
+        noded = unary_union(MultiLineString([lines[k] for k in group]))
+        segs += [g for g in getattr(noded, "geoms", [noded]) if isinstance(g, LineString) and g.length > 0.5]
     tree = STRtree(lines)
     nodes, key = [], {}
 

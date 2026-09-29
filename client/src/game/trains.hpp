@@ -55,6 +55,29 @@ struct StationGate {
   static constexpr float kHalfLen = 0.8f;    // half the length of the gate cabinets
 };
 
+// A level crossing of the at-grade main line: the road across the tracks, and at each approach a
+// warning post (two red lamps flashing in turn, the bell) with a barrier whose arm comes down
+// across the approaching lanes a few seconds after the warning starts.
+struct LevelCrossing {
+  struct Set {
+    rj::geo::Geodetic geo;
+    rj::geo::Vec3d pos;   // barrier pivot / post foot (origin ENU)
+    double facing = 0;    // compass degrees the lamps face (towards the approaching traffic)
+    double arm_hd = 0;    // compass degrees the lowered arm points
+    double arm_len = 3.0;
+  };
+  int id = 0, line = 0;
+  rj::geo::Geodetic geo;
+  rj::geo::Vec3d pos;     // centre on the road (origin ENU)
+  double road_hd = 0;     // degrees
+  double half = 3.5;      // road half width
+  double s = 0;           // position along the line
+  std::vector<Set> sets;
+  bool warning = false;   // lamps and bell
+  float since = 0;        // seconds since the warning started / stopped
+  float arm = 0;          // 0 raised .. 1 lowered
+};
+
 struct Train {
   int id = 0;
   int line = 0;
@@ -83,6 +106,7 @@ class Trains {
   const std::vector<RailLine>& lines() const { return lines_; }
   const std::vector<Station>& stations() const { return stations_; }
   const std::vector<StationGate>& gates() const { return gates_; }
+  const std::vector<LevelCrossing>& crossings() const { return crossings_; }
   const std::vector<Train>& trains() const { return trains_; }
   const Train* train(int id) const;
   // car pose (origin ENU, compass yaw, pitch) of car k (0 = leading car)
@@ -125,6 +149,8 @@ class Trains {
   std::vector<RailLine> lines_;
   std::vector<Station> stations_;
   std::vector<StationGate> gates_;
+  std::vector<LevelCrossing> crossings_;
+  void updateCrossings(double dt);
   std::vector<Train> trains_;
   bool placed_ = false;
   bool ats_[64] = {};

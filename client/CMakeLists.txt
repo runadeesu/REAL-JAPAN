@@ -50,6 +50,7 @@ set(RJ_SOURCES
   src/render/renderer.cpp
   src/render/textures.cpp
   src/render/farview.cpp
+  src/render/neartrees.cpp
   src/render/foliage.cpp
   src/render/vehicles.cpp
   src/render/humans.cpp

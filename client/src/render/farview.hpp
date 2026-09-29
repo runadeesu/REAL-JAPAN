@@ -28,6 +28,12 @@ class FarView {
     std::string mesh;                      // JIS 3rd-mesh code of the cell it stands in for
     rj::geo::LocalFrame frame{rj::geo::Geodetic{}};  // tile centre at sea level
     Mesh terrain{};
+    // (stitching to loaded neighbours) the vertex positions as built, the grid size, the top vertex
+    // each skirt vertex hangs from, and whether the mesh is currently stitched
+    std::vector<float> pos0;
+    int n = 0;
+    std::vector<int> skirt_src;
+    bool stitched = false;
     std::vector<Mesh> boxes;               // building boxes (split to stay within 16-bit indices)
     float radius = 0;                      // bounding radius about the centre (m)
     float zmax = 0;                        // highest ground in the tile (m above sea)
@@ -35,6 +41,8 @@ class FarView {
   const std::vector<Tile>& tiles() const { return tiles_; }
   Texture2D colorMap() const { return color_; }
   Texture2D snowMap() const { return snow_; }
+  // snow potential (0..1: where the winter's snow lies) at a place; -1 outside the map
+  float snowPotential(double lat, double lon) const;
   // extent of the colour map (degrees): south, west, north, east
   void extent(double& lat0, double& lon0, double& lat1, double& lon1) const {
     lat0 = lat0_;
@@ -44,6 +52,9 @@ class FarView {
   }
   // raylib (x, z) -> snow / colour map uv for the world's current floating origin
   void mapping(const World& world, Vector3& u, Vector3& v) const;
+  // Where a tile borders loaded cells, move its edge onto their ground (and canopy) so the two meet
+  // without a wall or a gap; restore it when they unload. Cheap when nothing changed.
+  void stitch(const World& world);
 
  private:
   bool loaded_ = false, built_ = false;
@@ -56,8 +67,11 @@ class FarView {
   };
   std::vector<Box> boxes_;
   Image color_img_{}, snow_img_{};
+  std::vector<unsigned char> snow_cpu_;
+  int snow_w_ = 0, snow_h_ = 0;
   Texture2D color_{}, snow_{};
   std::vector<Tile> tiles_;
+  std::string stitch_sig_;
   float heightAt(int row, int col) const;  // metres above sea
 };
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <sstream>
 
 #include "game/station_names.hpp"
@@ -62,6 +63,20 @@ bool Trains::load(const std::filesystem::path& file, std::string& err) {
       float v;
       while (ls >> v) g.lanes.push_back(v);
       if (!g.lanes.empty()) gates_.push_back(std::move(g));
+    } else if (k == "crossing") {
+      LevelCrossing c;
+      double la, lo, z;
+      ls >> c.id >> c.line >> la >> lo >> z >> c.road_hd >> c.half;
+      c.geo = {la, lo, z};
+      crossings_.push_back(c);
+    } else if (k == "xset") {
+      int id = 0;
+      LevelCrossing::Set st;
+      double la, lo, z;
+      ls >> id >> la >> lo >> z >> st.facing >> st.arm_hd >> st.arm_len;
+      st.geo = {la, lo, z};
+      for (auto& c : crossings_)
+        if (c.id == id) c.sets.push_back(st);
     } else if (k == "reading") {
       std::string name, kana, roman;
       ls >> name >> kana;
@@ -166,6 +181,24 @@ void Trains::place(const World& world) {
     }
   }
   for (auto& g : gates_) g.pos = world.toLocal(g.geo);
+  for (auto& c : crossings_) {
+    c.pos = world.toLocal(c.geo);
+    for (auto& st : c.sets) st.pos = world.toLocal(st.geo);
+    if (c.line < 0 || c.line >= static_cast<int>(lines_.size())) continue;
+    const auto& L = lines_[static_cast<size_t>(c.line)];
+    double best = 1e30;
+    for (size_t i = 1; i < L.pts.size(); ++i) {
+      const auto& A = L.pts[i - 1];
+      const auto& B = L.pts[i];
+      const double vx = B.x - A.x, vy = B.y - A.y, l2 = vx * vx + vy * vy;
+      const double t = l2 > 0 ? std::clamp(((c.pos.x - A.x) * vx + (c.pos.y - A.y) * vy) / l2, 0.0, 1.0) : 0.0;
+      const double d = std::hypot(c.pos.x - (A.x + t * vx), c.pos.y - (A.y + t * vy));
+      if (d < best) {
+        best = d;
+        c.s = L.cum[i - 1] + t * std::sqrt(l2);
+      }
+    }
+  }
   for (auto& st : stations_) {
     st.pos = world.toLocal(st.geo);
     if (st.line < 0 || st.line >= static_cast<int>(lines_.size())) continue;
@@ -262,8 +295,38 @@ void Trains::chooseNextStop(Train& t) const {
   t.next_stop = pick;
 }
 
+void Trains::updateCrossings(double dt) {
+  // The warning starts when a train is due within about 35 s (or is within 150 m), and stops once
+  // its last car has cleared the crossing; the arms come down 5 s after the lamps start and go up
+  // 2 s after they stop (typical Japanese timings; game values).
+  for (auto& c : crossings_) {
+    const auto& L = lines_[static_cast<size_t>(c.line)];
+    bool warn = false;
+    for (const auto& t : trains_) {
+      if (t.line != c.line) continue;
+      double ahead = (c.s - t.s) * t.dir;  // from the front to the crossing, along the way it runs
+      if (L.closed) ahead = std::remainder(ahead, L.length);
+      const double len = t.cars * t.car_len;
+      if (ahead < -len - 8.0) continue;          // passed
+      if (ahead <= 0.0) warn = true;              // on the crossing
+      else if (ahead < 150.0 || ahead / std::max(t.v, 4.0) < 35.0) warn = warn || t.v > 0.2 || ahead < 60.0;
+    }
+    static const bool force = std::getenv("RJ_XING_TEST") != nullptr;  // test aid: every crossing warning
+    warn = warn || force;
+    if (warn != c.warning) {
+      c.warning = warn;
+      c.since = 0;
+    }
+    c.since += static_cast<float>(dt);
+    const float target = c.warning ? (c.since > 5.0f ? 1.0f : 0.0f) : (c.since > 2.0f ? 0.0f : c.arm > 0.0f ? 1.0f : 0.0f);
+    const float rate = static_cast<float>(dt) / 6.0f;  // an arm takes about 6 s to come down / go up
+    c.arm = target > c.arm ? std::min(target, c.arm + rate) : std::max(target, c.arm - rate);
+  }
+}
+
 void Trains::update(double dt) {
   if (!placed_) return;
+  updateCrossings(dt);
   for (auto& t : trains_) {
     const auto& L = lines_[static_cast<size_t>(t.line)];
     if (t.hold > 0) {

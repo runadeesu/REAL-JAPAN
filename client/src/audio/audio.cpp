@@ -284,6 +284,7 @@ void setupCue(CueVoice& v, Rng& rng) {
     case Cue::Shutter: v.dur = 0.2f; v.bp1.highpass(1800, 0.7f, SR); break;
     case Cue::Beep: v.dur = 0.09f; break;
     case Cue::GateBeep: v.dur = 0.14f; break;
+    case Cue::CrossingBell: v.dur = 0.45f; break;
     case Cue::Coins:
       v.dur = 0.8f;
       for (int i = 0; i < 4; ++i) v.hits.push_back({0.07f * i + 0.04f * rng.uni(), 0.9f + 0.2f * rng.uni()});
@@ -353,6 +354,10 @@ float runCue(CueVoice& v, Rng& rng) {
       break;
     case Cue::Beep: y = (std::sin(kTau * 3100.0f * t) > 0 ? 0.18f : -0.18f) * (t < 0.08f); break;
     case Cue::GateBeep: y = std::sin(kTau * 2300.0f * t) * 0.35f * (t < 0.12f) * std::min(1.0f, t / 0.003f); break;
+    case Cue::CrossingBell:  // an electronic level crossing bell: a bright struck tone with inharmonic partials
+      y = (std::sin(kTau * 740.0f * t) + 0.55f * std::sin(kTau * 1580.0f * t) + 0.3f * std::sin(kTau * 2410.0f * t)) * 0.22f *
+          attackDecay(t, 0.002f, 0.16f);
+      break;
     case Cue::Coins:
       for (auto& h : v.hits)
         if (t >= h.first) {

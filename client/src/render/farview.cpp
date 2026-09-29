@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <cstring>
 #include <map>
 #include <sstream>
@@ -138,6 +139,11 @@ void FarView::build() {
   UnloadImage(color_img_);
   color_img_ = Image{};
   if (snow_img_.data) {
+    snow_w_ = snow_img_.width;
+    snow_h_ = snow_img_.height;
+    snow_cpu_.resize(static_cast<size_t>(snow_w_) * snow_h_);
+    for (int y = 0; y < snow_h_; ++y)
+      for (int x = 0; x < snow_w_; ++x) snow_cpu_[static_cast<size_t>(y) * snow_w_ + x] = GetImageColor(snow_img_, x, y).r;
     snow_ = LoadTextureFromImage(snow_img_);
     SetTextureFilter(snow_, TEXTURE_FILTER_BILINEAR);
     SetTextureWrap(snow_, TEXTURE_WRAP_CLAMP);
@@ -189,11 +195,13 @@ void FarView::build() {
           g.idx.insert(g.idx.end(), {a, d, e, a, e, b});
         }
       // skirts hanging down from the edges (no cracks against the detailed neighbouring cells)
+      std::vector<int> skirt_src;
       auto skirt = [&](int i0, int j0, int di, int dj) {
         for (int k = 0; k + 1 < n; ++k) {
           const int ia = (i0 + di * k) * n + (j0 + dj * k), ib = (i0 + di * (k + 1)) * n + (j0 + dj * (k + 1));
           const unsigned short base = g.nv();
           for (int v : {ia, ib}) {
+            skirt_src.push_back(v);
             const rj::geo::Vec3d p{g.pos[static_cast<size_t>(v) * 3], g.pos[static_cast<size_t>(v) * 3 + 1],
                                    g.pos[static_cast<size_t>(v) * 3 + 2] - kSkirt};
             const float nn[3] = {g.nrm[static_cast<size_t>(v) * 3], g.nrm[static_cast<size_t>(v) * 3 + 1], g.nrm[static_cast<size_t>(v) * 3 + 2]};
@@ -207,6 +215,9 @@ void FarView::build() {
       skirt(n - 1, 0, 0, 1);
       skirt(0, 0, 1, 0);
       skirt(0, n - 1, 1, 0);
+      t.pos0 = g.pos;
+      t.n = n;
+      t.skirt_src = std::move(skirt_src);
       t.terrain = g.upload();
       t.radius = static_cast<float>(std::hypot(kSub * mx, kSub * my) * 0.5 + 50.0);
       by_code[t.mesh] = tiles_.size();
@@ -296,6 +307,97 @@ void FarView::unload() {
   if (snow_img_.data) UnloadImage(snow_img_);
   color_img_ = snow_img_ = Image{};
   built_ = false;
+}
+
+void FarView::stitch(const World& world) {
+  if (!built_ || !world.hasOrigin()) return;
+  std::string sig;
+  for (const auto& [code, c] : world.cells()) sig += code;
+  const auto o = world.toGeodetic({0.0, 0.0, 0.0});
+  sig += std::to_string(static_cast<long long>(o.lat_deg * 1e6)) + std::to_string(static_cast<long long>(o.lon_deg * 1e6));
+  if (sig == stitch_sig_) return;
+  stitch_sig_ = sig;
+  const auto& O = world.origin().frame();
+  // the near surface (ground, and the canopy where the near cell has forest) at an origin-ENU point
+  auto nearZ = [&](double x, double y) -> std::optional<double> {
+    for (const auto& [code, c] : world.cells()) {
+      const CellCpu& cpu = *c->cpu;
+      const int nx = cpu.tnx, ny = cpu.tny;
+      if (nx < 2 || ny < 2) continue;
+      const double vx = x - c->p00.x, vy = y - c->p00.y;
+      const double det = c->ex.x * c->ey.y - c->ex.y * c->ey.x;
+      if (std::abs(det) < 1e-9) continue;
+      const double fj = (vx * c->ey.y - vy * c->ey.x) / det, fi = (c->ex.x * vy - c->ex.y * vx) / det;
+      if (fi < -0.01 || fj < -0.01 || fi > ny - 0.99 || fj > nx - 0.99) continue;
+      const int i = std::clamp(static_cast<int>(fi), 0, ny - 2), j = std::clamp(static_cast<int>(fj), 0, nx - 2);
+      const double u = std::clamp(fi - i, 0.0, 1.0), w = std::clamp(fj - j, 0.0, 1.0);
+      auto Z = [&](int a, int b) { return static_cast<double>(c->tz[static_cast<size_t>(a * nx + b)]); };
+      double z = (Z(i, j) * (1 - w) + Z(i, j + 1) * w) * (1 - u) + (Z(i + 1, j) * (1 - w) + Z(i + 1, j + 1) * w) * u;
+      if (!cpu.forest_mask.empty() && !cpu.canopy_h.empty()) {
+        const int ma = std::clamp(static_cast<int>(std::lround(fi / (ny - 1) * 256.0)), 0, 256);
+        const int mb = std::clamp(static_cast<int>(std::lround(fj / (nx - 1) * 256.0)), 0, 256);
+        if (cpu.forest_mask[static_cast<size_t>(ma * 257 + mb)]) {
+          auto H = [&](int a, int b) { return static_cast<double>(cpu.canopy_h[static_cast<size_t>(a * nx + b)]); };
+          z += (H(i, j) * (1 - w) + H(i, j + 1) * w) * (1 - u) + (H(i + 1, j) * (1 - w) + H(i + 1, j + 1) * w) * u;
+        }
+      }
+      return z;
+    }
+    return std::nullopt;
+  };
+  for (auto& t : tiles_) {
+    if (!t.terrain.vaoId || t.pos0.empty() || t.n < 2) continue;
+    if (world.cells().count(t.mesh)) continue;  // (not drawn while its own cell is loaded)
+    const rj::geo::Rigid3d X = O.transformFrom(t.frame);
+    const rj::geo::Vec3d c = X.apply({0.0, 0.0, 0.0});
+    if (std::hypot(c.x, c.y) > 12000.0) {  // far from everything loaded
+      if (!t.stitched) continue;
+    }
+    std::vector<float> pos = t.pos0;
+    bool any = false;
+    const int n = t.n;
+    auto fix = [&](int i, int j, double ox, double oy) {
+      const size_t k = static_cast<size_t>(i * n + j) * 3;
+      const rj::geo::Vec3d p = X.apply({pos[k], pos[k + 1], pos[k + 2]});
+      // a loaded cell just beyond this edge?
+      const rj::geo::Vec3d q = X.apply({pos[k] + ox * 6.0, pos[k + 1] + oy * 6.0, pos[k + 2]});
+      if (!nearZ(q.x, q.y)) return;
+      const auto zn = nearZ(p.x, p.y);
+      if (!zn) return;
+      const double dz = (*zn - 0.3) - p.z;  // along the origin's vertical, back into the tile frame
+      pos[k] += static_cast<float>(X.R[6] * dz);
+      pos[k + 1] += static_cast<float>(X.R[7] * dz);
+      pos[k + 2] += static_cast<float>(X.R[8] * dz);
+      any = true;
+    };
+    for (int j = 0; j < n; ++j) {
+      fix(0, j, 0.0, 1.0);       // north row (rows run north to south)
+      fix(n - 1, j, 0.0, -1.0);  // south row
+    }
+    for (int i = 0; i < n; ++i) {
+      fix(i, 0, -1.0, 0.0);      // west column
+      fix(i, n - 1, 1.0, 0.0);   // east column
+    }
+    if (!any && !t.stitched) continue;
+    // the skirts follow their top vertices
+    const size_t top = static_cast<size_t>(n * n);
+    for (size_t s = 0; s < t.skirt_src.size() && (top + s) * 3 + 2 < pos.size(); ++s) {
+      const size_t src = static_cast<size_t>(t.skirt_src[s]) * 3, dst = (top + s) * 3;
+      pos[dst] = pos[src];
+      pos[dst + 1] = pos[src + 1];
+      pos[dst + 2] = pos[src + 2] - (t.pos0[src + 2] - t.pos0[dst + 2]);
+    }
+    UpdateMeshBuffer(t.terrain, 0, pos.data(), static_cast<int>(pos.size() * sizeof(float)), 0);
+    t.stitched = any;
+  }
+}
+
+float FarView::snowPotential(double lat, double lon) const {
+  if (snow_cpu_.empty() || lat1_ <= lat0_ || lon1_ <= lon0_) return -1.0f;
+  const double u = (lon - lon0_) / (lon1_ - lon0_), v = (lat1_ - lat) / (lat1_ - lat0_);  // (north row first)
+  if (u < 0 || u > 1 || v < 0 || v > 1) return -1.0f;
+  const int x = std::clamp(static_cast<int>(u * snow_w_), 0, snow_w_ - 1), y = std::clamp(static_cast<int>(v * snow_h_), 0, snow_h_ - 1);
+  return snow_cpu_[static_cast<size_t>(y) * snow_w_ + x] / 255.0f;
 }
 
 void FarView::mapping(const World& world, Vector3& u, Vector3& v) const {

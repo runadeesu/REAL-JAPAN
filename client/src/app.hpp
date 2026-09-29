@@ -28,6 +28,7 @@
 #include "game/weather.hpp"
 #include "i18n/i18n.hpp"
 #include "render/farview.hpp"
+#include "render/neartrees.hpp"
 #include "render/renderer.hpp"
 #include "rj/econ/ledger.hpp"
 #include "rj/sim/calendar.hpp"
@@ -169,8 +170,10 @@ class App {
   int ride_train_ = -1, ride_car_ = 0;  // riding a train (id, car)
   int ride_board_station_ = -1;         // where the ride began (fare by distance at the end)
   FarView far_;                         // the country beyond the streamed cells (fictional world)
+  NearTrees near_trees_;                // single forest trees near the camera (fictional world)
   void updateFarMapping();
   void updateSeason();
+  float snowfall_ = 0.0f;  // 0 rain .. 1 snow (updateSeason)
   float ride_look_yaw_ = 0.0f, ride_look_pitch_ = 0.0f;  // view relative to the car ridden (its model frame)
   void updateTransportActions();
   Camera3D rideCamera() const;
@@ -330,6 +333,7 @@ class App {
   bool ride_test_done_ = false;
   void updateRideTest();
   bool scriptBusy() const;
+  int simSteps() const;  // transport simulation steps this frame (test aid --simspeed)
   bool traffic_placed_ = false;
   void placeRoads();  // road graph, signal groups, markings and the walk network in the current origin
   rj::geo::Vec3d roads_center_{1e30, 1e30, 0};  // where markings / walk network were last built (large worlds)
@@ -359,6 +363,7 @@ class App {
   float snd_horn_t_ = 0.0f;
   bool snd_crashed_ = false;
   float snd_sea_ = 0.0f;
+  float snd_bell_t_ = 0.0f;               // level crossing bell stroke timer
 };
 
 }  // namespace rjc

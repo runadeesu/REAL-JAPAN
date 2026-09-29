@@ -20,6 +20,11 @@ from .terrain import smoothstep, value_noise
 CLASSES = ("forest", "paddy", "field", "grass", "bare", "sand")
 
 
+def _open_runs(mask):
+    d = np.diff(np.concatenate([[0], np.asarray(mask, np.int8), [0]]))
+    return list(zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]))
+
+
 class LandCover:
     def __init__(self, ctry, spec, seed: int = 7):
         T = ctry.terrain
@@ -68,9 +73,18 @@ class LandCover:
         for r in ctry.net.roads:
             dr.line(pix(r.line.coords), fill=1, width=max(1, int(round((r.width + 8.0) / R))))
         if spec is not None:
-            for Rl in spec.rails:
-                dr.line(pix(Rl[:, :2]), fill=1, width=max(2, int(round(30.0 / R))))
-        cleared = np.asarray(clear, bool)
+            for li, Rl in enumerate(spec.rails):
+                tun = spec.tunnel_flags[li] if li < len(spec.tunnel_flags) else np.zeros(len(Rl), bool)
+                for a, b in _open_runs(~np.asarray(tun, bool)):  # (the forest stays over the tunnels)
+                    if b - a >= 2:
+                        dr.line(pix(Rl[a:b, :2]), fill=1, width=max(2, int(round(30.0 / R))))
+        cleared = np.array(clear, bool)
+        if spec is not None:  # ... and over the road tunnels
+            for rs in getattr(spec, "road_structs", []):
+                if rs.kind == "tunnel" and len(rs.pts) > 6:
+                    keep = Image.new("1", (self.nx, self.ny), 0)
+                    ImageDraw.Draw(keep).line(pix(rs.pts[3:-3, :2]), fill=1, width=max(1, int(round((rs.width + 10.0) / R))))
+                    cleared &= ~np.asarray(keep, bool)
         forest = free & ~paddy & ~field & ~grass & ~bare & ~sand & (h > 2.5) & ~cleared
         # roadside and village clearings keep some trees; plains keep only groves (shrine woods, windbreaks)
         forest &= ~(plains & (n3 < 0.78) & (slope < 0.05))

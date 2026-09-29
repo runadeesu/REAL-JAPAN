@@ -197,6 +197,23 @@ ROADS = [
 ]
 BRIDGE_ROADS = set()  # (rivers are bridged automatically; no sea crossings outside the capital)
 
+# The expressway (fictional): 秋津自動車道 from the capital's western edge along the corridor north of
+# 国道1号 to 朝凪, four lanes with a median, tunnels and viaducts where the ground does not suit it,
+# on viaducts through built-up land and over every road and railway it crosses (no level junctions).
+# Interchanges: a ramp road from the expressway to a national road (name, polyline from the
+# expressway end to the road end).
+EXPRESSWAY = ("秋津自動車道", 25.5, [
+    (-4700, 250), (-6000, 700), (-7400, 1250), (-8800, 2000), (-10400, 2550), (-12400, 2750), (-14400, 2450),
+    (-16300, 2250), (-18300, 2650), (-20200, 3350), (-22200, 3900), (-24300, 4000), (-26300, 3350),
+    (-28300, 2700), (-30300, 2500), (-32200, 1900), (-33700, 900), (-34900, -300), (-35500, -1150)])
+EXPRESSWAY_RAMPS = [
+    ("千景西IC", [(-4700, 250), (-4650, -150), (-4600, -600)]),
+    ("稲穂IC", [(-10400, 2550), (-10300, 2150), (-10200, 1700)]),
+    ("紫苑IC", [(-22200, 3900), (-22500, 3350), (-22900, 2900)]),
+    ("楓IC", [(-30300, 2500), (-30900, 2100), (-31200, 1400)]),
+    ("朝凪IC", [(-35500, -1150), (-35100, -1800), (-34000, -2500)]),
+]
+
 # ---------------------------------------------------------------------------------------------
 # Second airport on the southern island (one 2,000 m runway): threshold A, threshold B, width.
 SOUTH_RUNWAY = ((-15900, -13350), (-14250, -14480), 45.0)

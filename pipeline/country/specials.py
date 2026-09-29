@@ -70,6 +70,10 @@ class Spec:
     tunnel_flags: list = field(default_factory=list)  # per rail line: bool per point (in a tunnel)
     portal_holes: Polygon = None                      # ground cut away at the tunnel mouths
     stations: list = field(default_factory=list)      # walk-in stations (dicts, see station.py)
+    road_structs: list = field(default_factory=list)  # generate.RoadStructure: road tunnels and viaducts
+    road_struct_area: Polygon = None                  # their footprints (no road painted on the ground there)
+    at_grade: list = field(default_factory=list)      # per rail line: bool per point (track on the ground)
+    crossings: list = field(default_factory=list)     # level crossings (dicts, see _level_crossings)
 
 
 class CellExtra:
@@ -466,14 +470,22 @@ def build_all(ctry, terrain, rng) -> Spec:
         ks = [k for (_, _, _, _, l2, k) in st_all if l2 == li]
         # the platforms stand high enough over the yard for the concourse under them
         zmin = [yard_z[i] + (9.0 if ln["kind"] == "shinkansen" else 6.2) for i, s_ in enumerate(st_all) if s_[4] == li]
-        z = rail_profile(P, ln["kind"], ln["closed"], terrain, ks, PLATFORM_LEN[li], zmin)
+        xs = _level_crossings(ctry, P, li, [st_all[i][1:3] for i in range(len(st_all)) if st_all[i][4] == li], terrain) if ln["kind"] == "branch" else []
+        z = rail_profile(P, ln["kind"], ln["closed"], terrain, ks, PLATFORM_LEN[li], zmin, [(c["k"], c["z"] - 0.19) for c in xs])
         spec.rails.append(np.column_stack([P, z]))
         spec.rail_kinds.append(ln["kind"])
         spec.tunnel_flags.append(_tunnels(P, z, terrain))
+        spec.crossings.extend(xs)
     holes = []
+    xing_keep = unary_union([c["area"] for c in spec.crossings]) if spec.crossings else None
     for li, R in enumerate(spec.rails):
         tun = spec.tunnel_flags[li]
-        _cut_for_rail(terrain, R, tun)
+        _cut_for_rail(terrain, R, tun, keep=xing_keep)
+        if spec.rail_kinds[li] == "branch":
+            _fill_for_rail(terrain, R, tun, keep=xing_keep)
+        gz = terrain.sample(R[:, 0], R[:, 1])
+        urb = np.array([L.urban(x, y) for x, y in R[:, :2]])
+        spec.at_grade.append((spec.rail_kinds[li] == "branch") & ~tun & ~urb & (R[:, 2] - gz < 1.0))
         # the ground over the first metres inside each tunnel mouth is cut away (the portal wall
         # stands at the mouth): where the natural surface would cross the tube
         n = len(R)
@@ -483,6 +495,18 @@ def build_all(ctry, terrain, rng) -> Spec:
                 seg = [R[j, :2] for j in range(i, min(n, max(-1, i + dirn * 8)), dirn) if 0 <= j < n]
                 if len(seg) >= 2:
                     holes.append(LineString(seg).buffer(7.5 if spec.rail_kinds[li] == "shinkansen" else 6.5, cap_style=2))
+    # road tunnels and viaducts: the ground at the tunnel mouths is cut away like the railway's
+    spec.road_structs = list(getattr(ctry, "road_structs", []) or [])
+    areas = []
+    for rs in spec.road_structs:
+        P = rs.pts
+        areas.append(LineString(P[:, :2]).buffer(rs.width / 2 + 0.6, cap_style=2))
+        if rs.kind == "tunnel" and len(P) >= 3:
+            for end, dirn in ((0, 1), (len(P) - 1, -1)):
+                seg = [P[j, :2] for j in range(end, min(len(P), max(-1, end + dirn * 3)), dirn) if 0 <= j < len(P)]
+                if len(seg) >= 2:
+                    holes.append(LineString(seg).buffer(rs.width / 2 + 1.5, cap_style=2))
+    spec.road_struct_area = unary_union(areas) if areas else Polygon()
     spec.portal_holes = unary_union(holes) if holes else Polygon()
     # stations snapped onto the smoothed lines: concourse (and the main station's tower), walkable
     # platform decks level with the line and following its curve
@@ -503,6 +527,8 @@ def build_all(ctry, terrain, rng) -> Spec:
     import shapely
     water_all = unary_union([rv.poly for rv in ctry.rivers])
     for r in ctry.net.roads:
+        if r.kind in ("expressway", "ramp"):  # (their viaducts are road structures)
+            continue
         for arch in (False, True):
             if arch:
                 if r.name not in L.BRIDGE_ROADS:
@@ -580,9 +606,147 @@ def _tunnels(P, z, terrain, cover=9.0, min_run=6):
     return t
 
 
-def _cut_for_rail(terrain, R, tun, half=6.5, slope=1.4, chunk=160):
+def crossing_sets(c, hw=5.0):
+    """The warning post + barrier of each approach of a level crossing: (pivot x, y, facing heading of
+    the approaching traffic's view (deg), arm heading (deg), arm length). Traffic keeps left, so each
+    set stands at the left edge of its approach and its arm reaches across the approaching lanes."""
+    th = math.radians(c["road_hd"])
+    u = np.array([math.sin(th), math.cos(th)])
+    out = []
+    for w in (u, -u):  # direction of travel towards the tracks
+        left = np.array([-w[1], w[0]])
+        piv = np.array([c["x"], c["y"]]) - w * (hw + 2.4) + left * (c["half"] + 0.7)
+        facing = math.degrees(math.atan2(-w[0], -w[1])) % 360   # the lamps look at the oncoming traffic
+        arm = math.degrees(math.atan2(-left[0], -left[1])) % 360  # the arm swings down across the lane
+        out.append((float(piv[0]), float(piv[1]), facing, arm, c["half"] + 0.4))
+    return out
+
+
+def _level_crossing(geos, ex, xf, c, hw):
+    th = math.radians(c["road_hd"])
+    u = np.array([math.sin(th), math.cos(th)])
+    left = np.array([-u[1], u[0]])
+    ctr = np.array([c["x"], c["y"]])
+    zt = c["z"]  # road / rail-top level
+    L_ = hw + 1.2
+    # rubber road panels across the tracks (the cars drive on them)
+    q = [ctr - u * L_ - left * c["half"], ctr + u * L_ - left * c["half"], ctr + u * L_ + left * c["half"], ctr - u * L_ + left * c["half"]]
+    V = xf.p([[p[0], p[1], zt + 0.01] for p in q])
+    _dquad(geos, "asphalt", V, (70, 70, 72, 255))
+    ex.decks.append(np.array([[V[0], V[1], V[2]], [V[0], V[2], V[3]]]))
+    for sg in (-1, 1):  # yellow and black kerb marks along the panel edges
+        e0, e1 = ctr - u * L_ + left * sg * (c["half"] + 0.05), ctr + u * L_ + left * sg * (c["half"] + 0.05)
+        E = xf.p([[e0[0], e0[1], zt], [e1[0], e1[1], zt]])
+        _dquad(geos, "sign", [E[0], E[1], E[1] + [0, 0, 0.12], E[0] + [0, 0, 0.12]], (230, 190, 30, 255))
+    for px, py, facing, arm, alen in crossing_sets(c, hw):
+        P0 = xf.p([[px, py, zt]])[0]
+        f = math.radians(facing)
+        fv = np.array([math.sin(f), math.cos(f), 0.0])
+        sv = np.array([math.cos(f), -math.sin(f), 0.0])  # to the right as seen by the oncoming traffic
+        # warning post: black and yellow striped pole, crossbuck (X) sign, lamp housings, bell box
+        for k in range(7):
+            col = (24, 24, 24, 255) if k % 2 == 0 else (235, 190, 20, 255)
+            _box_d(geos, "sign", P0 + [0, 0, 0.21 + k * 0.42], (0.06, 0.06, 0.21), col)
+        for rot in (1, -1):  # the X: two crossed yellow boards with black edges
+            cx = P0 + [0, 0, 3.55] + fv * 0.08
+            a1 = cx + sv * 0.55 + np.array([0, 0, 0.32]) * rot
+            a2 = cx - sv * 0.55 - np.array([0, 0, 0.32]) * rot
+            w_ = np.array([0, 0, 0.1])
+            _dquad(geos, "sign", [a1 - w_, a2 - w_, a2 + w_, a1 + w_], (240, 200, 30, 255))
+            _dquad(geos, "sign", [a1 - w_ * 1.35 - fv * 0.01, a2 - w_ * 1.35 - fv * 0.01, a2 + w_ * 1.35 - fv * 0.01, a1 + w_ * 1.35 - fv * 0.01],
+                   (20, 20, 20, 255))
+        _box_d(geos, "metal_dark", P0 + [0, 0, 3.05] + fv * 0.05, (0.18, 0.08, 0.18))       # bell / direction box
+        _box_d(geos, "metal_dark", P0 + [0, 0, 2.45] + fv * 0.12, (0.55, 0.05, 0.03))       # lamp bracket
+        for sd in (-1, 1):
+            _box_d(geos, "metal_dark", P0 + [0, 0, 2.45] + fv * 0.16 + sv * sd * 0.36, (0.17, 0.06, 0.17))  # lamp housings
+        # barrier machine (the arm itself is drawn and moved by the client)
+        _box_d(geos, "sign", P0 + [0, 0, 0.55] - fv * 0.45, (0.22, 0.22, 0.55), (225, 180, 30, 255))
+        ex.walls.append((P0[0] - 0.3, P0[1] - 0.3, P0[0] + 0.3, P0[1] + 0.3, P0[2] - 0.2, P0[2] + 1.2))
+
+
+def _level_crossings(ctry, P, li, stations_xy, terrain):
+    """Level crossings of the at-grade main line: where a road crosses it outside the towns and away
+    from the stations. Each: rail index k, position, road level z, headings, road half width, and the
+    area kept as the road is (no cutting or bank)."""
+    import shapely
+    line = LineString(P)
+    out = []
+    struct = getattr(ctry, "road_structs", []) or []
+    s_area = unary_union([LineString(rs.pts[:, :2]).buffer(rs.width / 2 + 2) for rs in struct]) if struct else None
+    for r in ctry.net.near(line, 1.0):
+        if r.carriage < 3.0:
+            continue
+        g = r.line.intersection(line)
+        for q in getattr(g, "geoms", [g]):
+            if not isinstance(q, Point):
+                continue
+            x, y = q.x, q.y
+            if L.urban(x, y) or any(math.hypot(x - sx, y - sy) < 260.0 for sx, sy in stations_xy):
+                continue
+            if s_area is not None and s_area.contains(q):
+                continue
+            if any(math.hypot(x - c["x"], y - c["y"]) < 40.0 for c in out):
+                continue
+            k = int(np.argmin(np.hypot(P[:, 0] - x, P[:, 1] - y)))
+            k0, k1 = max(0, k - 1), min(len(P) - 1, k + 1)
+            rd = P[k1] - P[k0]
+            t = r.line.project(q)
+            a = np.asarray(r.line.interpolate(max(0.0, t - 3.0)).coords[0])
+            b = np.asarray(r.line.interpolate(min(r.line.length, t + 3.0)).coords[0])
+            wd = b - a
+            if np.linalg.norm(wd) < 1e-3 or np.linalg.norm(rd) < 1e-3:
+                continue
+            c_ang = abs(float(np.dot(wd, rd)) / (np.linalg.norm(wd) * np.linalg.norm(rd)))
+            if c_ang > 0.87:  # (too oblique: under 30 degrees)
+                continue
+            half = r.carriage / 2 + 0.5
+            seg = LineString([r.line.interpolate(max(0.0, t - 26.0)), r.line.interpolate(min(r.line.length, t + 26.0))])
+            out.append(dict(x=x, y=y, k=k, line=li, z=float(terrain.sample(x, y)), half=half,
+                            rail_hd=math.degrees(math.atan2(rd[0], rd[1])) % 360, road_hd=math.degrees(math.atan2(wd[0], wd[1])) % 360,
+                            area=seg.buffer(half + 1.5, cap_style=2)))
+    print(f"    line {li}: {len(out)} level crossings", flush=True)
+    return out
+
+
+def _fill_for_rail(terrain, R, tun, keep=None, half=4.2, slope=1.5, top=0.35, max_fill=7.0):
+    """Banks: where the at-grade line runs a little above the ground, the ground is raised under it
+    to the formation (side slopes 1 : slope). Higher than max_fill it stays a viaduct."""
+    from .terrain import line_distance
+    import shapely
+    Rs = terrain.RES
+    n = len(R)
+    gz = terrain.sample(R[:, 0], R[:, 1])
+    need = (~tun) & (R[:, 2] - top > gz) & (R[:, 2] - gz < max_fill)
+    for a, b in _open_runs(need):
+        P = R[max(0, a - 2):min(n, b + 2)]
+        pad = half + max_fill * slope + 2 * Rs
+        i0 = max(0, int((P[:, 1].min() - pad - terrain.y0) / Rs))
+        i1 = min(terrain.ny, int((P[:, 1].max() + pad - terrain.y0) / Rs) + 2)
+        j0 = max(0, int((P[:, 0].min() - pad - terrain.x0) / Rs))
+        j1 = min(terrain.nx, int((P[:, 0].max() + pad - terrain.x0) / Rs) + 2)
+        if i1 <= i0 or j1 <= j0:
+            continue
+        wx0, wy0 = terrain.x0 + j0 * Rs, terrain.y0 + i0 * Rs
+        d, kk = line_distance(P[:, :2], (i1 - i0, j1 - j0), wx0, wy0, Rs)
+        kk = np.clip(kk, 0, len(P) - 1)
+        fill = P[kk, 2] - top - np.maximum(d - half, 0.0) / slope
+        win = terrain.h[i0:i1, j0:j1]
+        ok = (d < pad) & (fill - win < max_fill) & (win > 0.5)
+        if keep is not None:
+            X, Y = np.meshgrid(wx0 + np.arange(j1 - j0) * Rs, wy0 + np.arange(i1 - i0) * Rs)
+            ok &= ~shapely.contains_xy(keep, X, Y)
+        terrain.h[i0:i1, j0:j1] = np.where(ok, np.maximum(win, fill), win).astype(np.float32)
+
+
+def _open_runs(mask):
+    d = np.diff(np.concatenate([[0], np.asarray(mask, np.int8), [0]]))
+    return list(zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]))
+
+
+def _cut_for_rail(terrain, R, tun, half=6.5, slope=1.4, chunk=160, keep=None):
     """Cuttings: where the line runs below the ground outside the tunnels, the ground is dug down to
-    the formation with side slopes (1 : 1/slope)."""
+    the formation with side slopes (1 : 1/slope); not in `keep` (the roads at level crossings)."""
+    import shapely
     from .terrain import line_distance
     Rs = terrain.RES
     n = len(R)
@@ -609,7 +773,11 @@ def _cut_for_rail(terrain, R, tun, half=6.5, slope=1.4, chunk=160):
         intun = tun[np.clip(kk + max(0, k - 2), 0, n - 1)]
         win = terrain.h[i0:i1, j0:j1]
         cut = zr - 0.3 + np.maximum(d - half, 0.0) * slope
-        terrain.h[i0:i1, j0:j1] = np.where((d < pad) & ~intun, np.minimum(win, cut), win).astype(np.float32)
+        ok = (d < pad) & ~intun
+        if keep is not None:
+            X, Y = np.meshgrid(wx0 + np.arange(j1 - j0) * Rs, wy0 + np.arange(i1 - i0) * Rs)
+            ok &= ~shapely.contains_xy(keep, X, Y)
+        terrain.h[i0:i1, j0:j1] = np.where(ok, np.minimum(win, cut), win).astype(np.float32)
         k = k1
 
 
@@ -731,6 +899,40 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
                     base = (pa + pb) / 2 + np.array([-d[1], d[0]]) * sgn * (width / 2 + 1)
                     B0 = xf.p([[base[0], base[1], za - 12]])[0]
                     _box_d(geos, "concrete", B0 + [0, 0, 30], (1.2, 1.2, 30))
+    # --- road tunnels and viaducts (country roads through ridges / across valleys) ---
+    for rs in spec.road_structs:
+        _road_structure(geos, ex, xf, rs, clip, ground_c)
+    # --- the expressway on the ground: median barrier and guard rails (collision walls too) ---
+    for r in isl.net.roads:
+        if r.kind != "expressway" or not r.line.intersects(clip.buffer(20)):
+            continue
+        c = np.asarray(r.line.coords)
+        hw_ = r.width / 2.0
+        for i in range(len(c) - 1):
+            a, b = c[i], c[i + 1]
+            mid = (a + b) / 2
+            if not clip.contains(Point(mid)):
+                continue
+            if spec.road_struct_area is not None and spec.road_struct_area.contains(Point(mid)):
+                continue  # (on a structure: its own barriers)
+            d2 = b - a
+            Ls = float(np.linalg.norm(d2))
+            if Ls < 1e-3:
+                continue
+            nrm = np.array([-d2[1], d2[0]]) / Ls
+            for off, h, mat, col in ((0.0, 0.85, "concrete", (200, 200, 196, 255)), (-(hw_ - 0.3), 0.75, "metal", (210, 212, 216, 255)),
+                                     (hw_ - 0.3, 0.75, "metal", (210, 212, 216, 255))):
+                pa, pb = a + nrm * off, b + nrm * off
+                za, zb = ground_c(*pa)[2], ground_c(*pb)[2]
+                A = xf.p([[pa[0], pa[1], 0.0]])[0]
+                B = xf.p([[pb[0], pb[1], 0.0]])[0]
+                A[2], B[2] = za, zb
+                if off == 0.0:
+                    _dquad(geos, mat, [A, B, B + [0, 0, h], A + [0, 0, h]], col)
+                else:  # guard rail: a beam on posts
+                    _dquad(geos, mat, [A + [0, 0, h - 0.3], B + [0, 0, h - 0.3], B + [0, 0, h], A + [0, 0, h]], col)
+                    _box_d(geos, "metal", A + [0, 0, h / 2], (0.05, 0.05, h / 2), (150, 152, 156, 255))
+                ex.walls.append((A[0], A[1], B[0], B[1], min(za, zb) - 0.2, max(za, zb) + h))
     import shapely
     carr_p = (rp if rp is not None else isl.net.polys(clip)).carriage.intersection(clip.buffer(50))
     shapely.prepare(carr_p)
@@ -896,13 +1098,31 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
                     if end:
                         _portal(geos, P0, nn, np.array([d[0], d[1], 0.0]) * outward, tw, th_)
                 continue
+            ag = spec.at_grade[ri] if ri < len(spec.at_grade) else None
+            at_grade = ag is not None and bool(ag[i]) and bool(ag[i + 1])
             q = [(a[:2] - nrm * hw, a[2]), (b[:2] - nrm * hw, b[2]), (b[:2] + nrm * hw, b[2]), (a[:2] + nrm * hw, a[2])]
             V = xf.p([[p[0], p[1], z] for p, z in q])
             _dquad(geos, "ballast", V)
-            _dquad(geos, "concrete", [V[1] - [0, 0, 1.4], V[0] - [0, 0, 1.4], V[3] - [0, 0, 1.4], V[2] - [0, 0, 1.4]])
-            for k0, k1 in ((0, 1), (2, 3)):
-                A, B = V[k0], V[k1]
-                _dquad(geos, "concrete", [A - [0, 0, 1.4], B - [0, 0, 1.4], B + [0, 0, 1.2], A + [0, 0, 1.2]])
+            if at_grade:
+                # on the ground: ballast shoulders down to the formation, a lineside fence (not at the crossings)
+                near_x = any(c["line"] == ri and math.hypot(c["x"] - a[0], c["y"] - a[1]) < 14.0 for c in spec.crossings)
+                for sg in (-1, 1):
+                    oa, ob = a[:2] + nrm * sg * (hw + 1.4), b[:2] + nrm * sg * (hw + 1.4)
+                    Wo = xf.p([[oa[0], oa[1], a[2] - 0.55], [ob[0], ob[1], b[2] - 0.55]])
+                    Vi = (V[0], V[1]) if sg < 0 else (V[3], V[2])
+                    _dquad(geos, "ballast", [Vi[0], Vi[1], Wo[1], Wo[0]])
+                    if not near_x:
+                        fa, fb = a[:2] + nrm * sg * (hw + 2.6), b[:2] + nrm * sg * (hw + 2.6)
+                        Fa, Fb = xf.p([[fa[0], fa[1], a[2] - 0.6], [fb[0], fb[1], b[2] - 0.6]])
+                        ga, gb = ground_c(*fa)[2], ground_c(*fb)[2]
+                        Fa[2], Fb[2] = min(Fa[2], ga), min(Fb[2], gb)
+                        _dquad(geos, "fence", [Fa, Fb, Fb + [0, 0, 1.25], Fa + [0, 0, 1.25]], (150, 156, 150, 255))
+                        ex.walls.append((Fa[0], Fa[1], Fb[0], Fb[1], min(Fa[2], Fb[2]) - 0.3, max(Fa[2], Fb[2]) + 1.3))
+            else:
+                _dquad(geos, "concrete", [V[1] - [0, 0, 1.4], V[0] - [0, 0, 1.4], V[3] - [0, 0, 1.4], V[2] - [0, 0, 1.4]])
+                for k0, k1 in ((0, 1), (2, 3)):
+                    A, B = V[k0], V[k1]
+                    _dquad(geos, "concrete", [A - [0, 0, 1.4], B - [0, 0, 1.4], B + [0, 0, 1.2], A + [0, 0, 1.2]])
             for off in ((-3.9, -2.4, 2.4, 3.9) if shink else (-3.2, -1.8, 1.8, 3.2)):  # four rails (double track)
                 pa, pb = a[:2] + nrm * off, b[:2] + nrm * off
                 A = xf.p([[pa[0], pa[1], a[2] + 0.18]])[0]
@@ -910,12 +1130,17 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
                 o = np.array([nrm[0], nrm[1], 0]) * 0.04
                 _dquad(geos, "metal", [A - o, B - o, B + o, A + o])
             _catenary(geos, xf, a, b, d, nrm, i, hw, shink, stations_xy)
-            if i % 4 == 0 and not shapely.contains_xy(carr_p, a[0], a[1]) and not _in_concourse(spec.stations, a[0], a[1]):
+            if i % 4 == 0 and not at_grade and not shapely.contains_xy(carr_p, a[0], a[1]) and not _in_concourse(spec.stations, a[0], a[1]):
                 # pier every ~24 m, never on a carriageway nor inside a station's concourse
                 g = ground_c(*a[:2])
                 top = xf.p([[a[0], a[1], a[2] - 1.4]])[0]
                 if top[2] - g[2] > 1.2:
                     _box_d(geos, "concrete", np.array([top[0], top[1], (top[2] + g[2]) / 2]), (1.1, 1.1, (top[2] - g[2]) / 2))
+    # --- level crossings: road panels over the tracks, warning posts and barrier machines ---
+    for c in spec.crossings:
+        if clip.distance(Point(c["x"], c["y"])) > 20.0:
+            continue
+        _level_crossing(geos, ex, xf, c, 5.0)
     # --- forest canopy: built by the client from the cell's land-cover map (see cook_country.py) ---
     if False:
         region = spec.canopy.intersection(clip)
@@ -1049,6 +1274,83 @@ def _catenary(geos, xf, a, b, d, nrm, i, hw, shink, stations_xy):
         _wire(geos, bot, arm_end, 0.02, steel)
 
 
+def _road_structure(geos, ex, xf, rs, clip, ground_c):
+    """A road tunnel (concrete tube with walkways, lamps, a portal at each mouth) or a viaduct (deck
+    with parapets on piers). The carriageway is a deck the cars drive on; parapets and tunnel walls
+    are collision walls."""
+    P = rs.pts
+    if len(P) < 2 or not LineString(P[:, :2]).intersects(clip.buffer(10)):
+        return
+    hw = rs.width / 2.0
+    up = np.array([0.0, 0.0, 1.0])
+    tunnel = rs.kind == "tunnel"
+    wide = hw > 7.0  # the expressway: a median barrier (and a dividing wall in its tunnels)
+    tw, th_ = hw + 1.6, (8.2 if wide else 6.8)  # tunnel half width at the springing, crown height
+    n = len(P)
+    for i in range(n - 1):
+        a, b = P[i], P[i + 1]
+        if not LineString([a[:2], b[:2]]).intersects(clip):
+            continue
+        d2 = b[:2] - a[:2]
+        Ls = float(np.linalg.norm(d2))
+        if Ls < 1e-3:
+            continue
+        dd = d2 / Ls
+        nrm = np.array([-dd[1], dd[0]])
+        q = [(a[:2] - nrm * hw, a[2]), (b[:2] - nrm * hw, b[2]), (b[:2] + nrm * hw, b[2]), (a[:2] + nrm * hw, a[2])]
+        V = xf.p([[p[0], p[1], z] for p, z in q])
+        _dquad(geos, "asphalt", V)
+        ex.decks.append(np.array([[V[0], V[1], V[2]], [V[0], V[2], V[3]]]))
+        A0 = xf.p([[a[0], a[1], a[2]]])[0]
+        B0 = xf.p([[b[0], b[1], b[2]]])[0]
+        nn = np.array([nrm[0], nrm[1], 0.0])
+        if wide:  # median: a concrete barrier on viaducts, a dividing wall between the tunnel's two roads
+            mh = th_ if tunnel else 0.9
+            for sg in (-1, 1):
+                _dquad(geos, "concrete", [A0 + nn * sg * 0.25, B0 + nn * sg * 0.25, B0 + nn * sg * 0.25 + up * mh, A0 + nn * sg * 0.25 + up * mh],
+                       (200, 200, 196, 255))
+            _dquad(geos, "concrete", [A0 - nn * 0.25 + up * mh, B0 - nn * 0.25 + up * mh, B0 + nn * 0.25 + up * mh, A0 + nn * 0.25 + up * mh],
+                   (190, 190, 186, 255))
+            ex.walls.append((A0[0], A0[1], B0[0], B0[1], A0[2] - 0.2, A0[2] + mh))
+        if tunnel:
+            # tube (seen from inside): walls to the springing, then the vault
+            for sgn in (-1, 1):
+                Aw, Bw = A0 + nn * sgn * tw, B0 + nn * sgn * tw
+                _dquad(geos, "concrete", [Aw, Bw, Bw + up * 3.2, Aw + up * 3.2], (206, 204, 198, 255))
+                # raised walkway along each wall
+                Ai, Bi = A0 + nn * sgn * hw, B0 + nn * sgn * hw
+                _dquad(geos, "concrete", [Ai + up * 0.25, Bi + up * 0.25, Bw + up * 0.25, Aw + up * 0.25], (170, 170, 166, 255))
+                _dquad(geos, "concrete", [Ai, Bi, Bi + up * 0.25, Ai + up * 0.25], (150, 150, 146, 255))
+                ex.walls.append((Ai[0], Ai[1], Bi[0], Bi[1], Ai[2] - 0.2, Ai[2] + 6.0))
+            ring_n = 10
+            for k in range(ring_n):
+                t0, t1 = math.pi * k / ring_n, math.pi * (k + 1) / ring_n
+                o0 = nn * math.cos(t0) * tw + up * (3.2 + math.sin(t0) * (th_ - 3.2))
+                o1 = nn * math.cos(t1) * tw + up * (3.2 + math.sin(t1) * (th_ - 3.2))
+                _dquad(geos, "concrete", [A0 + o1, B0 + o1, B0 + o0, A0 + o0], (196, 194, 188, 255))
+            # lamps along the crown's shoulder (sodium-coloured, always lit)
+            if i % 3 == 0:
+                for sgn in (-1, 1):
+                    L0 = A0 + nn * sgn * (tw - 0.8) + up * (th_ - 1.0)
+                    _box_d(geos, "lamp", L0, (0.25, 0.25, 0.06))
+                ex.lights.append(((A0[0], A0[1], A0[2] + th_ - 1.2), 16.0, 3))
+            for end, E0, outward in ((i == 0, A0, -1.0), (i == n - 2, B0, 1.0)):
+                if end:
+                    _portal(geos, E0, nn, np.array([dd[0], dd[1], 0.0]) * outward, tw, th_)
+        else:
+            # viaduct: girder faces, soffit, parapets (collision), piers every ~30 m
+            for sgn, k0, k1 in ((-1, 0, 1), (1, 3, 2)):
+                A, B = V[k0], V[k1]
+                _dquad(geos, "concrete", [A - up * 1.8, B - up * 1.8, B + up * 0.9, A + up * 0.9], (196, 196, 192, 255))
+                ex.walls.append((A[0], A[1], B[0], B[1], A[2] - 0.2, A[2] + 1.0))
+            _dquad(geos, "concrete", [V[1] - up * 1.8, V[0] - up * 1.8, V[3] - up * 1.8, V[2] - up * 1.8], (150, 150, 146, 255))
+            if i % 6 == 3:
+                g = ground_c(*a[:2])
+                top = A0 - up * 1.8
+                if top[2] - g[2] > 1.0:
+                    _box_d(geos, "concrete", np.array([top[0], top[1], (top[2] + g[2]) / 2]), (1.3, hw * 0.6, (top[2] - g[2]) / 2))
+
+
 def _portal(geos, P0, nn, out, tw, th_):
     """Tunnel portal: a concrete wall across the track with the arch opening, facing out along the track."""
     W, H = tw + 3.0, th_ + 3.5
@@ -1093,7 +1395,7 @@ def _in_concourse(stations, x, y, margin=1.5) -> bool:
     return False
 
 
-def _box_d(geos, mat, c, hs):
+def _box_d(geos, mat, c, hs, col=(255, 255, 255, 255)):
     c = np.asarray(c, float)
     hx, hy, hz = hs
     for axis in range(3):
@@ -1108,7 +1410,7 @@ def _box_d(geos, mat, c, hs):
             P = [f - u - v, f + u - v, f + u + v, f - u + v]
             if s < 0:
                 P = P[::-1]
-            geos.setdefault(mat, DGeo()).add(np.array(P), n, None, (255, 255, 255, 255), [0, 1, 2, 0, 2, 3])
+            geos.setdefault(mat, DGeo()).add(np.array(P), n, None, col, [0, 1, 2, 0, 2, 3])
 
 
 def airport_layout(ap):
@@ -1146,6 +1448,12 @@ def write_extra(spec: Spec, out: str, fi) -> None:
         from . import station as S
         for st in spec.stations:  # ticket gate rows (walk-in concourses)
             f.write(S.gate_record(st, fi) + "\n")
+        for i, c in enumerate(spec.crossings):  # level crossings: centre, road level, road heading, half width
+            la, lo = fi.to_geodetic(c["x"], c["y"])
+            f.write(f"crossing {i} {c['line']} {la:.8f} {lo:.8f} {c['z']:.2f} {c['road_hd']:.1f} {c['half']:.2f}\n")
+            for px, py, facing, arm, alen in crossing_sets(c):
+                la, lo = fi.to_geodetic(px, py)
+                f.write(f"xset {i} {la:.8f} {lo:.8f} {c['z']:.2f} {facing:.1f} {arm:.1f} {alen:.2f}\n")
     g2 = lambda p: "%.8f %.8f" % fi.to_geodetic(float(p[0]), float(p[1]))  # noqa: E731
     with open(os.path.join(out, "transport.txt"), "w", encoding="utf-8") as f:
         for apd in L.AIRPORTS:
