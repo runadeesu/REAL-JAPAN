@@ -224,8 +224,8 @@ class BuildingOut:
     shop: dict | None = None    # walk-in ground floor (shop.py): built with the cell's street detail
 
 
-def _shop_floor(fp, front, ground, rng, p=0.7):
-    """A walk-in shop on the ground floor (shop.py), for most small shop buildings."""
+def _shop_floor(fp, front, ground, rng, p=0.45):
+    """A walk-in shop on the ground floor (shop.py), for about half the small shop buildings."""
     if rng.random() > p:
         return None
     from .shop import plan

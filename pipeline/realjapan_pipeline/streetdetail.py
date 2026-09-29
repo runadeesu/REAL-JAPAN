@@ -45,6 +45,16 @@ MAT = {"curb": 1, "sidewalk": 2, "tactile": 3, "marking": 4, "metal": 5, "metal_
        "manhole": 8, "grating": 9, "lamp": 10, "glass": 11, "concrete": 12, "fence": 13, "bronze": 14,
        "island": 15, "water": 16, "canopy": 17, "asphalt": 18, "ballast": 19}
 
+
+
+def mat_id(name: str) -> int:
+    """Chunk material: the id, with bit 8 set for the indoor variant ("concrete:in" - inside a
+    building, where the client keeps the sky's light out)."""
+    if name.endswith(":in"):
+        return MAT[name[:-3]] | 0x100
+    return MAT[name]
+
+
 CURB_H = 0.15      # Japanese standard mountable-kerb height for sidewalks (歩道の縁石) is 0.15 m
 MARK_LIFT = 0.018  # paint sits just above the terrain surface
 MAX_EDGE = 3.0     # subdivision so raised surfaces follow the terrain
@@ -481,7 +491,7 @@ def encode(geos: dict, walk_tris: list, lights: list, signals: list, cross_tris:
                 sub = tsel[start:start + 20000]
                 start += 20000
                 used, inv = np.unique(sub.reshape(-1), return_inverse=True)
-                chunks.append((MAT[name], P[used], N[used], UV[used], C[used], inv.astype(np.uint16)))
+                chunks.append((mat_id(name), P[used], N[used], UV[used], C[used], inv.astype(np.uint16)))
     body += struct.pack("<I", len(chunks))
     nv_total = 0
     for mat, P, N, UV, C, I in chunks:

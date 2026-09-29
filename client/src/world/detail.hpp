@@ -81,6 +81,7 @@ struct TreeRec {
 struct CellDetailCpu {
   struct Chunk {
     int mat = 0;
+    bool indoor = false;  // (material id bit 8) inside a building: little sky light reaches it
     std::vector<float> pos, nrm, uv;
     std::vector<unsigned char> col;
     std::vector<unsigned short> idx;

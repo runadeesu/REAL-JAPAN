@@ -23,6 +23,7 @@ import os
 import struct
 import sys
 import time
+import zlib
 
 import numpy as np
 import shapely
@@ -163,7 +164,7 @@ def cook_cell(mesh: str):
     ctry, spec, lc, fi, out, by_cell, a = G["ctry"], G["spec"], G["lc"], G["fi"], G["out"], G["by_cell"], G["args"]
     cpoly = G["cell_poly"][mesh]
     terrain = ctry.terrain
-    rng = np.random.default_rng(abs(hash(mesh)) % (2**32))
+    rng = np.random.default_rng(zlib.crc32(mesh.encode()))  # (not hash(): salted per process)
     tc = time.time()
     mm = Mesh(mesh)
     bounds = mm.bounds()

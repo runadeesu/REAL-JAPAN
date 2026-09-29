@@ -85,7 +85,9 @@ bool parseDetail(const std::vector<unsigned char>& file, CellDetailCpu& out, std
   const uint32_t nc = r.get<uint32_t>();
   for (uint32_t k = 0; k < nc && r.ok(); ++k) {
     CellDetailCpu::Chunk c;
-    c.mat = static_cast<int>(r.get<uint32_t>());
+    const uint32_t mraw = r.get<uint32_t>();
+    c.mat = static_cast<int>(mraw & 0xFFu);
+    c.indoor = (mraw & 0x100u) != 0;
     const uint32_t nv = r.get<uint32_t>(), ni = r.get<uint32_t>();
     float o[3], scale;
     for (float& v : o) v = r.get<float>();
@@ -229,11 +231,11 @@ void uploadDetail(CellDetailCpu& cpu, CellDetailGpu& gpu) {
     m.texcoords = c.uv.data();
     m.colors = c.col.data();
     m.indices = c.idx.data();
-    // texcoords2 = (material id, per-vertex variation) for the lit shader.
+    // texcoords2 = (material id, 2 when indoors) for the lit shader.
     std::vector<float> t2(static_cast<size_t>(nv) * 2);
     for (int v = 0; v < nv; ++v) {
       t2[static_cast<size_t>(v) * 2] = static_cast<float>(c.mat);
-      t2[static_cast<size_t>(v) * 2 + 1] = 0.0f;
+      t2[static_cast<size_t>(v) * 2 + 1] = c.indoor ? 2.0f : 0.0f;
     }
     m.texcoords2 = t2.data();
     UploadMesh(&m, false);

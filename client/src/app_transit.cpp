@@ -974,6 +974,13 @@ void App::jetTestPilot() {
       }
       player_.yaw = static_cast<float>(std::atan2(foot.x - player_.pos.x, foot.y - player_.pos.y));
       player_.auto_forward_s = 0.05f;
+      if (frame_ % 30 == 0)
+        TraceLog(LOG_INFO, "RJ: jet test to the stairs of flight %d: %.1f m, dz %.2f (floor %.2f terrain %.2f grounded %d) at %.6f %.6f, cells %d/%d pending %d", a.id,
+                 std::hypot(foot.x - player_.pos.x, foot.y - player_.pos.y), foot.z - player_.pos.z,
+                 world_.floorBelow(player_.pos.x, player_.pos.y, player_.pos.z + 0.55).value_or(-999.0),
+                 world_.terrainHeight(player_.pos.x, player_.pos.y).value_or(-999.0), player_.grounded ? 1 : 0,
+                 world_.toGeodetic(player_.pos).lat_deg, world_.toGeodetic(player_.pos).lon_deg, static_cast<int>(world_.residentCount()),
+                 static_cast<int>(world_.knownCount()), static_cast<int>(world_.pendingJobs()));
       break;
     }
     return;

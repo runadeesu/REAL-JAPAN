@@ -44,7 +44,9 @@ def plan(fp: Polygon, front, ground: float, rng):
             best, bi = L_, i
     if bi < 0:
         return None
-    kind = KINDS[int(rng.integers(len(KINDS)))] if fp.area > 60 else "general"
+    # (mostly small shops; a convenience store now and then)
+    r = rng.random()
+    kind = ("konbini" if r < 0.14 else "cafe" if r < 0.45 else "general") if fp.area > 60 else "general"
     fascia = FASCIA[kind][int(rng.integers(len(FASCIA[kind])))]
     return dict(ring=ring, ground=ground, front_edge=bi, kind=kind, fascia=fascia, seed=int(rng.integers(1 << 30)))
 
@@ -78,10 +80,10 @@ def build(geos, ex, xf, shop) -> None:
     tri = earcut.triangulate_float64(verts, np.array([len(verts)], np.uint32)).reshape(-1, 3)
     for t in tri:
         A, B, C = (P(verts[k][0], verts[k][1], zf) for k in t)
-        _dquad(geos, "sidewalk", [A, B, C, C], (196, 194, 188, 255))
+        _dquad(geos, "sidewalk:in", [A, B, C, C], (196, 194, 188, 255))
         ex.decks.append(np.array([[A, B, C]]))
         A2, B2, C2 = (P(verts[k][0], verts[k][1], zc) for k in t)
-        _dquad(geos, "concrete", [A2, C2, B2, B2], (238, 238, 234, 255))
+        _dquad(geos, "concrete:in", [A2, C2, B2, B2], (238, 238, 234, 255))
     # slab edge between the ground floor and the walls above
     fe = shop["front_edge"]
     for i in range(n):
@@ -124,7 +126,7 @@ def build(geos, ex, xf, shop) -> None:
                 quad("metal", [(q0[0], q0[1], g + 0.05), (q1[0], q1[1], g + 0.05), (q1[0], q1[1], g + 0.12), (q0[0], q0[1], g + 0.12)], (150, 154, 160, 255))
                 quad("metal", [(q0[0], q0[1], g + 2.38), (q1[0], q1[1], g + 2.38), (q1[0], q1[1], g + 2.45), (q0[0], q0[1], g + 2.45)], (150, 154, 160, 255))
             m0, m1, m2, m3 = a + u * d0 - nrm * 0.2, a + u * d1 - nrm * 0.2, a + u * d1 - nrm * 1.4, a + u * d0 - nrm * 1.4
-            quad("sidewalk", [(m[0], m[1], zf + 0.01) for m in (m0, m1, m2, m3)], (60, 62, 66, 255))
+            quad("sidewalk:in", [(m[0], m[1], zf + 0.01) for m in (m0, m1, m2, m3)], (60, 62, 66, 255))
             # a low step up at the door (the floor meets the pavement)
             dq0, dq1 = a + u * d0, a + u * d1
             _dquad(geos, "sidewalk", xf.p([[dq0[0] + nrm[0] * 0.4, dq0[1] + nrm[1] * 0.4, g + 0.01], [dq1[0] + nrm[0] * 0.4, dq1[1] + nrm[1] * 0.4, g + 0.01],
@@ -135,7 +137,7 @@ def build(geos, ex, xf, shop) -> None:
         else:
             # solid wall: outside (plaster, like the building above) and inside faces
             quad("concrete", [(a[0], a[1], g - 0.3), (b[0], b[1], g - 0.3), (b[0], b[1], g + FLOOR_H), (a[0], a[1], g + FLOOR_H)], (196, 194, 188, 255))
-            quad("concrete", [(bi_[0], bi_[1], g), (ai[0], ai[1], g), (ai[0], ai[1], zc), (bi_[0], bi_[1], zc)], wall_in)
+            quad("concrete:in", [(bi_[0], bi_[1], g), (ai[0], ai[1], g), (ai[0], ai[1], zc), (bi_[0], bi_[1], zc)], wall_in)
             wall(a[0], a[1], b[0], b[1], g - 0.3, g + FLOOR_H)
     # fit-out: the room's frame (u along the front, v inwards)
     a, b = ring[fe], ring[(fe + 1) % n]
@@ -152,7 +154,8 @@ def build(geos, ex, xf, shop) -> None:
         return P(q[0], q[1], z)
 
     def obox(mat, uu, vv, z, hu, hv, hz, col):
-        # a box aligned with the room: centre, half sizes along u, v, z
+        # a box aligned with the room (all of it indoors): centre, half sizes along u, v, z
+        mat = mat + ":in"
         C = np.array([[su, sv, sz] for sz in (-1, 1) for sv in (-1, 1) for su in (-1, 1)], float)
         V = np.array([at(uu + su * hu, vv + sv * hv, z + sz * hz) for su, sv, sz in C])
         for f in ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)):
@@ -179,7 +182,7 @@ def build(geos, ex, xf, shop) -> None:
                 obox("metal", ur, (gv0 + gv1) / 2, zf + 1.38, 0.02, (gv1 - gv0) / 2, 0.02, (200, 202, 206, 255))
                 for side in (-1.0, 1.0):
                     for zz in (0.08, 0.5, 0.92):
-                        _goods(geos, at, rng, ur + side * 0.31, side, gv0 + 0.05, gv1 - 0.05, zf + zz)
+                        _goods(geos, at, rng, ur + side * 0.31, side, gv0 + 0.05, gv1 - 0.05, zf + zz, tops=zz > 0.9)
                 owall(ur, gv0, ur, gv1, 1.4)
     elif kind == "cafe":
         cu = u1 - 1.2
@@ -197,7 +200,7 @@ def build(geos, ex, xf, shop) -> None:
         # wall shelving on the side walls (goods on four shelves), a counter at the back
         for uu, side in ((u0 + 0.25, 1.0), (u1 - 0.25, -1.0)):
             obox("metal", uu - side * 0.04, (v0 + v1) / 2, zf + 0.9, 0.18, (v1 - v0) / 2, 0.9, (190, 170, 140, 255))
-            for zz in (0.1, 0.52, 0.94, 1.36):
+            for zz in (0.3, 0.8, 1.3):
                 obox("metal", uu + side * 0.15, (v0 + v1) / 2, zf + zz - 0.02, 0.07, (v1 - v0) / 2, 0.015, (176, 156, 128, 255))
                 _goods(geos, at, rng, uu + side * 0.16, side, v0 + 0.05, v1 - 0.05, zf + zz)
             owall(uu, v0, uu, v1, 1.8)
@@ -217,13 +220,13 @@ _PACK = [(222, 72, 56), (52, 120, 206), (238, 196, 58), (84, 168, 86), (236, 236
          (150, 90, 170), (40, 46, 60), (200, 60, 110), (120, 190, 220), (170, 120, 70), (250, 220, 170)]
 
 
-def _goods(geos, at, rng, uf, side, va, vb, z):
+def _goods(geos, at, rng, uf, side, va, vb, z, tops=False):
     """A shelf of goods facing `side` (+/-u) at u = uf from v = va to vb, standing on height z: packs
-    of random width, height and colour (their fronts and tops)."""
+    of random width, height and colour (their fronts; their tops too on the top shelf)."""
     from .specials import _dquad
     v = va
     while v < vb - 0.08:
-        w = float(min(rng.uniform(0.07, 0.3), vb - v))
+        w = float(min(rng.uniform(0.14, 0.42), vb - v))
         h = float(rng.uniform(0.12, 0.34))
         c = _PACK[int(rng.integers(len(_PACK)))]
         c = (*(min(255, int(k * rng.uniform(0.85, 1.05))) for k in c), 255)
@@ -232,9 +235,10 @@ def _goods(geos, at, rng, uf, side, va, vb, z):
         A, B = at(uf, v + 0.005, z), at(uf, v + w - 0.005, z)
         if side < 0:  # (fronts face the aisle: +u for side +1)
             A, B = B, A
-        _dquad(geos, "sign", [A, B, B + [0, 0, h], A + [0, 0, h]], c)
-        T0, T1 = at(uf, v + 0.005, z + h), at(uf, v + w - 0.005, z + h)
-        T2, T3 = at(ub, v + w - 0.005, z + h), at(ub, v + 0.005, z + h)
-        tq = [T0, T1, T2, T3] if side > 0 else [T3, T2, T1, T0]
-        _dquad(geos, "sign", tq, (int(c[0] * 0.8), int(c[1] * 0.8), int(c[2] * 0.8), 255))
+        _dquad(geos, "sign:in", [A, B, B + [0, 0, h], A + [0, 0, h]], c)
+        if tops:
+            T0, T1 = at(uf, v + 0.005, z + h), at(uf, v + w - 0.005, z + h)
+            T2, T3 = at(ub, v + w - 0.005, z + h), at(ub, v + 0.005, z + h)
+            tq = [T0, T1, T2, T3] if side > 0 else [T3, T2, T1, T0]
+            _dquad(geos, "sign:in", tq, (int(c[0] * 0.8), int(c[1] * 0.8), int(c[2] * 0.8), 255))
         v += w

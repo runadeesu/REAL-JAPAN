@@ -789,6 +789,10 @@ void main() {
   if (!gl_FrontFacing) ng = -ng;
   vec2 wuv = vec2(fragPos.x, -fragPos.z);  // world east / north (m)
   int id = materialOverride >= 0 ? materialOverride : int(fragMat.x + 0.5);
+  // street-detail surfaces inside a building (walk-in shops) carry 2 in fragMat.y: little of the
+  // sky's light, no sun, no rain reach them
+  float roomed = (materialOverride < 0 && id < 20 && fragMat.y > 1.5 && fragMat.y < 2.5) ? 1.0 : 0.0;
+  float inside = max(indoor, roomed);
   if (id == 17 && canopyCut > 0.0 && fragColor.b > 0.05 && fragColor.b < 0.95) {  // the canopy near the camera: single trees there
     float d = length(fragPos.xz - viewPos.xz);
     if (d < canopyCut) discard;
@@ -838,7 +842,8 @@ void main() {
   }
   vec3 V = normalize(viewPos - fragPos);
   // Rain: darker, glossier porous surfaces; standing water on flat ground.
-  if (wetness > 0.0) {
+  if (id == 10 && roomed > 0.5) s.emit = max(s.emit, vec3(1.0, 0.98, 0.94) * 3.5);  // shop lights: on by day too
+  if (wetness > 0.0 && roomed < 0.5) {
     float up = smoothstep(0.6, 0.95, s.n.y);
     float wet = wetness * mix(0.55, 1.0, up);
     s.albedo *= mix(1.0, 0.45 + 0.4 * (1.0 - s.porosity), wet * s.porosity + wet * 0.2);
@@ -872,7 +877,7 @@ void main() {
     float k = (s.rough + 1.0) * (s.rough + 1.0) / 8.0;
     float G = (NdL / (NdL * (1.0 - k) + k)) * (NdV / (NdV * (1.0 - k) + k));
     vec3 spec = D * G * F / (4.0 * NdL * NdV + 1e-4);
-    float sh = sunShadow(ng) * mix(1.0, 0.0, indoor);
+    float sh = sunShadow(ng) * mix(1.0, 0.0, inside);
     if (sunDir.y > 0.02) {
       vec2 cp = fragPos.xz + sunDir.xz / sunDir.y * (1800.0 - fragPos.y);
       sh *= 1.0 - 0.72 * cloudDensityAt(vec2(cp.x, -cp.y));
@@ -885,7 +890,7 @@ void main() {
   }
   // Ambient: hemisphere diffuse + sky reflection (split-sum-ish approximation).
   float hemi = n.y * 0.5 + 0.5;
-  vec3 irr = mix(ambientGround, ambientSky, hemi);
+  vec3 irr = mix(ambientGround, ambientSky, hemi) * mix(1.0, 0.22, roomed);
   col += kdiff * irr * s.ao;
   vec3 R = reflect(-V, n);
   vec3 Fr = F0 + (max(vec3(1.0 - s.rough), F0) - F0) * pow(1.0 - NdV, 5.0);
@@ -895,9 +900,9 @@ void main() {
   float bldg = 1.0 - smoothstep(0.05, 0.28, R.y);
   vec3 envSharp = mix(skyRadiance(R), ambientGround * 0.75 + ambientSky * 0.15, bldg);
   vec3 env = mix(envSharp, irr * 1.1, clamp(s.rough * 1.2, 0.0, 1.0));
-  env = mix(env, irr * 0.9, indoor);
+  env = mix(env, irr * 0.9, inside);
   float specOcc = clamp(pow(NdV + s.ao, 2.0) - 1.0 + s.ao, 0.0, 1.0);
-  float mirror = (1.0 - smoothstep(0.07, 0.25, s.rough)) * (1.0 - indoor);
+  float mirror = (1.0 - smoothstep(0.07, 0.25, s.rough)) * (1.0 - inside);
   col += env * Fr * specOcc * (1.0 - 0.6 * s.rough) * (1.0 - mirror);
   float reflAmt = clamp(dot(Fr, vec3(0.3333)) * specOcc, 0.0, 1.0) * mirror;
   // Artificial lights (street lights, shops) near the camera.

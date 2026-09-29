@@ -29,30 +29,47 @@ REQUIREMENTS
 
 CONTROLS (ON FOOT)
   W A S D / arrows : move     Shift : run     Space : jump     Mouse : look
-  E : interact / board / enter (shown at the bottom)   V : first / third person
-  Tab : smartphone   F : free-fly (exploring)   F3 : developer overlay
-  F5 : quick save    F12 : screenshot            Esc : menu
+  E or left click : use (sit, stand, drive a car, fly ... - the crosshair shows an icon and a
+                    label when what you look at can be used) / examine
+  V : first / third person   Tab : smartphone   F : free-fly (exploring)
+  F3 : developer overlay     F5 : quick save    F12 : screenshot    Esc : menu
 
-TRANSPORT
-  Trains / Shinkansen : E at a station (through the gates) -> E on the platform (board)
-                        -> E at a stop (alight). X leaves through the gates. Look around
-                        with the mouse. Distance fares are paid by IC card when you
-                        alight (plus a Shinkansen charge; game values). Lines: Chikage
-                        Loop, Akitsu Main Line (Nishigaoka - Shion - Asanagi), Akitsu
-                        Shinkansen (Chikage-Chuo - Chikage-Kita - Shion - Shin-Asanagi),
+TRANSPORT (since v0.6.0 you get on and off everything on foot; the old "press E to board"
+teleports are gone)
+  Trains / Shinkansen : walk in from a station entrance, through the IC gates (the card is
+                        touched automatically) and up the stairs to the platform. Walk in
+                        through an open door of a stopped train; look at a free seat and
+                        press E to sit, E again (or a move key) to stand (occupied seats are
+                        taken). Walk along the car and through the gangways into the next car.
+                        At a stop, walk out through the open doors; the distance fare (plus
+                        a Shinkansen charge; game values) is taken at the exit gate, whose
+                        flaps shut if the card is short. The Akitsu Main Line has level
+                        crossings (lamps, bell and barriers as a train comes).
+                        Lines: Chikage Loop, Akitsu Main Line (Nishigaoka - Shion - Asanagi),
+                        Akitsu Shinkansen (Chikage-Chuo - Chikage-Kita - Shion - Shin-Asanagi),
                         Yukimi Shinkansen (Chikage-Kita - Yunosawa Onsen - Yukimi).
   Train driver        : phone "Work" app -> train driver. W/S notches (5 power, 7 brake),
                         Space emergency brake, stop near the mark and press E to open the
                         doors. ATS protection.
-  Cars                : E beside a stopped car. W/S throttle, brake / reverse, A/D steer,
-                        Space handbrake, H horn, V chase / driver's seat, E (stopped) get out.
-  Ferry               : E at the piers of Chikage Port, Daiba, Asanagi Port or
-                        Shimanoura Port (harbour ferry, high-speed ferry, car ferry).
-                        Walk the deck with WASD; E to go ashore after berthing.
-  Scheduled flight    : E at the Chikage or Minamijima airport terminal; window seat for
-                        take-off, cruise and landing at the other airport.
-  Light aircraft      : E on the apron. Shift/Ctrl power, W/S pitch, A/D roll, Q/E rudder,
-                        F/R flaps, Space brakes, V camera, E (stopped) get out.
+  Cars                : look at the door of a stopped car and press E. W/S throttle, brake /
+                        reverse, A/D steer, Space handbrake, H horn, V chase / driver's seat,
+                        E (stopped) get out. The Akitsu Expressway (Chikage-Nishi, Inaho,
+                        Shion and Asanagi interchanges) can be driven too.
+  Ferry               : while the ship is alongside a gangway is laid to the pier: walk up it
+                        (the fare is taken as you step aboard). Walk the deck, look at a bench
+                        and press E to sit / stand. After berthing walk down the gangway.
+                        Harbour ferry, high-speed ferry and car ferry.
+  Scheduled flight    : at the stand of Chikage or Minamijima airport, walk up the passenger
+                        stairs to the front left door (the fare is taken at the door), walk the
+                        aisle, look at a free seat and press E: the flight leaves once you sit.
+                        After landing and parking, stand up and walk down the stairs.
+  Light aircraft      : look at it on the apron and press E. Shift/Ctrl power, W/S pitch, A/D
+                        roll, Q/E rudder, F/R flaps, Space brakes, V camera, E (stopped) get out.
+
+SHOPS
+  In the capital's old town (Furuichi) and the regional towns (Shion, Yunosawa Onsen, Yukimi,
+  ...) about half the small shops can be walked into (convenience store, cafe, general shop;
+  generic procedural fit-out, no names or brands). Nothing can be bought yet.
 
 WORK AND HOBBIES (phone "Work" / "Hobbies" apps)
   Taxi driver (Tokyo tariff meter), delivery rider, train driver, convenience-store till;
