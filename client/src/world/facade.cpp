@@ -255,8 +255,8 @@ void generate(const World& world, const LoadedCell& cell, int bi, int lod, Build
     const Edge& e = edges[ei];
     const V3 a = e.a, u = e.u, w = e.w;
     auto at = [&](double x, double z) { return add(add(a, mul(u, x)), mul(up, z)); };
-    // --- ground floor -----------------------------------------------------
-    if (e.street) {
+    // --- ground floor (not on walk-in buildings: their real ground floor is built into the cell) --
+    if (e.street && !(info.flags & kBuildingWalkIn)) {
       if (kind == Kind::Shop || (kind == Kind::Office && info.usage == 0 && e.L > 5.0) || (kind == Kind::Apartment && info.usage == 414)) {
         shopFront(c, a, u, w, e.L, gh, lights);
       } else if (kind == Kind::Office && ei == longest) {

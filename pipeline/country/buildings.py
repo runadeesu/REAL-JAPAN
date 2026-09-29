@@ -522,7 +522,7 @@ def make_building(pc, terrain, rng, near_scramble: float, near_station: float) -
             h = 4.2 + (fl - 1) * 3.0
             wrgb = _jit(PALETTE_WALL["pencil" if style == "shitamachi" else "house"][rng.integers(6)], rng)
             shop = _shop_floor(fp, front, ground, rng)
-            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL if fl > 2 else HOUSE, wrgb)
+            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, (APT_BACK if shop else COMMERCIAL) if fl > 2 else HOUSE, wrgb)
             if rectish and fl <= 2 and rng.random() < 0.5:
                 pitched_roof(g, rect, ground + h, 25, 0.5, ROOF_TILE, _jit(ROOF_TILE_COL[rng.integers(5)], rng, 6), HOUSE,
                              wrgb, ground, hip=True)
@@ -646,7 +646,7 @@ def _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result):
             h = 4.2 + (fl - 1) * 3.1
             wrgb = _jit(PALETTE_WALL["commercial"][rng.integers(8)], rng)
             shop = _shop_floor(fp, front, ground, rng)
-            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, APT_BACK if shop else COMMERCIAL, wrgb)
             _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
             return _with_shop(result(h, fl, 402, "shop"), shop)
         if r < 0.95 or not rectish:
@@ -731,7 +731,7 @@ def _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result):
         h = 4.0 + 3.0
         wrgb = _jit(PALETTE_WALL["pencil"][rng.integers(6)], rng)
         shop = _shop_floor(fp, front, ground, rng)
-        walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+        walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, APT_BACK if shop else COMMERCIAL, wrgb)
         _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
         if rng.random() < 0.5:
             _neon_sign(g, fp, front, ground + 3.6, ground + h, ground, rng)
@@ -752,7 +752,7 @@ def _regional(style, pc, fp, ring, ground, g, gear, rng, near_station, result):
             h = 4.2 + (fl - 1) * 3.0
             wrgb = _jit(PALETTE_WALL["house"][rng.integers(7)], rng)
             shop = _shop_floor(fp, front, ground, rng)
-            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, COMMERCIAL, wrgb)
+            walls(g, ring, ground + FLOOR_H if shop else ground - 1.5, ground + h, ground, APT_BACK if shop else COMMERCIAL, wrgb)
             _flat_top(g, gear, fp, ground + h, ground, COMMERCIAL, wrgb, rng)
             return _with_shop(result(h, fl, 402, "shop"), shop)
         fl = int(rng.integers(3, 6))
