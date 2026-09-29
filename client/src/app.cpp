@@ -1237,6 +1237,33 @@ void App::runSelfTest() {
       check(std::hypot(player_.pos.x - before.x, player_.pos.y - before.y) < 0.6 && player_.grounded, "player stands inside");
       check(saveSlot(3) && readSave(3) && readSave(3)->interior == im.id, "interior state saved");
       inside_id_.clear();
+      // on foot from the pavement at each entrance towards its stairs (no teleport in): how many
+      // stairwell openings can be walked into (building outlines may block some)
+      int reach = 0, total = 0;
+      for (const auto& en : in->entrances()) {
+        ++total;
+        player_.pos = en.street;
+        player_.snapToGround(world_);
+        player_.vel_z = 0;
+        player_.yaw = static_cast<float>(std::atan2(en.inside.x - en.street.x, en.inside.y - en.street.y));
+        double dmin = 1e9;
+        bool ok = false;
+        for (int k = 0; k < 600 && !ok; ++k) {
+          player_.auto_forward_s = 0.05f;
+          player_.update(1.0f / 60.0f, world_, settings_, false, nullptr, in);
+          dmin = std::min(dmin, in->distanceToOpening(player_.pos.x, player_.pos.y));
+          ok = in->overOpening(player_.pos.x, player_.pos.y);
+        }
+        if (ok) ++reach;
+        else
+          TraceLog(LOG_INFO, "RJ: entrance %d not reached on foot: street-inside %.1f m, closest %.1f m to an opening, walked %.1f m", total - 1,
+                   std::hypot(en.inside.x - en.street.x, en.inside.y - en.street.y), dmin,
+                   std::hypot(player_.pos.x - en.street.x, player_.pos.y - en.street.y));
+      }
+      player_.auto_forward_s = 0.0f;
+      TraceLog(LOG_INFO, "RJ: %d of %d underground entrances walked into from the street", reach, total);
+      const std::string what = "underground entrances can be walked into (" + std::to_string(reach) + " of " + std::to_string(total) + ")";
+      check(reach > 0, what.c_str());
       player_.pos = spawn;
     }
   }

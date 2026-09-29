@@ -91,7 +91,9 @@ void Player::update(float dt, const World& world, const Settings& s, bool input,
         }
       }
     } else {
-      world.collide(pos, kRadius);
+      // (building outlines give way right by a real stairwell opening: some entrances to the
+      // underground lie under a building's eaves, inside its roof outline)
+      if (!(nearby && nearby->distanceToOpening(pos.x, pos.y) < 2.5)) world.collide(pos, kRadius);
       world.collideWalls(pos, kRadius, extra_walls);  // station walls, gates, railings, platform edges
       if (nearby) nearby->collide(pos, kRadius);  // stairwell parapets that stand above the pavement
       // the surface under the feet (a step up of up to 0.55 m): platforms and concourses over the
