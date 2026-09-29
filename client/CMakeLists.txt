@@ -68,6 +68,7 @@ set(RJ_SOURCES
   src/game/crowd.cpp
   src/app_activities.cpp
   src/app_sound.cpp
+  src/app_transit.cpp
   src/render/aircraft.cpp
   src/render/trains.cpp
   src/game/traffic.cpp

@@ -279,6 +279,7 @@ bool Renderer::init() {
   head_ = GenMeshSphere(0.14f, 10, 12);
   lens_ = GenMeshCylinder(0.125f, 0.03f, 16);     // 300 mm vehicle signal lens
   pedlens_ = GenMeshCube(0.22f, 0.22f, 0.03f);     // pedestrian signal panel
+  unit_box_ = GenMeshCube(1.0f, 1.0f, 1.0f);
   ready_ = true;
   return true;
 }
@@ -294,7 +295,7 @@ void Renderer::shutdown() {
   if (car_display_.id) UnloadRenderTexture(car_display_);
   car_display_ = RenderTexture2D{};
   signs_built_ = false;
-  for (Mesh* m : {&plane_, &ocean_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_}) UnloadMesh(*m);
+  for (Mesh* m : {&plane_, &ocean_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_, &unit_box_}) UnloadMesh(*m);
   for (auto& s : shadow_)
     if (s.id) {
       rlUnloadFramebuffer(s.id);
@@ -925,7 +926,7 @@ void Renderer::drawShips(const Ferries& ferries, const Camera3D& cam, const Ligh
   rlEnableBackfaceCulling();
 }
 
-void Renderer::drawAircraft(const Aviation& av, const Camera3D& cam, const Lighting& L, int ride_jet, const FlightView* fv) {
+void Renderer::drawAircraft(const Aviation& av, const Camera3D& cam, const Lighting& L, int ride_jet, const FlightView* fv, bool jet_outside) {
   if (!av.loaded()) return;
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
@@ -942,12 +943,16 @@ void Renderer::drawAircraft(const Aviation& av, const Camera3D& cam, const Light
     const Vector3 p = enuToRl(a.pos);
     const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-a.roll), MatrixRotateX(a.pitch)), MatrixRotateY(-a.yaw)),
                                     MatrixTranslate(p.x, p.y, p.z));
-    if (a.id == ride_jet) {
+    const bool at_stand = a.phase == Airliner::Phase::AtStand;
+    const double dist = std::hypot(a.pos.x - c.x, a.pos.y - c.y);
+    if (a.id == ride_jet || (at_stand && dist < 70.0)) {  // inside, or seen through the open door
       set3(lit_, "selfLight", kJetCabinLight);
       drawMeshMat(J.cabin, M, -1, WHITE);
       set3(lit_, "selfLight", Vector3{0, 0, 0});
     }
-    else drawMeshMat(J.fuselage, M, -1, WHITE);
+    if (a.id != ride_jet || jet_outside) drawMeshMat(J.fuselage, M, -1, WHITE);
+    if (!at_stand) drawMeshMat(J.door, M, -1, WHITE);
+    if (at_stand && dist < 400.0) drawMeshMat(J.stairs, M, -1, WHITE);
     drawMeshMat(J.wings, M, -1, WHITE);
     if (a.gear > 0.3f) drawMeshMat(J.gear, M, -1, WHITE);
     drawMeshMat(J.nav_red, M, kMatSignalLamp, WHITE, Vector3{nav, nav * 0.04f, nav * 0.03f});
@@ -1037,7 +1042,8 @@ void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_tr
         }
       // the lit interior of the car ridden, and of nearby cars standing with their doors open
       const bool near_open = open > 0.0f && std::hypot(p.x - c.x, p.y - c.y) < 45.0;
-      if ((riding || near_open) && m.interior.vaoId) {
+      const bool next_car = t.id == ride_train && std::abs(k - ride_car) == 1;  // (seen through the gangway)
+      if ((riding || near_open || next_car) && m.interior.vaoId) {
         set3(lit_, "selfLight", kCabinLight);
         DrawMesh(m.interior, mat_, M);
         set3(lit_, "selfLight", Vector3{0, 0, 0});
@@ -1047,6 +1053,41 @@ void Renderer::drawTrains(const Trains& trains, const Camera3D& cam, int ride_tr
     }
   }
   rlEnableBackfaceCulling();
+}
+
+void Renderer::drawBox(const rj::geo::Vec3d& c, float yaw, Vector3 half, int material, Color tint, Vector3 emissive, float pitch) {
+  const Vector3 p = enuToRl(c);
+  const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixScale(half.x * 2.0f, half.z * 2.0f, half.y * 2.0f), MatrixRotateX(pitch)), MatrixRotateY(-yaw)),
+                                  MatrixTranslate(p.x, p.y, p.z));
+  drawMeshMat(unit_box_, M, material, tint, emissive);
+}
+
+void Renderer::drawGates(const Trains& trains, const Camera3D& cam, int shut_gate, int shut_lane, int flash_gate, int flash_lane, bool flash_ok) {
+  const rj::geo::Vec3d cp = rlToEnu(cam.position);
+  const auto& gates = trains.gates();
+  auto at = [&](const StationGate& G, double u, double v, double z) {
+    const double th = G.heading * DEG2RAD;
+    return rj::geo::Vec3d{G.pos.x + std::sin(th) * u + std::cos(th) * v, G.pos.y + std::cos(th) * u - std::sin(th) * v, G.pos.z + z};
+  };
+  if (shut_gate >= 0 && shut_gate < static_cast<int>(gates.size())) {
+    const StationGate& G = gates[static_cast<size_t>(shut_gate)];
+    if (std::hypot(G.pos.x - cp.x, G.pos.y - cp.y) < 80.0 && shut_lane >= 0 && shut_lane < static_cast<int>(G.lanes.size())) {
+      const float yaw = static_cast<float>(G.heading * DEG2RAD);
+      const double v = G.lanes[static_cast<size_t>(shut_lane)];
+      for (double s : {-1.0, 1.0})  // the two flaps, out from the cabinets across the lane
+        drawBox(at(G, 0.0, v + s * 0.26, 0.78), yaw, {0.25f, 0.018f, 0.16f}, kMatDefault, Color{200, 40, 50, 255}, Vector3{0.25f, 0.02f, 0.02f});
+    }
+  }
+  if (flash_gate >= 0 && flash_gate < static_cast<int>(gates.size())) {
+    const StationGate& G = gates[static_cast<size_t>(flash_gate)];
+    if (flash_lane >= 0 && flash_lane < static_cast<int>(G.lanes.size())) {
+      const float yaw = static_cast<float>(G.heading * DEG2RAD);
+      const double v = G.lanes[static_cast<size_t>(flash_lane)] - 0.5;  // the reader on the cabinet at the lane's left
+      const Vector3 e = flash_ok ? Vector3{0.2f, 2.2f, 0.6f} : Vector3{2.4f, 0.15f, 0.1f};
+      for (double u : {-0.55, 0.55})
+        drawBox(at(G, u, v, 1.07), yaw, {0.07f, 0.1f, 0.012f}, kMatSignalLamp, WHITE, e);
+    }
+  }
 }
 
 void Renderer::drawSignals(const TrafficSignals& ts, const Camera3D& cam) {

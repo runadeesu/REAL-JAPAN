@@ -910,7 +910,8 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
                 o = np.array([nrm[0], nrm[1], 0]) * 0.04
                 _dquad(geos, "metal", [A - o, B - o, B + o, A + o])
             _catenary(geos, xf, a, b, d, nrm, i, hw, shink, stations_xy)
-            if i % 4 == 0 and not shapely.contains_xy(carr_p, a[0], a[1]):  # pier every ~24 m, never on a carriageway
+            if i % 4 == 0 and not shapely.contains_xy(carr_p, a[0], a[1]) and not _in_concourse(spec.stations, a[0], a[1]):
+                # pier every ~24 m, never on a carriageway nor inside a station's concourse
                 g = ground_c(*a[:2])
                 top = xf.p([[a[0], a[1], a[2] - 1.4]])[0]
                 if top[2] - g[2] > 1.2:
@@ -1077,6 +1078,19 @@ def _portal(geos, P0, nn, out, tw, th_):
         _dquad(geos, "concrete", Q)
     C0, C1 = P0 - nn * (W + 0.3) + up * H, P0 + nn * (W + 0.3) + up * H
     _dquad(geos, "concrete", face([C0, C1, C1 + up * 0.6, C0 + up * 0.6]))
+
+
+def _in_concourse(stations, x, y, margin=1.5) -> bool:
+    """Is (x, y) inside (or within margin of) a station's walk-in concourse (see station.py)?"""
+    from .station import CU0, CU1, CV
+    for st in stations:
+        th = math.radians(st["hd"])
+        dx, dy = x - st["x"], y - st["y"]
+        u = dx * math.sin(th) + dy * math.cos(th)
+        v = dx * math.cos(th) - dy * math.sin(th)
+        if CU0 - margin <= u <= CU1 + margin and abs(v) <= CV + margin:
+            return True
+    return False
 
 
 def _box_d(geos, mat, c, hs):

@@ -438,7 +438,8 @@ void Aviation::update(double dt, const World& world) {
         a.timer -= dt;
         a.gear = 1;
         a.flaps = 0;
-        if (a.timer <= 0 && !a.player_aboard) a.timer = 0;
+        if (a.timer <= 0) a.timer = 0;
+        if (a.timer <= 0 && a.player_aboard && !a.player_seated) break;  // the crew waits for the passenger to sit down
         if (a.timer <= 0) {
           // pushback: straight back onto the apron taxilane
           const auto& st = A.stands[static_cast<size_t>(a.stand)];
@@ -601,6 +602,11 @@ const Airliner* Aviation::boardable(int airport) const {
 void Aviation::setAboard(int id, bool on) {
   for (auto& a : jets_)
     if (a.id == id) a.player_aboard = on;
+}
+
+void Aviation::setSeated(int id, bool on) {
+  for (auto& a : jets_)
+    if (a.id == id) a.player_seated = on;
 }
 
 void Aviation::fastForwardOffmap(int) {}

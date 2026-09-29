@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include "game/car_layout.hpp"
 #include "raymath.h"
 #include "render/gpu_mesh.hpp"
 #include "world/detail.hpp"
@@ -185,16 +186,27 @@ void roof(Geo& g, const Spec& s, float y0, float y1) {
 }
 
 void endWall(Geo& g, const Spec& s, float y, float dir, Color c) {
-  // flat end (gangway side) as a fan of the cross-section
-  const Vector3 prof[] = {{-s.W, y, s.zFloor}, {s.W, y, s.zFloor}, {s.W, y, s.zSide}, {s.shoulderX, y, s.zShoulder},
-                          {0, y, s.zRoof}, {-s.shoulderX, y, s.zShoulder}, {-s.W, y, s.zSide}};
+  // flat end (gangway side) as a fan of the cross-section, with the gangway door opening
+  // (kGangwayHalfW wide, up to kGangwayTop above the floor) through which one walks to the next car
   const Vector3 n{0, dir, 0};
-  const unsigned short k = g.v();
-  for (const auto& p : prof) g.vert(p, n, c, kShell);
-  for (unsigned short i = 1; i + 1 < 7; ++i) {
-    if (dir > 0) g.idx.insert(g.idx.end(), {k, static_cast<unsigned short>(k + i), static_cast<unsigned short>(k + i + 1)});
-    else g.idx.insert(g.idx.end(), {k, static_cast<unsigned short>(k + i + 1), static_cast<unsigned short>(k + i)});
+  const float zf = s.zFloor + kFloorAbove, gw = kGangwayHalfW, gt = zf + kGangwayTop;
+  auto Q = [&](float xa, float za, float xb, float zb) { quadN(g, {xa, y, za}, {xb, y, za}, {xb, y, zb}, {xa, y, zb}, n, c, kShell); };
+  Q(-s.W, s.zFloor, -gw, s.zSide);
+  Q(gw, s.zFloor, s.W, s.zSide);
+  Q(-gw, s.zFloor, gw, zf);
+  Q(-gw, gt, gw, s.zSide);
+  const Vector3 prof[] = {{s.W, y, s.zSide}, {s.shoulderX, y, s.zShoulder}, {0, y, s.zRoof}, {-s.shoulderX, y, s.zShoulder}, {-s.W, y, s.zSide}};
+  for (int i = 0; i + 1 < 5; ++i) {
+    const Vector3 a = prof[i], b = prof[i + 1], o{0, y, s.zSide};
+    quadN(g, a, b, o, o, n, c, kShell);
   }
+  // the opening's reveal (frame) and a threshold plate, 0.12 m deep into the car
+  const float d = -dir * 0.12f;
+  const Color fr{150, 152, 156, 255};
+  quadN(g, {-gw, y, zf}, {-gw, y + d, zf}, {-gw, y + d, gt}, {-gw, y, gt}, {1, 0, 0}, fr, kShell);
+  quadN(g, {gw, y, zf}, {gw, y + d, zf}, {gw, y + d, gt}, {gw, y, gt}, {-1, 0, 0}, fr, kShell);
+  quadN(g, {-gw, y, gt}, {gw, y, gt}, {gw, y + d, gt}, {-gw, y + d, gt}, {0, 0, -1}, fr, kShell);
+  quadN(g, {-gw, y - d, zf + 0.002f}, {gw, y - d, zf + 0.002f}, {gw, y + d, zf + 0.002f}, {-gw, y + d, zf + 0.002f}, {0, 0, 1}, Color{110, 112, 116, 255}, kMatMetal);
 }
 
 void underframe(Geo& g, const Spec& s, float y0, float y1) {
@@ -263,7 +275,7 @@ void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::
   if (s.shinkansen) {
     // rows of 2+3 reclining seats facing forward: cushion, back, headrest cover, armrests, tray table
     const Color seat{38, 58, 118, 255}, cover{236, 236, 232, 255}, arm{70, 72, 78, 255};
-    for (float y = y0 + 1.5f; y < y1 - 1.0f; y += kShinkansenSeatPitch) {
+    for (float y = kShinkansenRow0; y < y1 - 1.0f; y += kShinkansenRowPitch) {
       for (float x : {-1.35f, -0.9f, 0.35f, 0.82f, 1.29f}) {
         g.box({x, y, zf + 0.42f}, {0.21f, 0.24f, 0.06f}, seat, kShell);
         g.box({x, y, zf + 0.2f}, {0.2f, 0.18f, 0.17f}, Color{50, 52, 58, 255}, kShell);
@@ -279,13 +291,19 @@ void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::
       g.box({sx * (s.W - 0.32f), (y0 + y1) * 0.5f, zf + 1.78f}, {0.28f, (y1 - y0) * 0.5f - 0.6f, 0.02f}, Color{200, 202, 206, 255}, kMatMetal);
       g.box({sx * (s.W - 0.6f), (y0 + y1) * 0.5f, zf + 1.74f}, {0.015f, (y1 - y0) * 0.5f - 0.6f, 0.04f}, Color{190, 192, 196, 255}, kMatMetal);
     }
-    // end partition with a glass sliding door and an information display above it
+    // end partition with a glass sliding door (drawn slid open: it opens as one walks up to it) and
+    // an information display above it
     const float ye = y1 - 0.3f;
     g.quad({-s.W + 0.05f, ye, zf}, {-0.45f, ye, zf}, {-0.45f, ye, zc}, {-s.W + 0.05f, ye, zc}, Color{220, 214, 204, 255}, kShell);
     g.quad({0.45f, ye, zf}, {s.W - 0.05f, ye, zf}, {s.W - 0.05f, ye, zc}, {0.45f, ye, zc}, Color{220, 214, 204, 255}, kShell);
     g.quad({-0.45f, ye, zf + 2.0f}, {0.45f, ye, zf + 2.0f}, {0.45f, ye, zc}, {-0.45f, ye, zc}, Color{220, 214, 204, 255}, kShell);
-    g.box({0, ye - 0.02f, zf + 1.0f}, {0.42f, 0.01f, 1.0f}, Color{40, 46, 52, 255}, kGlass);
+    g.box({0.88f, ye - 0.03f, zf + 1.0f}, {0.42f, 0.01f, 1.0f}, Color{40, 46, 52, 255}, kGlass);
     g.box({0, ye - 0.03f, zf + 2.12f}, {0.4f, 0.01f, 0.07f}, Color{255, 160, 40, 255}, kGlass);
+    // the vestibule at the other end: a partition between it and the seats, with an open doorway
+    const float yv = kShinkansenRow0 - 0.55f;
+    g.quad({-s.W + 0.05f, yv, zf}, {-0.72f, yv, zf}, {-0.72f, yv, zc}, {-s.W + 0.05f, yv, zc}, Color{220, 214, 204, 255}, kShell);
+    g.quad({0.17f, yv, zf}, {s.W - 0.05f, yv, zf}, {s.W - 0.05f, yv, zc}, {0.17f, yv, zc}, Color{220, 214, 204, 255}, kShell);
+    g.quad({-0.72f, yv, zf + 2.0f}, {0.17f, yv, zf + 2.0f}, {0.17f, yv, zc}, {-0.72f, yv, zc}, Color{220, 214, 204, 255}, kShell);
   } else {
     // long bench seats between the doors, luggage racks, straps, grab poles, displays, hanging ads
     std::vector<float> cuts = {y0 + 0.4f};
@@ -323,7 +341,7 @@ void interior(Geo& g, const Spec& s, float y0, float y1, const std::vector<std::
     int k = 0;
     for (float y = y0 + 2.4f; y < y1 - 2.0f; y += 1.7f, ++k) {
       const Color pc[4] = {{236, 210, 170, 255}, {170, 206, 236, 255}, {236, 180, 190, 255}, {196, 230, 180, 255}};
-      g.box({0, y, zf + 1.83f}, {0.26f, 0.004f, 0.18f}, pc[k % 4], kShell);
+      g.box({0, y, zf + 2.02f}, {0.26f, 0.004f, 0.13f}, pc[k % 4], kShell);  // (above head height)
     }
   }
 }
@@ -447,10 +465,16 @@ TrainCarModel makeShinkansen(bool nose, bool panto = false) {
     if (sx > 0) g.quad({xs, y0 + 0.2f, 0.55f}, {xs, y1 - 0.2f, 0.55f}, {xs, y1 - 0.2f, s.zFloor}, {xs, y0 + 0.2f, s.zFloor}, skirt, kShell);
     else g.quad({xs, y1 - 0.2f, 0.55f}, {xs, y0 + 0.2f, 0.55f}, {xs, y0 + 0.2f, s.zFloor}, {xs, y1 - 0.2f, s.zFloor}, skirt, kShell);
   }
-  // gangway bellows at the car ends
+  // gangway bellows at the car ends: a ring round the gangway passage (seen where the cars part on curves)
   const Color bel{30, 30, 32, 255};
-  g.box({0, y0 - 0.12f, (s.zFloor + s.zSide) * 0.5f}, {s.W - 0.28f, 0.14f, (s.zSide - s.zFloor) * 0.5f - 0.1f}, bel, kDark);
-  if (!nose) g.box({0, y1 + 0.12f, (s.zFloor + s.zSide) * 0.5f}, {s.W - 0.28f, 0.14f, (s.zSide - s.zFloor) * 0.5f - 0.1f}, bel, kDark);
+  const float bz0 = s.zFloor + 0.1f, bz1 = s.zSide - 0.1f, gt = s.zFloor + kFloorAbove + kGangwayTop;
+  for (float ye : {y0 - 0.12f, y1 + 0.12f}) {
+    if (nose && ye > 0) continue;
+    const float bw = s.W - 0.28f, xi = kGangwayHalfW + 0.06f;
+    g.box({-(bw + xi) * 0.5f, ye, (bz0 + bz1) * 0.5f}, {(bw - xi) * 0.5f, 0.14f, (bz1 - bz0) * 0.5f}, bel, kDark);
+    g.box({(bw + xi) * 0.5f, ye, (bz0 + bz1) * 0.5f}, {(bw - xi) * 0.5f, 0.14f, (bz1 - bz0) * 0.5f}, bel, kDark);
+    g.box({0, ye, (gt + 0.06f + bz1) * 0.5f}, {xi, 0.14f, (bz1 - gt - 0.06f) * 0.5f}, bel, kDark);
+  }
   if (panto) {  // single-arm pantograph with its noise shield
     const float py = y0 + 5.0f, pz = s.zRoof;
     const Color pc{90, 92, 96, 255};

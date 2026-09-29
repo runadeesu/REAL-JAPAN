@@ -42,6 +42,19 @@ struct Station {
   double s = 0;        // position along the line
 };
 
+// A station's line of IC ticket gates (walk-in concourse under the platforms): the row across the
+// concourse at `pos` (floor level), facing `heading` (the paid side lies ahead), with the lanes'
+// offsets to the right of the heading.
+struct StationGate {
+  int station = -1;
+  rj::geo::Geodetic geo;
+  double heading = 0;  // degrees
+  std::vector<float> lanes;
+  rj::geo::Vec3d pos;  // origin ENU
+  static constexpr float kLaneHalf = 0.5f;   // half the clear width of a lane
+  static constexpr float kHalfLen = 0.8f;    // half the length of the gate cabinets
+};
+
 struct Train {
   int id = 0;
   int line = 0;
@@ -69,6 +82,7 @@ class Trains {
   void update(double dt);
   const std::vector<RailLine>& lines() const { return lines_; }
   const std::vector<Station>& stations() const { return stations_; }
+  const std::vector<StationGate>& gates() const { return gates_; }
   const std::vector<Train>& trains() const { return trains_; }
   const Train* train(int id) const;
   // car pose (origin ENU, compass yaw, pitch) of car k (0 = leading car)
@@ -110,6 +124,7 @@ class Trains {
   double stopMark(const Train& t, int station) const;
   std::vector<RailLine> lines_;
   std::vector<Station> stations_;
+  std::vector<StationGate> gates_;
   std::vector<Train> trains_;
   bool placed_ = false;
   bool ats_[64] = {};

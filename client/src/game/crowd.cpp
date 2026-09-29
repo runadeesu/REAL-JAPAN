@@ -5,6 +5,8 @@
 
 #include "game/aircraft.hpp"
 #include "game/car_layout.hpp"
+#include "game/deck_layout.hpp"
+#include "game/ferries.hpp"
 #include "game/trains.hpp"
 #include "raymath.h"
 #include "render/aircraft.hpp"
@@ -54,30 +56,7 @@ float busyAt(int hour, bool weekend) {
   return 0.1f;
 }
 
-struct Frame {  // a car's pose: world = p + r*x + f*y + up*z
-  V3 p;
-  double fx, fy, rx, ry, tanp;
-  float yaw;
-  V3 at(double x, double y, double z) const { return {p.x + rx * x + fx * y, p.y + ry * x + fy * y, p.z + z + tanp * y}; }
-};
-
-Frame carFrame(const Trains& trains, const Train& t, int k) {
-  Frame F;
-  float yaw, pitch;
-  trains.carPose(t, k, F.p, yaw, pitch);
-  const bool reversed = k == t.cars - 1 && k > 0;  // the rear cab is turned round (as drawn)
-  if (reversed) {
-    yaw += static_cast<float>(kPi);
-    pitch = -pitch;
-  }
-  F.yaw = yaw;
-  F.fx = std::sin(yaw);
-  F.fy = std::cos(yaw);
-  F.rx = F.fy;
-  F.ry = -F.fx;
-  F.tanp = std::tan(pitch);
-  return F;
-}
+using Frame = CarFrame;  // a car's pose as drawn (car_layout.hpp)
 
 }  // namespace
 
@@ -105,7 +84,7 @@ void Crowd::carPassengers(const Trains& trains, int ti, int k, bool ridden, floa
   const uint64_t base = carBase(t, k, trip_[t.id]);
   const CarLayout L = carLayout(shink, end);
   auto add = [&](double x, double y, double facing_model, int pose, uint64_t seed) {
-    const V3 w = F.at(x, y, L.floor_z);
+    const V3 w = F.at(x, y, L.floor_z);  // (feet on the floor)
     CrowdPerson p;
     p.pos = w;
     p.yaw = F.yaw + static_cast<float>(facing_model);
@@ -219,28 +198,50 @@ void Crowd::platformQueues(double now, const Trains& trains, int si, const V3& c
   }
 }
 
-void Crowd::jetCabin(const Airliner& a) {
-  // 2 + 2 seats in rows 0.8 m apart from y = -9.2 m (as modelled), cabin floor at z = -0.72 m
+bool Crowd::jetSeatTaken(const Airliner& a, int seat) {
+  const uint64_t h = mix(static_cast<uint64_t>(a.id) * 7121 + static_cast<uint64_t>(seat) + 1);
+  return u01(h) <= 0.78;
+}
+
+void Crowd::jetCabin(const Airliner& a, int player_seat) {
+  // seats as modelled (game/deck_layout.hpp), cabin floor at z = -0.72 m
   const Vector3 p = enuToRl(a.pos);
   const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixRotateZ(-a.roll), MatrixRotateX(a.pitch)), MatrixRotateY(-a.yaw)),
                                   MatrixTranslate(p.x, p.y, p.z));
-  int i = 0;
-  for (float ry = -9.8f + 0.6f; ry < 10.8f - 0.6f; ry += 0.8f)
-    for (float x : {-1.0f, -0.55f, 0.55f, 1.0f}) {
-      const uint64_t h = mix(static_cast<uint64_t>(a.id) * 7121 + static_cast<uint64_t>(++i));
-      if (std::fabs(x - kJetSeat[0]) < 0.1f && std::fabs(ry - (kJetSeat[1] + 0.1f)) < 0.3f) continue;  // the player's seat
-      if (u01(h) > 0.78) continue;
-      const Vector3 w = Vector3Transform(Vector3{x, -0.72f, -(ry - 0.05f)}, M);  // model (x, y, z) -> raylib (x, z, -y)
-      CrowdPerson c;
-      c.pos = rlToEnu(w);
-      c.yaw = a.yaw;
-      c.pitch = a.pitch;
-      c.roll = a.roll;
-      c.pose = 2;
-      c.inside = true;
-      style(c, h, false);
-      people_.push_back(c);
-    }
+  const auto seats = jetSeats();
+  for (size_t i = 0; i < seats.size(); ++i) {
+    if (static_cast<int>(i) == player_seat || !jetSeatTaken(a, static_cast<int>(i))) continue;
+    const SeatSlot& s = seats[i];
+    const Vector3 w = Vector3Transform(Vector3{s.x, kJetFloorZ, -(s.y - 0.03f)}, M);  // model (x, y, z) -> raylib (x, z, -y)
+    CrowdPerson c;
+    c.pos = rlToEnu(w);
+    c.yaw = a.yaw;
+    c.pitch = a.pitch;
+    c.roll = a.roll;
+    c.pose = 2;
+    c.inside = true;
+    style(c, mix(static_cast<uint64_t>(a.id) * 7121 + i + 1), false);
+    people_.push_back(c);
+  }
+}
+
+bool Crowd::ferrySeatTaken(const Ferry& f, int seat) {
+  const uint64_t h = mix(static_cast<uint64_t>(f.id) * 9377 + static_cast<uint64_t>(seat) * 13 + 5);
+  return u01(h) < 0.3;
+}
+
+void Crowd::ferryDeck(const Ferry& f, const Ferries& ferries, int player_seat) {
+  const auto seats = ferrySeats(Ferries::shipClass(f.cls));
+  const ShipClass& C = Ferries::shipClass(f.cls);
+  for (size_t i = 0; i < seats.size(); ++i) {
+    if (static_cast<int>(i) == player_seat || !ferrySeatTaken(f, static_cast<int>(i))) continue;
+    CrowdPerson c;
+    c.pos = ferries.toWorld(f, seats[i].x, seats[i].y, C.deck_z);
+    c.yaw = f.yaw + seats[i].facing;
+    c.pose = 2;
+    style(c, mix(static_cast<uint64_t>(f.id) * 9377 + i * 13 + 5), false);
+    people_.push_back(c);
+  }
 }
 
 void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_train, int ride_car, int hour, bool weekend, int player_seat) {
@@ -265,8 +266,9 @@ void Crowd::update(double now, const Trains& trains, const V3& cam, int ride_tra
     const bool open = Trains::doorOpen(t) > 0.0f;
     for (int k = 0; k < t.cars; ++k) {
       const bool ridden = t.id == ride_train && k == ride_car;
-      if (!ridden && !open) continue;
-      if (!ridden) {
+      const bool next_car = t.id == ride_train && std::abs(k - ride_car) == 1;  // (seen through the gangway)
+      if (!ridden && !open && !next_car) continue;
+      if (!ridden && !next_car) {
         V3 p;
         float yaw, pitch;
         trains.carPose(t, k, p, yaw, pitch);

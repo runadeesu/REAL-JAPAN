@@ -61,6 +61,7 @@ struct Airliner {
   float flaps = 0;     // 0..1
   bool lights = true;
   bool player_aboard = false;
+  bool player_seated = false;  // (the flight waits at the stand until the player aboard has sat down)
 };
 
 // The player's light aircraft (6-DOF).
@@ -127,6 +128,7 @@ class Aviation {
   rj::geo::Vec3d landside(int airport) const;
   int airportNear(const rj::geo::Vec3d& p, double r) const;
   void setAboard(int id, bool on);
+  void setSeated(int id, bool on);
   void fastForwardOffmap(int id);
   // player's light aircraft (parked when not flown)
   LightPlane& plane() { return plane_; }

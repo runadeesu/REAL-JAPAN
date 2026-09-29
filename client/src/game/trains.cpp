@@ -54,6 +54,14 @@ bool Trains::load(const std::filesystem::path& file, std::string& err) {
       st.name.erase(0, st.name.find_first_not_of(' '));
       st.geo = {la, lo, st.ztop_h};
       stations_.push_back(st);
+    } else if (k == "gate") {
+      StationGate g;
+      double la, lo, z;
+      ls >> g.station >> la >> lo >> z >> g.heading;
+      g.geo = {la, lo, z};
+      float v;
+      while (ls >> v) g.lanes.push_back(v);
+      if (!g.lanes.empty()) gates_.push_back(std::move(g));
     } else if (k == "reading") {
       std::string name, kana, roman;
       ls >> name >> kana;
@@ -157,6 +165,7 @@ void Trains::place(const World& world) {
       L.env_bwd[i] = std::min(L.env_bwd[i], std::sqrt(L.env_bwd[i - 1] * L.env_bwd[i - 1] + 2.0 * brake * ds));
     }
   }
+  for (auto& g : gates_) g.pos = world.toLocal(g.geo);
   for (auto& st : stations_) {
     st.pos = world.toLocal(st.geo);
     if (st.line < 0 || st.line >= static_cast<int>(lines_.size())) continue;

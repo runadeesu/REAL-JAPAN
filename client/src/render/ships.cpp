@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include "game/deck_layout.hpp"
 #include "game/ferries.hpp"
 #include "raymath.h"
 #include "render/gpu_mesh.hpp"
@@ -196,6 +197,16 @@ ShipModel makeShip(int cls) {
     for (float y = C.house_y0 + 2.0f; y < C.house_y1 - 3.0f; y += cls == 0 ? 4.0f : 5.0f) {
       g.box({sg * (C.house_x + 0.7f), y, dz + 0.45f}, {0.35f, 0.7f, 0.35f}, Color{230, 230, 226, 255}, kMatUntinted);
       g.box({sg * (C.house_x + 0.7f), y, dz + 0.45f}, {0.36f, 0.12f, 0.36f}, kOrange, kMatUntinted);
+    }
+  // benches in rows on the open deck aft of the deckhouse, facing aft (game/deck_layout.hpp)
+  const Color bench{150, 110, 70, 255}, frame{90, 92, 96, 255};
+  for (const auto& r : ferryBenchRows(C))
+    for (float sg : {1.0f, -1.0f}) {
+      const float xc = sg * (r.x0 + r.x1 + 0.25f) * 0.5f, hx = (r.x1 + 0.25f - r.x0) * 0.5f;
+      g.box({xc, r.y + 0.02f, dz + 0.43f}, {hx, 0.22f, 0.035f}, bench, kMatUntinted);   // seat slats
+      g.box({xc, r.y + 0.27f, dz + 0.78f}, {hx, 0.03f, 0.2f}, bench, kMatUntinted);    // backrest
+      for (float lx : {-hx + 0.08f, 0.0f, hx - 0.08f})                                 // frames
+        g.box({xc + lx, r.y + 0.1f, dz + 0.3f}, {0.03f, 0.2f, 0.3f}, frame, kMatUntinted);
     }
   // foredeck: bollards and a windlass
   for (float sg : {1.0f, -1.0f}) g.box({sg * B * 0.45f, y1 - L * 0.16f, fb + 0.3f}, {0.25f, 0.25f, 0.3f}, kBlack, kMatUntinted);

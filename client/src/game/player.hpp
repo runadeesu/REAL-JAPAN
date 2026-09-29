@@ -24,6 +24,7 @@ struct Player {
   double distance_walked = 0.0;
   float auto_forward_s = 0.0f;  // scripted forward walking (tests / demos)
   bool left_interior = false;   // set by update(): walked out of a stairwell onto the pavement
+  rj::geo::Vec3d wish;          // set by update(): the direction the player walks in (unit, or zero)
 
   static constexpr float kEyeHeight = 1.70f;  // adult eye level (feet -> eyes)
   // Camera comfort: eye height smoothed over kerbs / stairs, optional head bob.

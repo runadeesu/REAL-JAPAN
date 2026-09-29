@@ -8,24 +8,11 @@
 
 namespace rjc {
 
-// Seats the ride camera uses (car model space: x right, y forward, z up from the rail top).
-// Shinkansen: left window seat of the row nearest the car centre, facing forward.
-// Commuter: long bench seat on the left, facing across the car.
+// Car model space: x right, y forward, z up from the rail top. Seats, doors and gangways as the
+// passengers and the player use them: game/car_layout.hpp.
 constexpr float kTrainFloorAbove = 0.05f;  // interior floor above the side sill (zFloor)
 constexpr float kCommuterFloorZ = 1.1f + kTrainFloorAbove;
 constexpr float kShinkansenFloorZ = 1.1f + kTrainFloorAbove;
-constexpr float kShinkansenSeatRow0 = -12.5f + 1.5f, kShinkansenSeatPitch = 1.04f;
-// The player's eye when riding (car model x right, y forward): Shinkansen left window seat of the
-// row nearest the car centre; commuter long bench on the left, mid-car.
-inline void rideEye(bool shinkansen, float& x, float& y) {
-  if (shinkansen) {
-    x = -1.28f;
-    y = kShinkansenSeatRow0 + static_cast<float>(static_cast<int>(-kShinkansenSeatRow0 / kShinkansenSeatPitch + 0.5f)) * kShinkansenSeatPitch - 0.12f;
-  } else {
-    x = -1.0f;
-    y = 0.0f;
-  }
-}
 
 struct TrainCarModel {
   Mesh shell{};

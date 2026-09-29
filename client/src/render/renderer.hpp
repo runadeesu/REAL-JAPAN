@@ -127,6 +127,10 @@ class Renderer {
   // ride_train / ride_car: the car the player sits in (drawn without glass, with its interior)
   void drawTrains(const Trains& trains, const Camera3D& cam, int ride_train, int ride_car);
   void drawCrowd(const std::vector<CrowdPerson>& people);
+  // A box at c (origin ENU, centre) turned to compass yaw; half sizes across (x), along (y), up (z).
+  void drawBox(const rj::geo::Vec3d& c, float yaw, Vector3 half, int material, Color tint, Vector3 emissive = {0, 0, 0}, float pitch = 0.0f);
+  // The ticket gates' shut flaps and the readers' flash (green: card accepted, red: refused).
+  void drawGates(const Trains& trains, const Camera3D& cam, int shut_gate, int shut_lane, int flash_gate, int flash_lane, bool flash_ok);
   // Station name boards on the platforms (generic design: the name, its reading and romanisation,
   // the neighbouring stations on a band in the line colour). Built once into render textures with
   // the UI font (call outside the scene pass).
@@ -149,7 +153,8 @@ class Renderer {
     bool cockpit = false;
     float kt = 0, alt_ft = 0, vs_fpm = 0, heading = 0, turn_dps = 0, pitch = 0, roll = 0, elevator = 0, aileron = 0;
   };
-  void drawAircraft(const Aviation& av, const Camera3D& cam, const Lighting& L, int ride_jet, const FlightView* fv);
+  // jet_outside: the player aboard ride_jet is on its stairs (the shell is drawn too)
+  void drawAircraft(const Aviation& av, const Camera3D& cam, const Lighting& L, int ride_jet, const FlightView* fv, bool jet_outside = false);
   void drawSignals(const TrafficSignals& ts, const Camera3D& cam);
   // extra: the player's car; with a cockpit view it is drawn from the driver's seat (interior, gauges)
   struct CockpitView {
@@ -224,7 +229,7 @@ class Renderer {
   int frame_ = 0;
   int draw_calls_ = 0;
   long long triangles_ = 0;
-  Mesh plane_{}, legs_{}, torso_{}, body_{}, head_{}, lens_{}, pedlens_{};
+  Mesh plane_{}, legs_{}, torso_{}, body_{}, head_{}, lens_{}, pedlens_{}, unit_box_{};
   bool ready_ = false;
   Lighting frame_L_{};
 };

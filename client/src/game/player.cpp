@@ -59,6 +59,7 @@ void Player::update(float dt, const World& world, const Settings& s, bool input,
     fx /= len;
     fy /= len;
   }
+  wish = {fx, fy, 0.0};
   const bool run = input && (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT));
   const rj::geo::Vec3d before = pos;
 

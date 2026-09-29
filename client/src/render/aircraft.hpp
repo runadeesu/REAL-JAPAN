@@ -16,7 +16,9 @@ struct JetModel {
   Mesh fuselage{};  // outer shell (not drawn from inside)
   Mesh wings{};     // wings, engines, tail
   Mesh gear{};      // landing gear (hidden when retracted)
-  Mesh cabin{};     // interior with window openings
+  Mesh cabin{};     // interior with window openings, the vestibule by the front left door
+  Mesh door{};      // the front left door (closed; the opening is in the fuselage)
+  Mesh stairs{};    // passenger stairs at the front left door (at the stand)
   Mesh nav_red{}, nav_green{}, nav_white{};
 };
 
@@ -47,8 +49,6 @@ class AircraftModels {
   bool ready_ = false;
 };
 
-// Seat used when riding the jet (model space): left window seat of the row at y = -2.0 (over the
-// wing); the head is just in front of the seat back, eyes at seated height beside the window.
-constexpr float kJetSeat[3] = {-1.0f, -2.1f, 0.44f};
+// The cabin, its seats, the door and the stairs: game/deck_layout.hpp.
 
 }  // namespace rjc

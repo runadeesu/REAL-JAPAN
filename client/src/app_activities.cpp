@@ -153,7 +153,7 @@ void App::updateTrainDriving() {
       if (t->at_station >= 0) {  // doors open: hand the train back and ride on as a passenger
         trains_.setManual(t->id, false);
         drive_train_ = -1;
-        ride_car_ = t->cars / 2;
+        standInCar(0);  // out of the cab, into the car behind it
         toast(i18n_.f("job.train.ended", {{"n", std::to_string(train_stops_)}, {"pay", yen(train_pay_)}}));
         return;
       }

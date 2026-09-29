@@ -171,9 +171,68 @@ class App {
   FarView far_;                         // the country beyond the streamed cells (fictional world)
   void updateFarMapping();
   void updateSeason();
-  float ride_look_yaw_ = 0.0f, ride_look_pitch_ = 0.0f;
+  float ride_look_yaw_ = 0.0f, ride_look_pitch_ = 0.0f;  // view relative to the car ridden (its model frame)
   void updateTransportActions();
   Camera3D rideCamera() const;
+  // --- on foot in the stations and the trains (app_transit.cpp) ---
+  float ob_x_ = 0.0f, ob_y_ = 0.0f;  // where the player stands in the car ridden (model frame)
+  int ob_seat_ = -1;                 // the seat sat on / being sat on (car_layout.hpp order)
+  bool ob_sitting_ = false;
+  float ob_sit_ = 0.0f;              // 0 standing .. 1 seated (the sit-down / stand-up movement)
+  float ob_bob_ = 0.0f;
+  int ob_prev_train_ = -1;           // (fare distance bookkeeping)
+  double ob_prev_s_ = 0.0;
+  std::vector<std::pair<float, float>> ob_path_;  // test aid: points to walk to in the car
+  bool ob_test_seated_ = false, ob_test_looked_ = false;
+  float ob_test_look_[2] = {0.0f, -0.05f};
+  int aim_seat_ = -1;
+  enum class AimIcon { None, Seat, Blocked, Stand, Enter, Hand };
+  AimIcon aim_icon_ = AimIcon::None;  // what the crosshair offers (E / click), drawn at its side
+  std::string aim_label_;
+  std::string ride_info_;            // line, next station and speed while riding (a quiet line at the top)
+  bool in_paid_ = false;             // inside the ticket gates (touched in)
+  double paid_km_ = 0.0;             // ridden since touching in
+  bool paid_shink_ = false;
+  bool gate_owe_ = false;            // the exit gate shut once for a short card: let through next time
+  std::vector<float> gate_walls_;    // shut gate flaps (collision, origin ENU)
+  int gate_in_ = -1, gate_lane_in_ = -1;
+  int gate_closed_gate_ = -1, gate_closed_lane_ = -1;
+  float gate_closed_t_ = 0.0f;
+  int gate_flash_gate_ = -1, gate_flash_lane_ = -1;
+  float gate_flash_t_ = 0.0f;
+  bool gate_flash_ok_ = true;
+  // ferry: the gangway (0 on deck .. 1 on the pier, -1 off it), the benches
+  double ferry_gang_ = -1.0;
+  bool ferry_paid_ = false;
+  int ferry_seat_ = -1;
+  bool ferry_sitting_ = false;
+  float ferry_sit_ = 0.0f;
+  bool ferry_test_walked_ = false;
+  // airliner: the passenger stairs (0 at the door .. 1 on the apron, -1 off them), the cabin
+  float jet_x_ = 0.0f, jet_y_ = 0.0f;  // standing in the cabin (model frame)
+  double jet_stair_ = -1.0;
+  int jet_seat_ = -1;
+  bool jet_sitting_ = false;
+  float jet_sit_ = 0.0f;
+  bool jet_paid_ = false;
+  std::vector<std::pair<float, float>> jet_path_;  // test aid
+  bool jet_test_seated_ = false, jet_test_looked_ = false;
+  bool ferryGangway(const struct Ferry& f, rj::geo::Vec3d& deck_end, rj::geo::Vec3d& pier_end, int& side, float& gy) const;
+  void updateFerryAboard(float dt);
+  void updateJetAboard(float dt);
+  rj::geo::Vec3d jetToWorld(const struct Airliner& a, float x, float y, float z) const;
+  void jetTestPilot();
+  int aimSeat(const std::vector<struct SeatSlot>& seats, float px, float py, float look_yaw, float look_pitch, float eye_h, float reach) const;
+  bool aimAt(const rj::geo::Vec3d& target, double max_dist, double max_deg) const;  // the crosshair is on target
+  bool usePressed() const;
+  void enterCar(int train, int car, float x, float y);
+  void leaveCar(const rj::geo::Vec3d& w);
+  void standInCar(int car);
+  void updateOnBoard(float dt);
+  void updateSeatChoice();
+  void updateBoarding();
+  void updateStationGates(float dt);
+  void rideTestPilot();
   std::string lineName(int line) const;
   static int64_t railFare(bool shinkansen, double km);  // game fare (yen) for a ride of km
   std::string airportName(int i) const;
@@ -269,7 +328,6 @@ class App {
   bool drive_spawn_pending_ = false;  // --state drive: put the car on the nearest lane once roads are placed
   float ride_test_t_ = -1.0f;  // >= 0: ride test running (seconds since boarding)
   bool ride_test_done_ = false;
-  bool autoKeyE() const;
   void updateRideTest();
   bool scriptBusy() const;
   bool traffic_placed_ = false;

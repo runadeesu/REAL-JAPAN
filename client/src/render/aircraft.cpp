@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include "game/deck_layout.hpp"
 #include "raymath.h"
 #include "render/gpu_mesh.hpp"
 #include "world/detail.hpp"
@@ -126,7 +127,7 @@ Station mirror(Station s) { return {{-s.le.x, s.le.y, s.le.z}, s.chord, s.thick}
 // ------------------------------------------------------------------------------------------------
 JetModel makeJet() {
   JetModel m;
-  Geo fus, wings, gear, cabin, red, green, white;
+  Geo fus, wings, gear, cabin, red, green, white, door, stairs;
   // fuselage rings: round body, rounded nose drooping slightly, upswept tail cone
   auto ring = [](float y, float& cz, float& r) {
     if (y > 12.0f) {
@@ -155,7 +156,10 @@ JetModel makeJet() {
       if (s < -0.62f) c = kGrey;                                           // belly
       if (s > -0.08f && s < 0.06f && y > -13.0f && y < 14.5f) c = kBlue;  // cheatline
       auto P = [&](float yy, float cz, float r, float a) { return Vector3{r * std::cos(a), yy, cz + r * std::sin(a)}; };
-      fus.quad(P(y, c0, r0, a1), P(y, c0, r0, a0), P(y + dy, c1, r1, a0), P(y + dy, c1, r1, a1), c, kMatCarPaint);
+      // the front left door is an opening (its panel is a mesh of its own, drawn when shut)
+      const float zm = r0 * s, ym = y + dy * 0.5f;
+      const bool in_door = std::cos(am) < 0 && ym > kJetDoorY0 && ym < kJetDoorY1 && zm > -0.75f && zm < 1.2f;
+      (in_door ? door : fus).quad(P(y, c0, r0, a1), P(y, c0, r0, a0), P(y + dy, c1, r1, a0), P(y + dy, c1, r1, a1), c, kMatCarPaint);
     }
   }
   // cabin windows (both sides) and doors
@@ -227,8 +231,50 @@ JetModel makeJet() {
   }
   // cabin interior: floor, walls with window reveals, bins, ceiling, 2+2 seats
   const Color wall{226, 224, 218, 255}, seat{40, 54, 100, 255}, head{210, 212, 216, 255}, carpet{60, 64, 78, 255};
-  const float y0 = -9.8f, y1 = 10.8f;
+  const float y0 = kJetCabinY0, y1 = kJetCabinY1;
   cabin.quad({-1.35f, y0, -0.72f}, {1.35f, y0, -0.72f}, {1.35f, y1, -0.72f}, {-1.35f, y1, -0.72f}, carpet, kMatUntinted);
+  {
+    // forward vestibule by the front left door: floor, side walls (the door opening on the left),
+    // the bulkhead to the cockpit, the ceiling; the aft bulkhead behind the last row
+    const float v0 = y1, v1 = kJetVestibuleY1, zf = kJetFloorZ, zc = 1.28f;
+    const Color floor_v{150, 150, 146, 255}, bulk{214, 212, 206, 255};
+    cabin.quad({-1.35f, v0, zf}, {1.35f, v0, zf}, {1.35f, v1, zf}, {-1.35f, v1, zf}, floor_v, kMatUntinted);
+    cabin.quad({1.4f, v1, zf}, {1.4f, v0, zf}, {1.4f, v0, zc}, {1.4f, v1, zc}, wall, kMatUntinted);
+    cabin.quad({-1.4f, v0, zf}, {-1.4f, kJetDoorY0, zf}, {-1.4f, kJetDoorY0, zc}, {-1.4f, v0, zc}, wall, kMatUntinted);
+    cabin.quad({-1.4f, kJetDoorY1, zf}, {-1.4f, v1, zf}, {-1.4f, v1, zc}, {-1.4f, kJetDoorY1, zc}, wall, kMatUntinted);
+    cabin.quad({-1.4f, kJetDoorY0, 1.18f}, {-1.4f, kJetDoorY1, 1.18f}, {-1.4f, kJetDoorY1, zc}, {-1.4f, kJetDoorY0, zc}, wall, kMatUntinted);
+    cabin.quad({-1.4f, v1, zf}, {1.4f, v1, zf}, {1.4f, v1, zc}, {-1.4f, v1, zc}, bulk, kMatUntinted);
+    cabin.quad({-1.4f, v1, zc}, {1.4f, v1, zc}, {1.4f, v0, zc}, {-1.4f, v0, zc}, Color{240, 240, 236, 255}, kMatUntinted);
+    cabin.quad({1.4f, y0, zf}, {-1.4f, y0, zf}, {-1.4f, y0, zc}, {1.4f, y0, zc}, bulk, kMatUntinted);
+    cabin.box({0.9f, v1 - 0.45f, zf + 0.5f}, {0.45f, 0.4f, 0.5f}, Color{200, 202, 206, 255}, kMatMetal);  // galley
+    // the door opening's lining through the skin
+    const Color lin{200, 200, 196, 255};
+    cabin.quad({-1.4f, kJetDoorY0, zf}, {-1.55f, kJetDoorY0, zf}, {-1.55f, kJetDoorY0, 1.18f}, {-1.4f, kJetDoorY0, 1.18f}, lin, kMatUntinted);
+    cabin.quad({-1.55f, kJetDoorY1, zf}, {-1.4f, kJetDoorY1, zf}, {-1.4f, kJetDoorY1, 1.18f}, {-1.55f, kJetDoorY1, 1.18f}, lin, kMatUntinted);
+    cabin.quad({-1.4f, kJetDoorY0, 1.18f}, {-1.55f, kJetDoorY0, 1.18f}, {-1.55f, kJetDoorY1, 1.18f}, {-1.4f, kJetDoorY1, 1.18f}, lin, kMatUntinted);
+    cabin.quad({-1.55f, kJetDoorY0, zf}, {-1.4f, kJetDoorY0, zf}, {-1.4f, kJetDoorY1, zf}, {-1.55f, kJetDoorY1, zf}, floor_v, kMatUntinted);
+  }
+  {
+    // passenger stairs: a wheeled stair unit against the door, from the apron (z = -2.4) to the sill
+    const Color st{200, 200, 204, 255}, rail{230, 190, 40, 255};
+    const float xs = -kJetSkinX - 0.05f, rise = kJetFloorZ + 2.4f;
+    const int n = 7;
+    const float run = kJetStairRun, ym = (kJetDoorY0 + kJetDoorY1) * 0.5f, hw = 0.5f;
+    stairs.box({xs - 0.4f, ym, kJetFloorZ - 0.06f}, {0.4f, hw + 0.05f, 0.06f}, st, kMatMetal);  // top landing
+    for (int i = 0; i < n; ++i) {
+      const float x = xs - 0.8f - run * (i + 0.5f) / n, z = kJetFloorZ - rise * (i + 1) / (n + 0.0f);
+      stairs.box({x, ym, z - 0.03f}, {run * 0.5f / n + 0.01f, hw, 0.03f}, st, kMatMetal);
+    }
+    for (float sy : {-1.0f, 1.0f}) {
+      const float y = ym + sy * (hw + 0.04f);
+      stairs.box({xs - 0.8f - run * 0.5f, y, kJetFloorZ - rise * 0.5f - 0.35f}, {run * 0.5f, 0.02f, rise * 0.5f * 0.3f + 0.2f}, st, kMatMetal);  // stringer
+      const Vector3 a{xs - 0.1f, y, kJetFloorZ + 0.95f}, b{xs - 0.8f - run, y, -2.4f + 0.95f};
+      const Vector3 m{(a.x + b.x) * 0.5f, y, (a.z + b.z) * 0.5f};
+      stairs.box(m, {std::fabs(a.x - b.x) * 0.5f, 0.02f, std::fabs(a.z - b.z) * 0.5f + 0.02f}, rail, kMatMetal);  // (rail, drawn as a slab)
+    }
+    for (float sy : {-1.0f, 1.0f})  // the unit's chassis beside the stairs
+      stairs.box({xs - 0.8f - run * 0.5f, ym + sy * (hw + 0.14f), -2.4f + 0.3f}, {run * 0.5f + 0.4f, 0.08f, 0.3f}, Color{230, 190, 40, 255}, kMatUntinted);
+  }
   for (float sg : {1.0f, -1.0f}) {
     const float xi = sg * 1.42f;
     auto W = [&](float ya, float yb, float za, float zb, float xa, float xb) {
@@ -265,6 +311,8 @@ JetModel makeJet() {
   m.wings = wings.upload();
   m.gear = gear.upload();
   m.cabin = cabin.upload();
+  m.door = door.upload();
+  m.stairs = stairs.upload();
   m.nav_red = red.upload();
   m.nav_green = green.upload();
   m.nav_white = white.upload();
@@ -412,7 +460,7 @@ void AircraftModels::build() {
 
 void AircraftModels::unload() {
   if (!ready_) return;
-  for (Mesh* x : {&jet_.fuselage, &jet_.wings, &jet_.gear, &jet_.cabin, &jet_.nav_red, &jet_.nav_green, &jet_.nav_white, &light_.fuselage, &light_.rest,
+  for (Mesh* x : {&jet_.fuselage, &jet_.wings, &jet_.gear, &jet_.cabin, &jet_.door, &jet_.stairs, &jet_.nav_red, &jet_.nav_green, &jet_.nav_white, &light_.fuselage, &light_.rest,
                   &light_.prop, &light_.cockpit, &light_.dial_marks, &light_.needle, &light_.yoke})
     if (x->vaoId) {
       UnloadMesh(*x);

@@ -41,8 +41,13 @@ class Crowd {
   // Is seat `seat` (car_layout.hpp order) of car k of train `train_id` taken by a passenger right now?
   bool seatTaken(const Trains& trains, int train_id, int k, int seat) const;
   const std::vector<CrowdPerson>& people() const { return people_; }
-  // passengers in the airliner the player flies in (call after update): most seats taken, not the player's
-  void jetCabin(const struct Airliner& a);
+  // passengers in the airliner the player is aboard (call after update): most seats taken, not
+  // the player's (player_seat: jetSeats() order, -1 none)
+  void jetCabin(const struct Airliner& a, int player_seat);
+  static bool jetSeatTaken(const struct Airliner& a, int seat);
+  // benches on a ferry's open deck (the ship the player is aboard): some taken
+  void ferryDeck(const struct Ferry& f, const class Ferries& ferries, int player_seat);
+  static bool ferrySeatTaken(const struct Ferry& f, int seat);
 
  private:
   void carPassengers(const Trains& trains, int train_index, int k, bool ridden, float busy);
