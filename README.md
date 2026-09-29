@@ -21,6 +21,18 @@
 
 ※ 高速道路の IC は簡略化（IC ごとに双方向のランプ 1 本、料金所なし）。店では買い物はまだできない。詳しくは [docs/STATUS.md](docs/STATUS.md)。
 
+| | |
+|---|---|
+| ![駅のコンコースと IC 改札（奥に階段）](docs/screenshots/country_v6_gates.jpg) | ![秋津本線：歩いて乗って空いた座席に座った視点（向かいの乗客、つり革）](docs/screenshots/country_v6_ride_seat.jpg) |
+| ![定期便：タラップを上って入った客室の通路](docs/screenshots/country_v6_jet_cabin.jpg) | ![定期便：窓側席から主翼（上昇中 1,900 ft）](docs/screenshots/country_v6_jet_window.jpg) |
+| ![フェリー：着岸中に桟橋へ架かるタラップ](docs/screenshots/country_v6_ferry_gangway.jpg) | ![海沿いの山道：高架橋からトンネルへ（近くの木は 1 本ずつ）](docs/screenshots/country_v6_road_viaduct.jpg) |
+| ![道路トンネルの中（照明・歩道・出口）](docs/screenshots/country_v6_road_tunnel.jpg) | ![高速道路 秋津自動車道（中央分離帯・照明）](docs/screenshots/country_v6_expressway.jpg) |
+| ![稲穂 IC：本線から分かれるランプ（上空から）](docs/screenshots/country_v6_interchange.jpg) | ![秋津本線の踏切（警報灯・警報機、車が停止）](docs/screenshots/country_v6_level_crossing.jpg) |
+| ![下町の歩いて入れるコンビニ（夕方）](docs/screenshots/country_v6_shop_front.jpg) | ![コンビニの店内（棚と商品は汎用の手続き生成）](docs/screenshots/country_v6_shop_inside.jpg) |
+| ![雪見駅に降る雪（1 月）](docs/screenshots/country_v6_snowfall.jpg) | ![焔湖と焔岳（読み込み範囲の縁に壁が出ない）](docs/screenshots/country_v6_lake.jpg) |
+
+※ 9 月下旬（雪は 1 月）。乗り物のショットはテスト用の自動操縦（歩いて乗り、座る）で撮影。同じソースからビルドした Linux 版をソフトウェア OpenGL（Mesa llvmpipe）で実行して撮影（GPU 実機ではない）。踏切は警報を強制するテスト用の設定で撮影。
+
 ### v0.5.0：島から「国」へ（秋津国）
 
 - **国土**：本島 約 50 × 38 km＋南島（10 × 7 km）。背骨の秋津山脈（最高 約 1,400 m）、成層火山 **焔岳**（1,850 m、山頂火口）、山あいの湖 焔湖、5 本の川（山から平野へ蛇行）、平野・盆地、入り組んだ海岸と砂浜

@@ -86,8 +86,9 @@ look at the door and press E. The crosshair shows an icon and a label for what c
 * `rail.txt` (lines with names, stations, readings), `transport.txt` (airports, piers, ferry routes),
   `roads.rjroad`, `residents.csv`, `client.txt` (cells, place names, readings, POIs).
 
-Figures of this build: main island about 1,380 km², 1,507 cells, 196,452 generated buildings,
-about 390 MB of cell data (cook: about 30 minutes on 4 processes).
+Figures of this build (v0.6.0): main island about 1,380 km², 1,507 cells, 196,473 generated
+buildings, about 530 MB of cell data (walk-in shops and stations add detail geometry; cook: about
+32 minutes on 4 processes). 39 road tunnels and 57 viaducts, 6 level crossings, 4 interchanges.
 
 ## Not implemented (honest list)
 
