@@ -56,7 +56,7 @@ cmake --build build-linux
 Windows x64（Release, 配布用）:
 ```bash
 tools/package_windows.sh
-# -> dist/RealJapan-0.5.0-win64*.zip（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
+# -> dist/RealJapan-0.6.0-win64*.zip（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
 ```
 
 ## 6. 自動スクリーンショット（起動確認用）

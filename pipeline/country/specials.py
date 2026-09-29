@@ -902,7 +902,10 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
     # --- road tunnels and viaducts (country roads through ridges / across valleys) ---
     for rs in spec.road_structs:
         _road_structure(geos, ex, xf, rs, clip, ground_c)
-    # --- the expressway on the ground: median barrier and guard rails (collision walls too) ---
+    # --- the expressway on the ground: median barrier and guard rails (collision walls too), open
+    # where an interchange's slip road leaves ---
+    slips = [q.line.buffer(q.carriage / 2.0 + 1.5) for q in isl.net.roads if q.kind == "ramp" and q.line.intersects(clip.buffer(300))]
+    slip_area = unary_union(slips) if slips else None
     for r in isl.net.roads:
         if r.kind != "expressway" or not r.line.intersects(clip.buffer(20)):
             continue
@@ -923,6 +926,8 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
             for off, h, mat, col in ((0.0, 0.85, "concrete", (200, 200, 196, 255)), (-(hw_ - 0.3), 0.75, "metal", (210, 212, 216, 255)),
                                      (hw_ - 0.3, 0.75, "metal", (210, 212, 216, 255))):
                 pa, pb = a + nrm * off, b + nrm * off
+                if off != 0.0 and slip_area is not None and slip_area.contains(Point((pa + pb) / 2)):
+                    continue
                 za, zb = ground_c(*pa)[2], ground_c(*pb)[2]
                 A = xf.p([[pa[0], pa[1], 0.0]])[0]
                 B = xf.p([[pb[0], pb[1], 0.0]])[0]

@@ -257,11 +257,16 @@ def cook_cell(mesh: str):
         if getattr(b, "shop", None):
             shop_mod.build(geos, extra, xf, b.shop)
             if os.environ.get("RJ_COOK_SHOPS"):  # (debug: where the shops are)
-                r, fe = b.shop["ring"], b.shop["front_edge"]
+                r, fe = np.asarray(b.shop["ring"], float), b.shop["front_edge"]
                 a_, b_ = r[fe], r[(fe + 1) % len(r)]
-                la_, lo_ = fi.to_geodetic(float((a_[0] + b_[0]) / 2), float((a_[1] + b_[1]) / 2))
-                d_ = b_ - a_
-                print(f"SHOP {b.shop['kind']} {la_:.7f},{lo_:.7f} out {math.degrees(math.atan2(d_[1], -d_[0])) % 360:.0f}", flush=True)
+                m_ = (a_[:2] + b_[:2]) / 2
+                d_ = b_[:2] - a_[:2]
+                n_ = np.array([d_[1], -d_[0]]) / max(float(np.hypot(*d_)), 1e-9)
+                if float((m_ - r[:, :2].mean(axis=0)) @ n_) < 0:
+                    n_ = -n_
+                cam = m_ + n_ * 7.0  # (a spot out in front, looking at the shop: compass yaw)
+                la_, lo_ = fi.to_geodetic(float(cam[0]), float(cam[1]))
+                print(f"SHOP {b.shop['kind']} view {la_:.7f},{lo_:.7f} yaw {math.degrees(math.atan2(-n_[0], -n_[1])) % 360:.0f}", flush=True)
     # ground raster, contact AO, land-cover map
     M = raster_mapper(fi, bounds)
     size = TEX if (w.buildings or (rp is not None and rp.whole.area > 20000)) else (TEX_RURAL if has_land else TEX_SEA)

@@ -174,6 +174,37 @@ def _towns():
     return unary_union([Polygon(p).buffer(120) for n, s, p in L.DISTRICTS if s not in ("airport",)])
 
 
+def _ramp_points(ex: Road, rp) -> np.ndarray:
+    """An interchange ramp's control points. At the expressway's ends the ramp carries straight on;
+    elsewhere it leaves the (smoothed) expressway as a slip road: along the outer lane for a while,
+    then away at a shallow angle to the side and in the direction of its far end."""
+    rp = np.asarray(rp, float)
+    eline = ex.line
+    s0 = eline.project(Point(rp[0]))
+    q0 = np.asarray(eline.interpolate(s0).coords[0])
+    if s0 < 1.0 or s0 > eline.length - 1.0:
+        return np.vstack([q0, rp[1:]])
+
+    def frame(s):
+        s = min(max(s, 0.0), eline.length)
+        a = np.asarray(eline.interpolate(max(s - 5.0, 0.0)).coords[0])
+        b = np.asarray(eline.interpolate(min(s + 5.0, eline.length)).coords[0])
+        d = (b - a) / max(np.linalg.norm(b - a), 1e-9)
+        return np.asarray(eline.interpolate(s).coords[0]), d, np.array([-d[1], d[0]])
+
+    _, d0, n0 = frame(s0)
+    far = rp[-1]
+    side = 1.0 if float((far - q0) @ n0) > 0 else -1.0
+    sgn = 1.0 if float((far - q0) @ d0) > 0 else -1.0
+    ch = ex.carriage / 2.0
+    head = []
+    for back, off in ((220.0, ch - 4.5), (140.0, ch - 1.0), (70.0, ch + 7.0), (0.0, ch + 22.0)):
+        q, _, nn = frame(s0 - sgn * back)
+        head.append(q + nn * side * off)
+    rest = [q for q in rp[1:] if eline.distance(Point(q)) > ch + 40.0]
+    return np.vstack(head + rest)
+
+
 def build_roads(land, rivers, lakes, rng) -> RoadNet:
     roads = [Road(n, float(w), LineString(p), "arterial") for n, w, p in L.ARTERIALS]
     n, w, p = L.MOUNTAIN_ROAD
@@ -182,9 +213,10 @@ def build_roads(land, rivers, lakes, rng) -> RoadNet:
     from .railgeom import chaikin, resample
     n, w, p = L.EXPRESSWAY
     ep = resample(chaikin(np.asarray(p, float), 4), 10.0)
-    roads.append(Road(n, float(w), LineString(ep), "expressway"))
+    ex = Road(n, float(w), LineString(ep), "expressway")
+    roads.append(ex)
     for rn, rp in L.EXPRESSWAY_RAMPS:
-        roads.append(Road(rn, 8.0, LineString(resample(chaikin(np.asarray(rp, float), 3), 5.0)), "ramp"))
+        roads.append(Road(rn, 8.0, LineString(resample(chaikin(_ramp_points(ex, rp), 3), 5.0)), "ramp"))
     towns = _towns()
     shapely.prepare(towns)
     # national / local roads: sidewalks inside the towns, a plain two-lane road with paved
@@ -383,13 +415,13 @@ def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -
             z[urb] = np.maximum(z[urb], ground_nat[urb] + 9.5)
             force |= urb | over  # (over the rivers too: its own viaduct, not a low river bridge)
         if r.kind == "ramp" and ex_profiles:
-            # the end at the expressway sits at its level
-            for end in (0, n - 1):
-                for eline, ez, en in ex_profiles:
-                    if eline.distance(Point(P[end])) < 15.0:
-                        t = eline.project(Point(P[end])) / max(eline.length, 1e-9)
-                        z[end] = float(np.interp(t * (en - 1), np.arange(en), ez))
-                        pinned[end] = True
+            # where it runs along the expressway (the slip road's start) it is at its level
+            for k in range(n):
+                for eline, ez, en, ehalf in ex_profiles:
+                    if eline.distance(Point(P[k])) < (ehalf + 1.0 if 0 < k < n - 1 else 15.0):
+                        t = eline.project(Point(P[k])) / max(eline.length, 1e-9)
+                        z[k] = float(np.interp(t * (en - 1), np.arange(en), ez))
+                        pinned[k] = True
         for _ in range(3 if (force.any() or pinned.any()) else 2):
             for k in range(1, n):
                 if not pinned[k]:
@@ -398,7 +430,7 @@ def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -
                 if not pinned[k]:
                     z[k] = min(max(z[k], z[k + 1] - g), z[k + 1] + g)
         if r.kind == "expressway":
-            ex_profiles.append((r.line, z.copy(), n))
+            ex_profiles.append((r.line, z.copy(), n, r.carriage / 2.0))
         # tunnels and viaducts (country roads only; short runs closed / dropped)
         ground = terrain.sample(P[:, 0], P[:, 1]).astype(float)
         on_struct = np.zeros(n, bool)

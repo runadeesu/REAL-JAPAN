@@ -296,7 +296,7 @@ bool Renderer::init() {
       for (int k = 0; k < kSeg; ++k) {
         const auto a = static_cast<unsigned short>(r * kSeg + k), b = static_cast<unsigned short>(r * kSeg + (k + 1) % kSeg);
         const auto c = static_cast<unsigned short>((r + 1) * kSeg + k), d = static_cast<unsigned short>((r + 1) * kSeg + (k + 1) % kSeg);
-        idx.insert(idx.end(), {a, c, d, a, d, b});
+        idx.insert(idx.end(), {a, d, c, a, b, d});  // (counter-clockwise seen from above: the lit shader flips the normal of back faces)
       }
     Mesh m{};
     m.vertexCount = static_cast<int>(pos.size() / 3);

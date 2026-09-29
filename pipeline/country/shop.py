@@ -106,19 +106,23 @@ def build(geos, ex, xf, shop) -> None:
                 if s1 - s0 < 0.05:
                     continue
                 q0, q1 = a + u * s0, a + u * s1
-                quad("glass", [(q0[0], q0[1], g + 0.35), (q1[0], q1[1], g + 0.35), (q1[0], q1[1], g + 2.72), (q0[0], q0[1], g + 2.72)],
-                     (150, 175, 190, 255))
+                # (the panes are left open: the renderer has no see-through glass, and the lit shop
+                # seen through the window is what a shop front looks like; the collision wall stays)
                 quad("metal", [(q0[0], q0[1], g), (q1[0], q1[1], g), (q1[0], q1[1], g + 0.35), (q0[0], q0[1], g + 0.35)], (120, 124, 130, 255))
+                quad("metal", [(q0[0], q0[1], g + 0.35), (q1[0], q1[1], g + 0.35), (q1[0], q1[1], g + 0.40), (q0[0], q0[1], g + 0.40)], (96, 100, 106, 255))
                 wall(q0[0], q0[1], q1[0], q1[1], g - 0.3, g + 2.8)
                 k = int(max(1, round((s1 - s0) / 1.6)))
                 for m in range(k + 1):  # mullions
                     q = a + u * (s0 + (s1 - s0) * m / k)
                     _box_d(geos, "metal", P(q[0], q[1], g + 1.4), (0.04, 0.04, 1.4), (110, 114, 120, 255))
-            # the door leaves, slid open behind the glazing, and a mat inside
+            # the door leaves' frames, slid open behind the glazing, and a mat inside
             for s0 in (d0 - 0.85, d1):
+                for e in (0.0, 0.85):
+                    q = a + u * (s0 + e) - nrm * 0.05
+                    _box_d(geos, "metal", P(q[0], q[1], g + 1.25), (0.03, 0.03, 1.2), (150, 154, 160, 255))
                 q0, q1 = a + u * s0 - nrm * 0.05, a + u * (s0 + 0.85) - nrm * 0.05
-                quad("glass", [(q0[0], q0[1], g + 0.05), (q1[0], q1[1], g + 0.05), (q1[0], q1[1], g + 2.45), (q0[0], q0[1], g + 2.45)],
-                     (160, 185, 196, 255))
+                quad("metal", [(q0[0], q0[1], g + 0.05), (q1[0], q1[1], g + 0.05), (q1[0], q1[1], g + 0.12), (q0[0], q0[1], g + 0.12)], (150, 154, 160, 255))
+                quad("metal", [(q0[0], q0[1], g + 2.38), (q1[0], q1[1], g + 2.38), (q1[0], q1[1], g + 2.45), (q0[0], q0[1], g + 2.45)], (150, 154, 160, 255))
             m0, m1, m2, m3 = a + u * d0 - nrm * 0.2, a + u * d1 - nrm * 0.2, a + u * d1 - nrm * 1.4, a + u * d0 - nrm * 1.4
             quad("sidewalk", [(m[0], m[1], zf + 0.01) for m in (m0, m1, m2, m3)], (60, 62, 66, 255))
             # a low step up at the door (the floor meets the pavement)
@@ -167,17 +171,16 @@ def build(geos, ex, xf, shop) -> None:
         obox("metal", cu, v0 - 0.9, zf + 0.5, 1.1, 0.35, 0.5, (200, 200, 196, 255))
         obox("metal_dark", cu + 0.6, v0 - 0.9, zf + 1.1, 0.18, 0.15, 0.1, (40, 44, 50, 255))
         owall(cu - 1.1, v0 - 0.55, cu + 1.1, v0 - 0.55, 1.1)
-        rows = np.arange(v0 + 0.8, v1 - 1.6, 1.9)
-        for vr in rows:
-            gu0, gu1 = u0 + 1.2, u1 - 1.2
-            if gu1 - gu0 < 1.0:
-                continue
-            obox("metal", (gu0 + gu1) / 2, vr, zf + 0.7, (gu1 - gu0) / 2, 0.32, 0.7, (226, 228, 230, 255))
-            for zz in (0.35, 0.8, 1.25):  # goods on the shelves (colour bands)
-                for side in (-1, 1):
-                    c = [(230, 80, 60, 255), (60, 140, 220, 255), (240, 200, 60, 255), (90, 180, 90, 255)][int(rng.integers(4))]
-                    obox("sign", (gu0 + gu1) / 2, vr + side * 0.33, zf + zz, (gu1 - gu0) / 2 - 0.05, 0.02, 0.16, c)
-            owall(gu0, vr, gu1, vr, 1.4)
+        # gondolas run inwards from the front, so the aisles lead from the door to the cabinets
+        gv0, gv1 = v0 + 0.5, v1 - 1.5
+        if gv1 - gv0 >= 1.5:
+            for ur in np.arange(u0 + 3.2, u1 - 0.6, 1.95):
+                obox("metal", ur, (gv0 + gv1) / 2, zf + 0.68, 0.3, (gv1 - gv0) / 2, 0.68, (226, 228, 230, 255))
+                obox("metal", ur, (gv0 + gv1) / 2, zf + 1.38, 0.02, (gv1 - gv0) / 2, 0.02, (200, 202, 206, 255))
+                for side in (-1.0, 1.0):
+                    for zz in (0.08, 0.5, 0.92):
+                        _goods(geos, at, rng, ur + side * 0.31, side, gv0 + 0.05, gv1 - 0.05, zf + zz)
+                owall(ur, gv0, ur, gv1, 1.4)
     elif kind == "cafe":
         cu = u1 - 1.2
         obox("metal_dark", cu, (v0 + v1) / 2, zf + 0.55, 0.45, (v1 - v0) / 2 - 0.2, 0.55, (70, 50, 36, 255))  # counter
@@ -191,9 +194,12 @@ def build(geos, ex, xf, shop) -> None:
                     obox("metal_dark", uu + s * 0.8, vv, zf + 0.7, 0.02, 0.2, 0.25, (90, 70, 50, 255))
                 owall(uu - 0.4, vv, uu + 0.4, vv, 0.8)
     else:
-        # wall shelving on the side walls, a counter at the back
-        for uu in (u0 + 0.25, u1 - 0.25):
-            obox("metal", uu, (v0 + v1) / 2, zf + 0.9, 0.22, (v1 - v0) / 2, 0.9, (190, 170, 140, 255))
+        # wall shelving on the side walls (goods on four shelves), a counter at the back
+        for uu, side in ((u0 + 0.25, 1.0), (u1 - 0.25, -1.0)):
+            obox("metal", uu - side * 0.04, (v0 + v1) / 2, zf + 0.9, 0.18, (v1 - v0) / 2, 0.9, (190, 170, 140, 255))
+            for zz in (0.1, 0.52, 0.94, 1.36):
+                obox("metal", uu + side * 0.15, (v0 + v1) / 2, zf + zz - 0.02, 0.07, (v1 - v0) / 2, 0.015, (176, 156, 128, 255))
+                _goods(geos, at, rng, uu + side * 0.16, side, v0 + 0.05, v1 - 0.05, zf + zz)
             owall(uu, v0, uu, v1, 1.8)
         obox("metal_dark", (u0 + u1) / 2, v1 - 0.5, zf + 0.5, min(1.4, (u1 - u0) / 3), 0.3, 0.5, (100, 80, 60, 255))
         owall((u0 + u1) / 2 - 1.4, v1 - 0.8, (u0 + u1) / 2 + 1.4, v1 - 0.8, 1.0)
@@ -201,5 +207,34 @@ def build(geos, ex, xf, shop) -> None:
     for uu in np.arange(u0 + 1.0, u1 - 0.5, 2.6):
         for vv in np.arange(0.9, v1, 2.6):
             obox("lamp", uu, vv, zc - 0.03, 0.6, 0.12, 0.02, (255, 255, 250, 255))
-    c = at((u0 + u1) / 2, (v0 + v1) / 2, zc - 0.3)
+    # (the lamp source at mid height: from just under the ceiling it would burn a hot spot into it)
+    c = at((u0 + u1) / 2, (v0 + v1) / 2, zf + 1.5)
     ex.lights.append(((c[0], c[1], c[2]), max(6.0, math.hypot(u1 - u0, v1) * 0.6), 3))
+
+
+# packaging colours (generic: no brands or labels)
+_PACK = [(222, 72, 56), (52, 120, 206), (238, 196, 58), (84, 168, 86), (236, 236, 228), (240, 140, 50),
+         (150, 90, 170), (40, 46, 60), (200, 60, 110), (120, 190, 220), (170, 120, 70), (250, 220, 170)]
+
+
+def _goods(geos, at, rng, uf, side, va, vb, z):
+    """A shelf of goods facing `side` (+/-u) at u = uf from v = va to vb, standing on height z: packs
+    of random width, height and colour (their fronts and tops)."""
+    from .specials import _dquad
+    v = va
+    while v < vb - 0.08:
+        w = float(min(rng.uniform(0.07, 0.3), vb - v))
+        h = float(rng.uniform(0.12, 0.34))
+        c = _PACK[int(rng.integers(len(_PACK)))]
+        c = (*(min(255, int(k * rng.uniform(0.85, 1.05))) for k in c), 255)
+        dep = 0.24
+        ub = uf - side * dep
+        A, B = at(uf, v + 0.005, z), at(uf, v + w - 0.005, z)
+        if side < 0:  # (fronts face the aisle: +u for side +1)
+            A, B = B, A
+        _dquad(geos, "sign", [A, B, B + [0, 0, h], A + [0, 0, h]], c)
+        T0, T1 = at(uf, v + 0.005, z + h), at(uf, v + w - 0.005, z + h)
+        T2, T3 = at(ub, v + w - 0.005, z + h), at(ub, v + 0.005, z + h)
+        tq = [T0, T1, T2, T3] if side > 0 else [T3, T2, T1, T0]
+        _dquad(geos, "sign", tq, (int(c[0] * 0.8), int(c[1] * 0.8), int(c[2] * 0.8), 255))
+        v += w

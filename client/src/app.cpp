@@ -1049,7 +1049,10 @@ int App::simSteps() const {
                          (ride_train_ >= 0 && ob_path_.empty() && ((ob_sitting_ && ob_sit_ >= 1.0f) || (ob_test_seated_ && !ob_sitting_))) ||
                          (ride_ferry_ >= 0 && ferry_gang_ < 0.0 && ferry_test_walked_) ||
                          (ride_jet_ >= 0 && jet_stair_ < 0.0 && jet_sitting_ && jet_sit_ >= 1.0f);
-    if (!settled) return 1;
+    // (or still waiting for something to board, standing still: the wait passes quickly)
+    const bool waiting = ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0 && ride_test_t_ <= 0.0f &&
+                         player_.auto_forward_s <= 0.0f && !ride_place_pending_;
+    if (!settled && !waiting) return 1;
   }
   return std::max(1, opt_.sim_speed);
 }
@@ -1639,7 +1642,7 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v0.5.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
+  ui_.textRight("v0.6.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
                  vw - 30, 1040, 20, theme::kMuted);
 }
 

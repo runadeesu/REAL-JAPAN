@@ -259,13 +259,17 @@ void uploadCell(CellCpu& cpu, CellGpu& gpu) {
     std::vector<unsigned short> idx = cpu.tidx;
     {
       const int nx = cpu.tnx, ny = cpu.tny;
+      // (not below the sea surface: out there the far view's sea, drawn first, would show them through)
+      const float sea_z0 = static_cast<float>(-cpu.anchor[2]);
       auto skirt = [&](int i0, int j0, int di, int dj, int count, bool flip) {
         for (int k = 0; k + 1 < count; ++k) {
           const int a = (i0 + di * k) * nx + (j0 + dj * k), b = (i0 + di * (k + 1)) * nx + (j0 + dj * (k + 1));
           if (pos.size() / 3 + 2 > 65535) return;
+          if (std::max(cpu.tpos[static_cast<size_t>(a) * 3 + 2], cpu.tpos[static_cast<size_t>(b) * 3 + 2]) < sea_z0 + 0.05f) continue;
           const auto base = static_cast<unsigned short>(pos.size() / 3);
           for (int v : {a, b}) {
-            pos.insert(pos.end(), {cpu.tpos[static_cast<size_t>(v) * 3], cpu.tpos[static_cast<size_t>(v) * 3 + 1], cpu.tpos[static_cast<size_t>(v) * 3 + 2] - 30.0f});
+            const float z = cpu.tpos[static_cast<size_t>(v) * 3 + 2];
+            pos.insert(pos.end(), {cpu.tpos[static_cast<size_t>(v) * 3], cpu.tpos[static_cast<size_t>(v) * 3 + 1], std::min(z, std::max(z - 30.0f, sea_z0 - 0.4f))});
             nrm.insert(nrm.end(), {cpu.tnrm[static_cast<size_t>(v) * 3], cpu.tnrm[static_cast<size_t>(v) * 3 + 1], cpu.tnrm[static_cast<size_t>(v) * 3 + 2]});
             uv.insert(uv.end(), {cpu.tuv[static_cast<size_t>(v) * 2], cpu.tuv[static_cast<size_t>(v) * 2 + 1]});
           }

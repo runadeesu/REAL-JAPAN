@@ -678,7 +678,7 @@ Surf terrainSurface(vec3 ng, vec2 wuv) {
     float isBare = (1.0 - smoothstep(0.04, 0.09, distance(c, vec3(86.0, 66.0, 58.0) / 255.0))) * smoothstep(0.2, 0.5, Lc.a);
     vec4 n1 = texture(texNoise, wuv / 2.3), n2 = texture(texNoise, wuv / 17.0);
     if (isForest > 0.01) {  // forest floor: litter and moss in the shade of the crowns
-      vec3 a = vec3(0.034, 0.038, 0.020) * (0.7 + 0.6 * n1.r) * (0.85 + 0.3 * n2.g);
+      vec3 a = mix(vec3(0.050, 0.056, 0.028), vec3(0.075, 0.058, 0.036), n2.b) * (0.7 + 0.6 * n1.r) * (0.85 + 0.3 * n2.g);
       s.albedo = mix(s.albedo, a, isForest); s.rough = mix(s.rough, 0.95, isForest); s.ao *= mix(1.0, 0.75, isForest);
     }
     if (isPaddy > 0.01) {

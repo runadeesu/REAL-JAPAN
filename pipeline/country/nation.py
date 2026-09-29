@@ -179,7 +179,7 @@ ROADS = [
     ("国道8号", 11, [(-18300, 24400), (-22000, 24600), (-26000, 24900), (-28000, 23550), (-31000, 23300), (-35000, 19800),
                      (-38200, 16000), (-40200, 12000), (-41000, 9000), (-41300, 5000), (-40600, 1400),
                      (-39900, -1400)]),
-    ("紫苑街道", 9, [(-24000, 4300), (-24300, 8200), (-25500, 11800), (-24500, 15500), (-22500, 19800),
+    ("紫苑街道", 9, [(-24000, 3000), (-24000, 4300), (-24300, 8200), (-25500, 11800), (-24500, 15500), (-22500, 19800),
                      (-21000, 22300), (-18800, 23900)]),
     ("汐崎街道", 9, [(-4600, -600), (-5400, -2600), (-6600, -5200), (-7600, -7800), (-8700, -9300), (-9600, -10900)]),
     ("焔岳スカイライン", 8, [(-10000, 14200), (-11200, 14800), (-11800, 14200), (-12700, 14900), (-13100, 14500)]),
@@ -201,7 +201,9 @@ BRIDGE_ROADS = set()  # (rivers are bridged automatically; no sea crossings outs
 # 国道1号 to 朝凪, four lanes with a median, tunnels and viaducts where the ground does not suit it,
 # on viaducts through built-up land and over every road and railway it crosses (no level junctions).
 # Interchanges: a ramp road from the expressway to a national road (name, polyline from the
-# expressway end to the road end).
+# expressway end to the road end). At the expressway's ends the ramp carries straight on; between
+# them it leaves as a slip road where the expressway is on the ground (simplified: one two-way ramp
+# per interchange). 楓 has none: the expressway passes it in tunnels and on viaducts.
 EXPRESSWAY = ("秋津自動車道", 25.5, [
     (-4700, 250), (-6000, 700), (-7400, 1250), (-8800, 2000), (-10400, 2550), (-12400, 2750), (-14400, 2450),
     (-16300, 2250), (-18300, 2650), (-20200, 3350), (-22200, 3900), (-24300, 4000), (-26300, 3350),
@@ -209,8 +211,7 @@ EXPRESSWAY = ("秋津自動車道", 25.5, [
 EXPRESSWAY_RAMPS = [
     ("千景西IC", [(-4700, 250), (-4650, -150), (-4600, -600)]),
     ("稲穂IC", [(-10400, 2550), (-10300, 2150), (-10200, 1700)]),
-    ("紫苑IC", [(-22200, 3900), (-22500, 3350), (-22900, 2900)]),
-    ("楓IC", [(-30300, 2500), (-30900, 2100), (-31200, 1400)]),
+    ("紫苑IC", [(-24600, 3880), (-24350, 3500), (-24000, 3450)]),
     ("朝凪IC", [(-35500, -1150), (-35100, -1800), (-34000, -2500)]),
 ]
 
