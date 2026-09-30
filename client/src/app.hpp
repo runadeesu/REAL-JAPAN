@@ -76,7 +76,7 @@ class App {
 
  private:
   enum class Screen { Boot, Loading, Title, Settings, Slots, Credits, Game, Pause, Phone, Fatal };
-  enum class PhoneApp { Home, Map, Clock, Wallet, Town, Work, Hobby };
+  enum class PhoneApp { Home, Map, Clock, Wallet, Town, Work, Hobby, Bag, Flat };
 
   bool boot();
   void shutdown();
@@ -177,7 +177,18 @@ class App {
     rj::geo::Geodetic geo;
     double heading = 0, width = 8;
     rj::geo::Vec3d pos;
+    float bar[2] = {0.0f, 0.0f};  // ETC bars of its two lanes, 0 down .. 1 up
+    bool blocked = false;          // the player's card could not pay here: the bar stays down
   };
+  // the ETC bars: up for a car coming through the lane, down across it otherwise (app_shop.cpp)
+  struct TollLane {
+    rj::geo::Vec3d pivot, tip;
+    double arm_hd = 0;  // compass direction from pivot to tip
+    double along = 0;   // (travel direction, degrees)
+  };
+  TollLane tollLane(const TollPlaza& t, int lane) const;
+  void updateTollBars(float dt, std::vector<float>& walls);
+  void drawTollBars(const Camera3D& cam);
   std::vector<TollPlaza> tolls_;  // expressway toll plazas (tolls.txt)
   int toll_entry_ = -1;           // the plaza the player's car came onto the expressway through
   int toll_last_ = -1;            // the plaza just passed (until the car is clear of it)
@@ -345,10 +356,54 @@ class App {
   void loadTolls(const std::filesystem::path& file);
   void updateTolls();        // the player's car through a toll plaza: ETC entry / fare at the exit
   void drawShopMenu();
-  // touch builds (Android): which on-screen buttons the current situation needs (app_touch.cpp)
-  void updateTouchControls();
+  void drawShopClerks(const Camera3D& cam);
+  int shop_greeted_ = -1;  // the counter whose clerk said hello
+  // what the controller's (and on touch builds the on-screen) buttons mean now (app_input.cpp)
+  void updateInputContext();
   int shrine_frame_ = -10;  // last frame the shrine prompt was up (its extra buttons)
   bool buyItem(const ShopItem& it);
+  // the body and belongings (app_life.cpp): hunger, thirst, rain on the clothes, using things bought
+  struct Life {
+    float hunger = 80.0f, thirst = 80.0f;  // 0..100 (game values)
+    float wet = 0.0f;                      // clothes 0 dry .. 1 soaked
+    bool umbrella = false, flashlight = false;
+    float battery = 1.0f;                  // the flashlight's
+    float fuel = 0.7f, damage = 0.0f;      // the car being driven (tank 0..1, 0 as new .. 1 wrecked)
+    bool has_home = false;                 // renting the flat (app_home.cpp)
+    int64_t rent_paid_until = 0;           // game unix time
+    int talks = 0;                         // conversations had
+    int64_t last_unix = 0;                 // (game time of the last update)
+  };
+  Life life_;
+  std::vector<std::string> notes_;  // the notebook
+  std::string lifeString() const;
+  void parseLife(const std::string& s);
+  std::string notesString() const;
+  void parseNotes(const std::string& s);
+  void updateLife(float dt);
+  bool canUseItem(const std::string& key) const;
+  bool useItem(const std::string& key);
+  void drawBag(float x, float y, float w);
+  void drawLifeHud();
+  // the car being driven: fuel, damage, fuel stations, road service (app_car.cpp)
+  struct FuelStation {
+    std::string name;
+    rj::geo::Geodetic geo;
+    rj::geo::Vec3d pos;
+  };
+  std::vector<FuelStation> fuel_stations_;
+  int fuel_open_ = -1;     // the station whose menu is open
+  int fuel_car_id_ = -1;   // the car the fuel level belongs to
+  void loadFuelStations(const std::filesystem::path& file);
+  void onEnterCar(const Vehicle& v);
+  void updateCar(float dt);
+  void updateFuelStation();
+  bool nearFuelStation() const;
+  bool payCar(int64_t yen, const std::string& memo);
+  int64_t fuelCost() const;
+  int64_t repairCost() const;
+  void drawFuelMenu();
+  void drawCarPhone(float x, float& y, float w);
   std::string inventoryString() const;
   void parseInventory(const std::string& s);
   // test aids (scripted drive / ride); the screenshot waits until they are finished

@@ -10,6 +10,7 @@
 #include "app.hpp"
 #include "platform/paths.hpp"
 #include "ui/ui.hpp"
+#include "world/coords.hpp"
 #include "util/text.hpp"
 
 namespace rjc {
@@ -44,12 +45,32 @@ bool App::buyItem(const ShopItem& it) {
     return false;
   }
   ++inventory_[it.key];
-  toast(i18n_.f("shop.bought", {{"item", name}, {"yen", withCommas(it.yen)}}));
+  toast(i18n_.f("shop.bought", {{"item", name}, {"yen", withCommas(it.yen)}}) + "  " + tr("shop.thanks"));
   return true;
+}
+
+void App::drawShopClerks(const Camera3D& cam) {
+  // a clerk behind every counter near the camera, facing the customer's spot (in the shop's colours)
+  const rj::geo::Vec3d cp = rlToEnu(cam.position);
+  for (size_t i = 0; i < shops_.spots().size(); ++i) {
+    const ShopSpot& sp = shops_.spots()[i];
+    if (std::hypot(sp.counter.x - cp.x, sp.counter.y - cp.y) > 60.0) continue;
+    const double dx = sp.stand.x - sp.counter.x, dy = sp.stand.y - sp.counter.y, d = std::max(0.1, std::hypot(dx, dy));
+    const rj::geo::Vec3d feet{sp.counter.x - dx / d * 0.75, sp.counter.y - dy / d * 0.75, sp.counter.z};
+    const Color shirt = sp.kind == "konbini" ? Color{40, 110, 175, 255} : sp.kind == "cafe" ? Color{70, 48, 34, 255} : Color{176, 64, 52, 255};
+    renderer_.drawStandingPerson(enuToRl(feet), static_cast<float>(std::atan2(dx, dy)), static_cast<int>(i % 5), shirt, Color{36, 36, 42, 255});
+  }
 }
 
 void App::updateShopActions() {
   if (!shops_.loaded()) return;
+  // the clerk greets whoever comes up to the counter (words on the screen; there are no voices)
+  {
+    const int k = shops_.near(player_.pos, 3.5);
+    if (k >= 0 && k != shop_greeted_) toast(tr("shop.welcome"));
+    if (k >= 0) shop_greeted_ = k;
+    else if (shop_greeted_ >= 0 && shops_.near(player_.pos, 12.0) != shop_greeted_) shop_greeted_ = -1;
+  }
   static const bool test = std::getenv("RJ_SHOP_TEST") != nullptr;  // test aid: open the nearest counter's menu
   if (shop_open_ >= 0) {
     // the menu: E closes it, walking away closes it, number keys buy
@@ -117,6 +138,70 @@ void App::loadTolls(const std::filesystem::path& file) {
   }
 }
 
+App::TollLane App::tollLane(const TollPlaza& t, int lane) const {
+  // lane 0 keeps left going along the plaza's heading, lane 1 the other way (left-hand traffic);
+  // the bar stands at the lane's exit end of the islands, pivoting on the outer island
+  const double th = t.heading * DEG2RAD;
+  const double dx = std::sin(th), dy = std::cos(th), nx = std::cos(th), ny = -std::sin(th);
+  const double s = lane == 0 ? 1.0 : -1.0;
+  const double outer = t.width / 2 + 0.7 - 0.62, inner = 0.62;
+  const double along = s * 3.9;
+  TollLane L;
+  L.pivot = {t.pos.x + dx * along - nx * s * outer, t.pos.y + dy * along - ny * s * outer, t.pos.z + 1.0};
+  L.tip = {t.pos.x + dx * along - nx * s * inner, t.pos.y + dy * along - ny * s * inner, t.pos.z + 1.0};
+  L.arm_hd = std::atan2(L.tip.x - L.pivot.x, L.tip.y - L.pivot.y) / DEG2RAD;
+  L.along = lane == 0 ? t.heading : t.heading + 180.0;
+  return L;
+}
+
+void App::updateTollBars(float dt, std::vector<float>& walls) {
+  for (size_t i = 0; i < tolls_.size(); ++i) {
+    TollPlaza& t = tolls_[i];
+    if (std::hypot(t.pos.x - player_.pos.x, t.pos.y - player_.pos.y) > 400.0) continue;
+    for (int lane = 0; lane < 2; ++lane) {
+      const TollLane L = tollLane(t, lane);
+      const double th = L.along * DEG2RAD, dx = std::sin(th), dy = std::cos(th);
+      const double bx = (L.pivot.x + L.tip.x) / 2, by = (L.pivot.y + L.tip.y) / 2;
+      // a car in the lane coming up to the bar (ETC reads its card 30 m ahead) lifts it
+      auto coming = [&](const rj::geo::Vec3d& p) {
+        const double a = (p.x - bx) * dx + (p.y - by) * dy, c = (p.x - bx) * dy - (p.y - by) * dx;
+        return a > -30.0 && a < 4.0 && std::fabs(c) < 2.6 && std::fabs(p.z - t.pos.z) < 4.0;
+      };
+      bool want = false;
+      for (const auto& v : traffic_.vehicles()) want = want || coming(v.pos);
+      if (driving_.active() && coming(driving_.car().pos) && !t.blocked) want = true;
+      if (t.blocked) want = false;
+      t.bar[lane] = std::clamp(t.bar[lane] + (want ? 1.6f : -0.8f) * dt, 0.0f, 1.0f);
+      if (t.bar[lane] < 0.5f)  // down: the arm across the lane stops cars and people
+        walls.insert(walls.end(), {static_cast<float>(L.pivot.x), static_cast<float>(L.pivot.y), static_cast<float>(L.tip.x), static_cast<float>(L.tip.y),
+                                   static_cast<float>(t.pos.z + 0.35), static_cast<float>(t.pos.z + 1.3)});
+    }
+    if (t.blocked && (!driving_.active() || std::hypot(t.pos.x - driving_.car().pos.x, t.pos.y - driving_.car().pos.y) > 35.0)) t.blocked = false;
+  }
+}
+
+void App::drawTollBars(const Camera3D& cam) {
+  const rj::geo::Vec3d cp = rlToEnu(cam.position);
+  for (const TollPlaza& t : tolls_) {
+    if (std::hypot(t.pos.x - cp.x, t.pos.y - cp.y) > 350.0) continue;
+    for (int lane = 0; lane < 2; ++lane) {
+      const TollLane L = tollLane(t, lane);
+      const double hd = L.arm_hd * DEG2RAD;
+      const double up = t.bar[lane] * 80.0 * DEG2RAD;
+      const double len = std::hypot(L.tip.x - L.pivot.x, L.tip.y - L.pivot.y);
+      const double fx = std::sin(hd) * std::cos(up), fy = std::cos(hd) * std::cos(up), fz = std::sin(up);
+      // the bar machine on the island, then the arm in yellow and black
+      renderer_.drawBox({L.pivot.x, L.pivot.y, t.pos.z + 0.5}, static_cast<float>(hd), {0.18f, 0.18f, 0.5f}, 0, Color{230, 190, 30, 255});
+      const int n = 8;
+      for (int k = 0; k < n; ++k) {
+        const double m = (k + 0.5) * len / n;
+        renderer_.drawBox({L.pivot.x + fx * m, L.pivot.y + fy * m, L.pivot.z + fz * m}, static_cast<float>(hd), {0.04f, static_cast<float>(len / n * 0.5), 0.05f}, 0,
+                          k % 2 == 0 ? Color{240, 196, 20, 255} : Color{24, 24, 24, 255}, {0, 0, 0}, static_cast<float>(up));
+      }
+    }
+  }
+}
+
 void App::updateTolls() {
   if (tolls_.empty() || !driving_.active()) return;
   const Vehicle& v = driving_.car();
@@ -127,9 +212,12 @@ void App::updateTolls() {
   }
   for (size_t i = 0; i < tolls_.size(); ++i) {
     const TollPlaza& t = tolls_[i];
+    // read (and charged) on the way in, 5-16 m before the islands, so a refused card keeps the bar down
     const double th = t.heading * DEG2RAD, dx = v.pos.x - t.pos.x, dy = v.pos.y - t.pos.y;
     const double along = dx * std::sin(th) + dy * std::cos(th), across = dx * std::cos(th) - dy * std::sin(th);
-    if (std::fabs(along) > 4.5 || std::fabs(across) > t.width / 2 + 1.5 || std::fabs(v.pos.z - t.pos.z) > 4.0) continue;
+    const double going = std::sin(v.yaw) * std::sin(th) + std::cos(v.yaw) * std::cos(th) >= 0 ? 1.0 : -1.0;
+    const double ahead = -along * going;  // metres to the plaza centre in the car's direction
+    if (ahead < 5.0 || ahead > 16.0 || std::fabs(across) > t.width / 2 + 1.5 || std::fabs(v.pos.z - t.pos.z) > 4.0) continue;
     toll_last_ = static_cast<int>(i);
     if (toll_entry_ < 0) {
       toll_entry_ = static_cast<int>(i);
@@ -140,11 +228,14 @@ void App::updateTolls() {
       const double km = std::hypot(t.pos.x - e.pos.x, t.pos.y - e.pos.y) * 1.15 / 1000.0;
       const int64_t fare = static_cast<int64_t>(std::lround((150.0 + 24.6 * km) / 10.0)) * 10;
       if (ledger_ && ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare, clock_.unixUtc(),
-                                       tr("toll.company")) == rj::econ::TxResult::Ok)
+                                       tr("toll.company")) == rj::econ::TxResult::Ok) {
         toast(i18n_.f("toll.exit", {{"ic", t.name}, {"fare", withCommas(fare)}}));
-      else
-        toast(tr("rail.no_money"));
-      toll_entry_ = -1;
+        toll_entry_ = -1;
+      } else {
+        toast(i18n_.f("toll.no_money", {{"fare", withCommas(fare)}}));  // the bar stays down (back out, earn, come again)
+        tolls_[i].blocked = true;
+        tolls_[i].bar[0] = tolls_[i].bar[1] = 0.0f;
+      }
     }
     return;
   }

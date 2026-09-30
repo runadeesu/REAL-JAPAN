@@ -64,6 +64,17 @@ class Driving {
     impact_ = 0;
     return i;
   }
+  float takeDamageImpact() {  // (the same, for the damage model)
+    const float i = impact_dmg_;
+    impact_dmg_ = 0;
+    return i;
+  }
+  // fuel and damage (kept by the app): the engine's share of power, and whether it runs at all
+  void setEngine(float power_scale, bool running) {
+    power_scale_ = power_scale;
+    engine_on_ = running;
+  }
+  bool engineRunning() const { return engine_on_; }
   void enter(const Vehicle& v);           // take the wheel
   void enterParked() { active_ = has_car_; }
   rj::geo::Vec3d exitPosition() const;   // driver's door (right-hand drive)
@@ -102,7 +113,9 @@ class Driving {
   double shift_t_ = 0;
   double roll_ = 0, roll_v_ = 0, pitch_body_ = 0, pitch_v_ = 0;
   double slip_ = 0;
-  float throttle_ = 0, impact_ = 0;
+  float throttle_ = 0, impact_ = 0, impact_dmg_ = 0;
+  double power_scale_ = 1.0;
+  bool engine_on_ = true;
   rj::geo::Vec3d cam_pos_{};
   double cam_yaw_ = 0;
   bool cam_init_ = false;

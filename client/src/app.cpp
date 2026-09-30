@@ -109,6 +109,7 @@ bool App::boot() {
     if (fileExists(slice_dir_ / "shops.txt") && !shops_.load(slice_dir_ / "shops.txt", serr))
       TraceLog(LOG_WARNING, "RJ: shops disabled: %s", serr.c_str());
     if (fileExists(slice_dir_ / "tolls.txt")) loadTolls(slice_dir_ / "tolls.txt");
+    if (fileExists(slice_dir_ / "fuel.txt")) loadFuelStations(slice_dir_ / "fuel.txt");
   }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
@@ -216,6 +217,8 @@ void App::newGame() {
   player_ = Player{};
   inside_id_.clear();
   inventory_.clear();
+  life_ = Life{};
+  notes_.clear();
   shop_open_ = -1;
   player_.pos = world_.toLocal({m.spawn_lat, m.spawn_lon, 0.0});
   player_.yaw = static_cast<float>(m.spawn_heading * DEG2RAD);
@@ -253,6 +256,8 @@ bool App::saveSlot(int slot) {
   s.play_seconds = play_seconds_;
   s.interior = inside_id_;
   s.inventory = inventoryString();
+  s.life = lifeString();
+  s.notes = notesString();
   const bool ok = writeSave(slot, s);
   if (slot != kAutosaveSlot) toast(tr(ok ? "save.saved" : "save.failed"));
   return ok;
@@ -278,6 +283,8 @@ bool App::loadSlot(int slot) {
   player_account_ = ledger_->open(rj::econ::AccountKind::Person, "player");
   if (s->money > 0) ledger_->endow(player_account_, s->money, clock_.unixUtc(), "ロード時残高 / balance at load");
   parseInventory(s->inventory);
+  parseLife(s->life);
+  parseNotes(s->notes);
   play_seconds_ = s->play_seconds;
   autosave_timer_ = 0;
   session_t_ = 0;
@@ -314,6 +321,13 @@ void App::takeUserScreenshot() {
 }
 
 void App::applyLaunchOverrides() {
+  if (const char* e = std::getenv("RJ_LIFE")) {  // test aid: "umbrella,light,hungry,wet"
+    const std::string v = e;
+    life_.umbrella = v.find("umbrella") != std::string::npos;
+    life_.flashlight = v.find("light") != std::string::npos;
+    if (v.find("hungry") != std::string::npos) life_.hunger = 10.0f;
+    if (v.find("wet") != std::string::npos) life_.wet = 0.8f;
+  }
   if (opt_.has_pos) {
     player_.pos = world_.toLocal({opt_.lat, opt_.lon, 0.0});
     player_.snapToGround(world_);
@@ -346,6 +360,7 @@ void App::placeRoads() {
   if (aviation_.loaded()) aviation_.place(world_);
   if (shops_.loaded()) shops_.place(world_);
   for (auto& t : tolls_) t.pos = world_.toLocal(t.geo);
+  for (auto& f : fuel_stations_) f.pos = world_.toLocal(f.geo);
   // Large worlds (the island) stream: markings and the walk network cover the area around the player.
   const bool regional = world_.knownCount() > 8;
   const rj::geo::Vec3d c = in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0};
@@ -363,9 +378,7 @@ void App::placeRoads() {
 
 // ---------------------------------------------------------------------------
 void App::update(float dt) {
-#if defined(RJ_TOUCH)
-  touch::update();  // (before anything reads the keys or the mouse)
-#endif
+  input::update();  // (before anything reads the keys, the mouse or the controller)
   ui_.beginFrame();
   if (screen_ == Screen::Boot) return;  // boot happens after the first frame is shown
   if (screen_ == Screen::Fatal) {
@@ -412,6 +425,7 @@ void App::update(float dt) {
       v.yaw = static_cast<float>(hd);
       if (auto h = world_.roadHeight(v.pos.x, v.pos.y)) v.pos.z = *h;
       driving_.enter(v);
+      onEnterCar(v);
       player_.pos = v.pos;
     }
     // Streamed worlds: rebuild markings / walk network once the player has moved on and cells settled.
@@ -553,7 +567,7 @@ void App::update(float dt) {
     return;
   }
 
-  const bool want_lock = (screen_ == Screen::Game) && !till_.on && shop_open_ < 0;
+  const bool want_lock = (screen_ == Screen::Game) && !till_.on && shop_open_ < 0 && fuel_open_ < 0;
   if (want_lock != cursor_locked_) {
     if (want_lock) DisableCursor();
     else EnableCursor();
@@ -569,6 +583,8 @@ void App::update(float dt) {
     case Screen::Phone: {
       clock_.setTimeScale(settings_.time_scale);
       clock_.advanceReal(dt);
+      updateLife(dt);
+      updateCar(dt);
       play_seconds_ += dt;
       session_t_ += dt;
       autosave_timer_ += dt;
@@ -816,6 +832,7 @@ void App::update(float dt) {
         updateAviationActions();
         updateDriveActions();
         updateShopActions();
+        updateFuelStation();
         updateTolls();
         updateRideTest();
         updateActivities(dt);
@@ -827,7 +844,9 @@ void App::update(float dt) {
           hover_.reset();
           hover_walker_ = nullptr;
         }
-        if (IsKeyPressed(KEY_ESCAPE) && shop_open_ >= 0) {
+        if (IsKeyPressed(KEY_ESCAPE) && fuel_open_ >= 0) {
+          fuel_open_ = -1;
+        } else if (IsKeyPressed(KEY_ESCAPE) && shop_open_ >= 0) {
           shop_open_ = -1;
         } else if (IsKeyPressed(KEY_ESCAPE) && photo_mode_) {
           photo_mode_ = false;
@@ -1167,6 +1186,7 @@ void App::updateDriveActions() {
     Vehicle v;
     if (traffic_.take(best->id, v)) {
       driving_.enter(v);
+      onEnterCar(v);
       enter();
     }
   }
@@ -1254,6 +1274,69 @@ void App::runSelfTest() {
       in.throttle = 1;
       for (int k = 0; k < 90; ++k) d.update(1.0 / 60.0, world_, traffic_, in);
       check(d.car().v > 3.0 && d.rpm() > 1000.0f, "car accelerates (vehicle dynamics)");
+      // fuel and damage: an empty tank does not go, a damaged engine gives less
+      Driving e = d, f = d;
+      e.enter(v);
+      f.enter(v);
+      e.setEngine(1.0f, false);
+      f.setEngine(0.45f, true);
+      for (int k = 0; k < 90; ++k) {
+        e.update(1.0 / 60.0, world_, traffic_, in);
+        f.update(1.0 / 60.0, world_, traffic_, in);
+      }
+      const Life keep = life_;
+      life_.fuel = 0.5f;
+      life_.damage = 0.25f;
+      const bool costs = fuelCost() == 3500 && repairCost() == 45000;
+      life_ = keep;
+      check(e.car().v < 0.5 && f.car().v > 0.5 && f.car().v < d.car().v && costs, "no fuel, no drive; damage takes power away; fuel and repair prices");
+    }
+    {
+      // a game controller (scripted): the left stick walks, X is "use", RT drives, A clicks in menus
+      input::PadState pad;
+      input::injectPad(&pad);
+      const bool look0 = input::look();
+      input::setLook(true);
+      input::setPadMode(input::PadMode::Walk);
+      const auto p0 = player_.pos;
+      const float yaw0 = player_.yaw;
+      pad.ly = -1.0f;
+      for (int k = 0; k < 60; ++k) {
+        input::update();
+        player_.update(1.0f / 60.0f, world_, settings_, true, nullptr, nullptr);
+      }
+      const double moved = std::hypot(player_.pos.x - p0.x, player_.pos.y - p0.y);
+      pad.ly = 0.0f;
+      pad.rx = 0.6f;
+      for (int k = 0; k < 3; ++k) {
+        input::update();
+        player_.update(1.0f / 60.0f, world_, settings_, true, nullptr, nullptr);
+      }
+      const bool walked = moved > 0.5 && std::fabs(player_.yaw - yaw0) > 0.05f;
+      TraceLog(LOG_INFO, "RJ: pad test moved %.2f m, turned %.3f rad", moved, player_.yaw - yaw0);
+      pad = {};
+      input::update();
+      pad.x = true;
+      input::update();
+      const bool use = IsKeyPressed(KEY_E);
+      pad = {};
+      input::setPadMode(input::PadMode::Drive);
+      pad.rt = 1.0f;
+      input::update();
+      const bool accel = IsKeyDown(KEY_W);
+      pad = {};
+      input::setLook(false);
+      input::update();
+      pad.a = true;
+      input::update();
+      const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+      input::injectPad(nullptr);
+      input::setLook(look0);
+      input::update();
+      player_.pos = p0;
+      player_.yaw = yaw0;
+      TraceLog(LOG_INFO, "RJ: pad test walked %d use %d accel %d click %d (frame dt %.4f)", walked, use, accel, click, GetFrameTime());
+      check(walked && use && accel && click, "game controller: stick walks and looks, X uses, RT accelerates, A clicks in menus");
     }
     {
       Jobs j;
@@ -1266,6 +1349,26 @@ void App::runSelfTest() {
       check(paid, "walk-in shops listed; buying at a counter pays from the wallet and keeps the item");
     }
     check(saveSlot(3) && loadSlot(3) && (!shops_.loaded() || !inventory_.empty()), "save / load in the fictional world (with what was bought)");
+    {
+      // eating, the umbrella, hunger over the hours, and all of it kept in the save
+      const Life keep = life_;
+      const auto inv = inventory_;
+      life_.hunger = 20.0f;
+      life_.thirst = 50.0f;
+      inventory_["onigiri"] = 1;
+      inventory_["umbrella"] = 1;
+      const bool ate = useItem("onigiri") && std::fabs(life_.hunger - 50.0f) < 0.01f && !inventory_.count("onigiri");
+      const bool umb = useItem("umbrella") && life_.umbrella && inventory_.count("umbrella");
+      life_.last_unix = clock_.unixUtc() - 2 * 3600;
+      updateLife(0.0f);
+      const bool decay = std::fabs(life_.hunger - 38.0f) < 0.5f && std::fabs(life_.thirst - 32.0f) < 0.5f;
+      const std::string saved = lifeString();
+      parseLife(saved);
+      const bool kept = std::fabs(life_.hunger - 38.0f) < 0.5f && life_.umbrella;
+      life_ = keep;
+      inventory_ = inv;
+      check(ate && umb && decay && kept, "eating and using what was bought; hunger and thirst over the hours; kept in the save");
+    }
   }
   // Verified interior: enter through a real entrance, stand on a real floor, walls block.
   if (!fic) check(!world_.meta().interiors.empty(), "interior listed in slice");
@@ -1352,6 +1455,11 @@ Camera3D App::titleCamera() const {
 
 std::vector<PointLight> App::collectLights(const Camera3D& cam) const {
   std::vector<PointLight> out;
+  if (in_session_ && life_.flashlight && !driving_.active() && !flying_) {
+    // the flashlight: a warm pool of light a few metres ahead of the eye
+    const rj::geo::Vec3d f = player_.forwardEnu(), e = player_.eyeEnu();
+    out.push_back({enuToRl({e.x + f.x * 3.5, e.y + f.y * 3.5, e.z + f.z * 3.5 - 0.4}), 9.0f, Vector3{11.0f, 10.0f, 8.5f}});
+  }
   const rj::geo::Vec3d c = rlToEnu(cam.position);
   struct Cand {
     double d2;
@@ -1523,6 +1631,8 @@ void App::drawWorldView(const Camera3D& cam) {
       renderer_.drawGates(trains_, cam, gate_closed_t_ > 0.0f ? gate_closed_gate_ : -1, gate_closed_lane_, gate_flash_t_ > 0.0f ? gate_flash_gate_ : -1,
                           gate_flash_lane_, gate_flash_ok_);
     if (!trains_.crossings().empty()) renderer_.drawCrossings(trains_, cam, render_time_);
+    if (!tolls_.empty()) drawTollBars(cam);
+    if (shops_.loaded()) drawShopClerks(cam);
     if (world_.meta().fictional && in_session_) renderer_.drawDistantTraffic(traffic_, cam, lighting_, render_time_, jst().hour);
     renderer_.drawStationSigns(trains_, cam);
     renderer_.drawDepartureBoards(trains_, cam, render_time_);
@@ -1574,6 +1684,9 @@ void App::drawWorldView(const Camera3D& cam) {
   if (in_session_ && screen_ != Screen::Title && !deep && !photo_request_) drawWorldMarkers(cam);
   if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_)
     renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
+  if (in_session_ && life_.umbrella && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_ &&
+      inside_id_.empty() && !player_.fly)
+    renderer_.drawPlayerUmbrella(enuToRl(player_.pos), player_.yaw, player_.camera_mode == 0);
   renderer_.drawClearGlass(world_);
   renderer_.drawRain(cam, lighting_, render_time_, snowfall_);
   EndMode3D();
@@ -1643,10 +1756,11 @@ void App::draw() {
     default: break;
   }
   if (settings_.show_fps) ui_.textRight(i18n_.f("hud.fps", {{"n", std::to_string(GetFPS())}}), ui_.vw() - 20, 1040, 24, theme::kMuted);
+  updateInputContext();
 #if defined(RJ_TOUCH)
-  updateTouchControls();
-  if (screen_ == Screen::Game) touch::draw(ui_.hasFont() ? ui_.font() : GetFontDefault());
+  if (screen_ == Screen::Game && !input::padActive()) touch::draw(ui_.hasFont() ? ui_.font() : GetFontDefault());
 #endif
+  input::drawPointer();
 }
 
 // ---------------------------------------------------------------------------
@@ -1917,8 +2031,10 @@ void App::drawHud() {
 #endif
   const float vw = ui_.vw();
   drawActivityHud();
+  if (screen_ == Screen::Game) drawLifeHud();
   if (photo_mode_) return;  // viewfinder only
   drawShopMenu();
+  drawFuelMenu();
   const auto g = world_.toGeodetic(player_.pos);
   const auto t = jst();
   const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
@@ -1941,13 +2057,19 @@ void App::drawHud() {
   if (driving_.active() && screen_ == Screen::Game) {  // speedometer
     const double v = driving_.car().v;
     const std::string kmh = std::to_string(static_cast<int>(std::lround(std::fabs(v) * 3.6)));
-    ui_.panel({30, kHudPanelY, 400, 130}, Color{0, 0, 0, 140});
+    ui_.panel({30, kHudPanelY, 460, kTouchHud ? 122.0f : 146.0f}, Color{0, 0, 0, 140});
     ui_.text(kmh, 54, kHudPanelY + 12, 72, theme::kText);
     ui_.text("km/h", 64 + ui_.measure(kmh, 72), kHudPanelY + 54, 28, theme::kMuted);
     const int gear = driving_.gear();
     ui_.textRight(gear < 0 ? "R" : "D" + std::to_string(gear), 406, kHudPanelY + 12, 34, gear < 0 ? theme::kWarn : theme::kMuted);
     ui_.textRight(std::to_string(static_cast<int>(driving_.rpm() / 100.0f) * 100) + " rpm", 406, kHudPanelY + 54, 22, theme::kMuted);
-    if (!kTouchHud) ui_.text(tr("drive.help"), 54, kHudPanelY + 92, 20, theme::kMuted);
+    // fuel and damage (game values)
+    const float fuel = life_.fuel, dmg = life_.damage;
+    DrawRectangleRec(ui_.px({54, kHudPanelY + 96, 200, 10}), Color{50, 50, 56, 255});
+    DrawRectangleRec(ui_.px({54, kHudPanelY + 96, 200 * fuel, 10}), fuel < 0.1f ? theme::kWarn : theme::kGood);
+    ui_.text(i18n_.f("car.hud", {{"fuel", std::to_string(static_cast<int>(fuel * 100))}, {"damage", std::to_string(static_cast<int>(dmg * 100))}}), 266, kHudPanelY + 88,
+             20, dmg > 0.5f ? theme::kWarn : theme::kMuted);
+    if (!kTouchHud) ui_.text(tr("drive.help"), 54, kHudPanelY + 116, 20, theme::kMuted);
   }
   if (screen_ == Screen::Game && aim_icon_ != AimIcon::None) {
     // what the crosshair offers: a ring round it and a word beside it (E or click)
@@ -1959,7 +2081,7 @@ void App::drawHud() {
     const float lx = vw / 2 + 26, ly = ui_.vh() / 2 - 14;
     if (!blocked) {
       ui_.panel({lx, ly, 34, 30}, Color{255, 255, 255, 40});
-      ui_.textCentered("E", lx + 17, ly + 2, 22, theme::kText);
+      ui_.textCentered(input::padActive() ? "X" : "E", lx + 17, ly + 2, 22, theme::kText);
     }
     ui_.text(aim_label_, lx + (blocked ? 0 : 44), ly + 2, 22, blocked ? theme::kMuted : theme::kText);
   }
@@ -1978,9 +2100,9 @@ void App::drawHud() {
     }
     if (session_t_ < 20.0f && screen_ == Screen::Game)
 #if defined(RJ_TOUCH)
-      ui_.textCentered(tr("hud.controls_touch"), vw / 2, 1030, 22,
+      ui_.textCentered(tr(input::padActive() ? "hud.controls_pad" : "hud.controls_touch"), vw / 2, 1030, 22,
 #else
-      ui_.textCentered(tr("hud.controls_short"), vw / 2, 1030, 22,
+      ui_.textCentered(tr(input::padActive() ? "hud.controls_pad" : "hud.controls_short"), vw / 2, 1030, 22,
 #endif
                        Color{255, 255, 255, static_cast<unsigned char>(std::min(1.0f, (20.0f - session_t_) / 3.0f) * 190)});
     return;
@@ -2259,9 +2381,11 @@ void App::drawPhone() {
                              {"phone.wallet", PhoneApp::Wallet, Color{200, 140, 30, 255}},
                              {"phone.town", PhoneApp::Town, Color{170, 60, 150, 255}},
                              {"phone.work", PhoneApp::Work, Color{210, 80, 40, 255}},
-                             {"phone.hobby", PhoneApp::Hobby, Color{40, 150, 170, 255}}};
-      const float bw = (cw - 20) / 2, bh = 100;
-      for (int i = 0; i < 6; ++i) {
+                             {"phone.hobby", PhoneApp::Hobby, Color{40, 150, 170, 255}},
+                             {"phone.bag", PhoneApp::Bag, Color{110, 90, 60, 255}},
+                             {"phone.flat", PhoneApp::Flat, Color{90, 110, 140, 255}}};
+      const float bw = (cw - 20) / 2, bh = 78;
+      for (int i = 0; i < 8; ++i) {
         const Rectangle r{cx + (i % 2) * (bw + 20), yy + (i / 2) * (bh + 20), bw, bh};
         DrawRectangleRounded(ui_.px(r), 0.2f, 8, apps[i].c);
         if (ui_.hovered(r)) DrawRectangleRoundedLinesEx(ui_.px(r), 0.2f, 8, 3 * ui_.scale(), WHITE);
@@ -2271,7 +2395,7 @@ void App::drawPhone() {
           phone_app_ = apps[i].app;
         }
       }
-      yy += 3 * (bh + 20) + 10;
+      yy += 4 * (bh + 20) + 10;
       if (ui_.button({cx, yy, cw, 64}, tr("phone.settings"), true, 28)) {
         settings_return_ = Screen::Phone;
         screen_ = Screen::Settings;
@@ -2324,6 +2448,13 @@ void App::drawPhone() {
       const auto sun = rj::env::sunPosition(clock_.unixUtc(), g.lat_deg, g.lon_deg);
       yy += ui_.textWrapped(i18n_.f("phone.clock_sun", {{"el", fixed(sun.elevation_deg, 1)}, {"az", fixed(sun.azimuth_deg, 0)}}), cx, yy, cw, 24, theme::kText) + 12;
       ui_.textWrapped(tr("phone.clock_weather"), cx, yy, cw, 22, theme::kWarn);
+      back();
+      break;
+    }
+    case PhoneApp::Bag: {
+      ui_.text(tr("phone.bag"), cx, yy, 32, theme::kText);
+      yy += 56;
+      drawBag(cx, yy, cw);
       back();
       break;
     }

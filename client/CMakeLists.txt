@@ -87,11 +87,15 @@ set(RJ_SOURCES
   src/app_sound.cpp
   src/app_transit.cpp
   src/app_shop.cpp
+  src/app_life.cpp
+  src/app_car.cpp
   src/render/aircraft.cpp
   src/render/trains.cpp
   src/game/traffic.cpp
   src/ui/ui.cpp
   src/audio/audio.cpp
+  src/platform/input.cpp
+  src/app_input.cpp
 )
 if(WIN32)
   list(APPEND RJ_SOURCES res/realjapan.rc)
@@ -100,13 +104,13 @@ endif()
 if(ANDROID)
   # NativeActivity loads libmain.so (raylib's android_main calls main()); the game data is read
   # straight from the APK (platform/paths.cpp)
-  list(APPEND RJ_SOURCES src/platform/touch.cpp src/app_touch.cpp)
+  list(APPEND RJ_SOURCES src/platform/touch.cpp)
   add_library(RealJapan SHARED ${RJ_SOURCES})
   set_target_properties(RealJapan PROPERTIES OUTPUT_NAME main)
   target_link_libraries(RealJapan PRIVATE android log EGL GLESv3 OpenSLES)
 else()
   if(RJ_GLES)
-    list(APPEND RJ_SOURCES src/platform/touch.cpp src/app_touch.cpp)
+    list(APPEND RJ_SOURCES src/platform/touch.cpp)
   endif()
   add_executable(RealJapan WIN32 ${RJ_SOURCES})
 endif()
@@ -114,9 +118,11 @@ target_include_directories(RealJapan PRIVATE src)
 target_link_libraries(RealJapan PRIVATE rjcore raylib)
 if(RJ_GLES)
   target_compile_definitions(RealJapan PRIVATE RJ_GLES=1 RJ_TOUCH=1)
-  # every client source sees the touch-control shim (keys and mouse from the on-screen controls)
-  target_compile_options(RealJapan PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/touch_shim.hpp)
 endif()
+# every client source sees the input shim (keys and mouse also from a game controller and the
+# on-screen touch controls); paths.cpp must not see raylib.h (windows.h clashes)
+target_compile_options(RealJapan PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-include${CMAKE_CURRENT_SOURCE_DIR}/src/platform/input_shim.hpp>)
+set_source_files_properties(src/platform/paths.cpp PROPERTIES COMPILE_DEFINITIONS RJ_NO_INPUT_SHIM=1)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(RealJapan PRIVATE -Wall -Wextra)
 endif()

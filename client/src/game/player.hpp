@@ -20,6 +20,7 @@ struct Player {
   float pitch = 0.0f;  // radians, + looks up
   bool fly = false;
   bool grounded = false;
+  bool can_run = true;  // (hungry or thirsty to the bottom: walking only)
   int camera_mode = 0;  // 0 = first person, 1 = third person
   double distance_walked = 0.0;
   float auto_forward_s = 0.0f;  // scripted forward walking (tests / demos)

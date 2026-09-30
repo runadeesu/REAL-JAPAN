@@ -1,4 +1,4 @@
-// On-screen touch controls (Android). In look mode (the desktop's captured mouse) a finger on the
+// On-screen touch controls (Android), behind platform/input.cpp. In look mode (the desktop's captured mouse) a finger on the
 // left half is a floating joystick (W/A/S/D, pushed to the rim also Shift), a finger on the right
 // half turns the view, a short tap there is a click (the crosshair's "use"), and the buttons on the
 // right stand for keys. Outside look mode the first finger is simply the mouse pointer.
@@ -9,16 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "platform/touch_shim.hpp"
-
-#undef IsKeyDown
-#undef IsKeyPressed
-#undef IsMouseButtonDown
-#undef IsMouseButtonPressed
-#undef GetMouseDelta
-#undef GetMouseWheelMove
-#undef DisableCursor
-#undef EnableCursor
+#include "platform/input_internal.hpp"
+#include "platform/input_shim.hpp"
 
 namespace rjc::touch {
 namespace {
@@ -43,10 +35,10 @@ struct Placed {
 };
 
 constexpr int kKeys = 400;
-std::vector<Finger> fingers;
+std::vector<Finger> fingers_;
 std::vector<Placed> buttons;
 bool look_mode = false;
-bool down[kKeys] = {}, prev[kKeys] = {};
+bool held_[kKeys] = {}, prev[kKeys] = {};
 Vector2 look_delta{};
 bool tap = false;
 bool stick_on = false;
@@ -94,29 +86,19 @@ void setButtons(const Button* b, int n) {
   for (int i = 0; same && i < n; ++i) same = buttons[i].key == b[i].key && buttons[i].label == b[i].label;
   if (same) return;
   // a finger holding a button that goes away lets go of it
-  for (auto& f : fingers)
+  for (auto& f : fingers_)
     if (f.role == Role::Button) f.button = -1;
   buttons.clear();
   for (int i = 0; i < n; ++i) buttons.push_back({b[i].key, b[i].label ? b[i].label : "", {}, 0});
 }
 
-void setLook(bool on) {
-  if (on == look_mode) return;
-  look_mode = on;
-#if !defined(__ANDROID__)
-  if (on) DisableCursor();  // (the test build keeps the desktop's mouse capture)
-  else EnableCursor();
-#endif
-  // fingers keep the role they started with until they lift, except pointers entering look mode
-  for (auto& f : fingers)
-    if (on && f.role == Role::Pointer) f.role = Role::Look;
-}
-
-bool look() { return look_mode; }
-
-void update() {
-  std::copy(std::begin(down), std::end(down), std::begin(prev));
-  std::fill(std::begin(down), std::end(down), false);
+void update(bool look) {
+  if (look && !look_mode)  // fingers already down keep going, as look fingers
+    for (auto& f : fingers_)
+      if (f.role == Role::Pointer) f.role = Role::Look;
+  look_mode = look;
+  std::copy(std::begin(held_), std::end(held_), std::begin(prev));
+  std::fill(std::begin(held_), std::end(held_), false);
   look_delta = {};
   tap = false;
   pinch_wheel = 0;
@@ -135,9 +117,9 @@ void update() {
   if (n == 0 && look_mode && IsKeyDown(KEY_LEFT_ALT) && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
     // (test: Alt+drag is a finger on the screen while the mouse is captured)
     static Vector2 virt{};
-    static bool held = false;
-    if (!held) virt = GetMousePosition();
-    held = true;
+    static double last = -1;
+    if (GetTime() - last > 0.2) virt = GetMousePosition();
+    last = GetTime();
     const Vector2 d = GetMouseDelta();
     virt.x += d.x;
     virt.y += d.y;
@@ -145,11 +127,11 @@ void update() {
   }
 #endif
 
-  for (auto& f : fingers) f.seen = false;
+  for (auto& f : fingers_) f.seen = false;
   const double now = GetTime();
   for (const Pt& t : pts) {
-    auto it = std::find_if(fingers.begin(), fingers.end(), [&](const Finger& f) { return f.id == t.id; });
-    if (it == fingers.end()) {
+    auto it = std::find_if(fingers_.begin(), fingers_.end(), [&](const Finger& f) { return f.id == t.id; });
+    if (it == fingers_.end()) {
       Finger f;
       f.id = t.id;
       f.start = f.last = t.p;
@@ -167,8 +149,8 @@ void update() {
       } else {
         f.role = Role::Look;
       }
-      fingers.push_back(f);
-      it = std::prev(fingers.end());
+      fingers_.push_back(f);
+      it = std::prev(fingers_.end());
     }
     Finger& f = *it;
     f.seen = true;
@@ -198,14 +180,14 @@ void update() {
         break;
       }
       case Role::Button:
-        if (f.button >= 0 && f.button < static_cast<int>(buttons.size())) down[buttons[f.button].key] = true;
+        if (f.button >= 0 && f.button < static_cast<int>(buttons.size())) held_[buttons[f.button].key] = true;
         break;
       case Role::Pointer:
         break;
     }
   }
   // lifted fingers
-  for (auto it = fingers.begin(); it != fingers.end();) {
+  for (auto it = fingers_.begin(); it != fingers_.end();) {
     if (it->seen) {
       ++it;
       continue;
@@ -215,15 +197,15 @@ void update() {
       stick_vec = {};
     }
     if (it->role == Role::Look && it->moved < 22.0f * scale() && now - it->t0 < 0.35) tap = true;
-    it = fingers.erase(it);
+    it = fingers_.erase(it);
   }
   if (stick_on) {
     const float x = stick_vec.x, y = stick_vec.y;
-    if (y < -0.38f) down[KEY_W] = true;
-    if (y > 0.38f) down[KEY_S] = true;
-    if (x < -0.38f) down[KEY_A] = true;
-    if (x > 0.38f) down[KEY_D] = true;
-    if (std::hypot(x, y) > 1.15f) down[KEY_LEFT_SHIFT] = true;  // pushed to the rim: run
+    if (y < -0.38f) held_[KEY_W] = true;
+    if (y > 0.38f) held_[KEY_S] = true;
+    if (x < -0.38f) held_[KEY_A] = true;
+    if (x > 0.38f) held_[KEY_D] = true;
+    if (std::hypot(x, y) > 1.15f) held_[KEY_LEFT_SHIFT] = true;  // pushed to the rim: run
   }
   // two fingers outside look mode: pinch = mouse wheel (zooms the phone's map)
   if (!look_mode && pts.size() == 2) {
@@ -239,52 +221,12 @@ void update() {
   }
 }
 
-bool keyDown(int key) {
-  if (key >= 0 && key < kKeys && down[key]) return true;
-  if (key == KEY_ESCAPE && IsKeyDown(KEY_BACK)) return true;
-  return IsKeyDown(key);
-}
-
-bool keyPressed(int key) {
-  if (key >= 0 && key < kKeys && down[key] && !prev[key]) return true;
-  if (key == KEY_ESCAPE && IsKeyPressed(KEY_BACK)) return true;  // the Android back button
-  return IsKeyPressed(key);
-}
-
-bool mouseDown(int button) {
-  if (look_mode) {
-#if defined(__ANDROID__)
-    return false;
-#else
-    return !IsKeyDown(KEY_LEFT_ALT) && IsMouseButtonDown(button);
-#endif
-  }
-  return IsMouseButtonDown(button);
-}
-
-bool mousePressed(int button) {
-  if (look_mode) {
-    if (button == MOUSE_BUTTON_LEFT && tap) return true;
-#if defined(__ANDROID__)
-    return false;
-#else
-    return !IsKeyDown(KEY_LEFT_ALT) && IsMouseButtonPressed(button);
-#endif
-  }
-  return IsMouseButtonPressed(button);
-}
-
-Vector2 mouseDelta() {
-#if defined(__ANDROID__)
-  return look_mode ? look_delta : GetMouseDelta();
-#else
-  if (look_mode && IsKeyDown(KEY_LEFT_ALT)) return look_delta;
-  const Vector2 m = GetMouseDelta();
-  return {m.x + look_delta.x, m.y + look_delta.y};
-#endif
-}
-
-float wheel() { return GetMouseWheelMove() + pinch_wheel; }
+bool down(int key) { return key >= 0 && key < kKeys && held_[key]; }
+bool pressed(int key) { return key >= 0 && key < kKeys && held_[key] && !prev[key]; }
+bool tapped() { return tap; }
+Vector2 lookDelta() { return look_delta; }
+float pinchWheel() { return pinch_wheel; }
+bool fingers() { return !fingers_.empty(); }
 
 void draw(const Font& font) {
   if (!look_mode) return;
@@ -299,7 +241,7 @@ void draw(const Font& font) {
   DrawCircleV({base.x + kx * r, base.y + ky * r}, r * 0.42f, Color{255, 255, 255, static_cast<unsigned char>(stick_on ? 140 : 60)});
   // buttons
   for (const auto& b : buttons) {
-    const bool held = b.key >= 0 && b.key < kKeys && down[b.key];
+    const bool held = b.key >= 0 && b.key < kKeys && held_[b.key];
     DrawCircleV(b.c, b.r, held ? Color{214, 0, 40, 170} : Color{12, 14, 20, 120});
     DrawCircleLinesV(b.c, b.r, Color{255, 255, 255, 150});
     const float fs = b.r * (b.label.size() > 9 ? 0.34f : 0.44f);

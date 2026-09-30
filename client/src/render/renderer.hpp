@@ -135,6 +135,10 @@ class Renderer {
   void drawGates(const Trains& trains, const Camera3D& cam, int shut_gate, int shut_lane, int flash_gate, int flash_lane, bool flash_ok);
   // Level crossings: the barrier arms (raised / lowered) and the warning lamps flashing in turn.
   void drawCrossings(const Trains& trains, const Camera3D& cam, float time_s);
+  // the player's open umbrella (first person: held a little forward and to the side, the canopy
+  // over the head) and people standing still (shop clerks)
+  void drawPlayerUmbrella(const Vector3& feet, float yaw_rad, bool first_person);
+  void drawStandingPerson(const Vector3& feet, float yaw_rad, int variant, Color shirt, Color pants);
   // Traffic beyond the simulated vehicles (which exist only near the player): cars moving along the
   // road graph out to a few km, drawn cheaply (small boxes by day, head / tail lights at night).
   // Density by the hour and the road's width (a game assumption).

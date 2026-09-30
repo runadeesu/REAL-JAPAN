@@ -777,6 +777,35 @@ void Renderer::drawPlayerBody(const Vector3& feet, float yaw_rad) {
   rlEnableBackfaceCulling();
 }
 
+void Renderer::drawPlayerUmbrella(const Vector3& feet, float yaw_rad, bool first_person) {
+  humans_.build();
+  setI(lit_, "materialOverride", -1);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "surfaceMode", 0);
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  rlDisableBackfaceCulling();
+  // (first person the shaft would run past the eye: the hand holds it forward and to the right)
+  const Matrix off = first_person ? MatrixTranslate(0.16f, 0.0f, -0.22f) : MatrixIdentity();
+  const Matrix M = MatrixMultiply(MatrixMultiply(off, MatrixRotateY(-yaw_rad)), MatrixTranslate(feet.x, feet.y, feet.z));
+  set3(lit_, "partTop", Vector3{0.88f, 0.9f, 0.92f});  // a clear vinyl one, as most in Tokyo
+  DrawMesh(humans_.umbrella(), mat_, M);
+  ++draw_calls_;
+  rlEnableBackfaceCulling();
+}
+
+void Renderer::drawStandingPerson(const Vector3& feet, float yaw_rad, int variant, Color shirt, Color pants) {
+  humans_.build();
+  setI(lit_, "materialOverride", -1);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "surfaceMode", 0);
+  rlDisableBackfaceCulling();
+  const Matrix M = MatrixMultiply(MatrixRotateY(-yaw_rad), MatrixTranslate(feet.x, feet.y, feet.z));
+  drawHuman(humans_.frame(static_cast<BodyVariant>(variant % static_cast<int>(BodyVariant::Count)), 0.0f, true), M, shirt, pants,
+            Color{222, 186, 150, 255}, Color{28, 22, 20, 255});
+  rlEnableBackfaceCulling();
+}
+
 void Renderer::drawInterior(const Interior& in) {
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;

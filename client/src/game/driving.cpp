@@ -94,6 +94,7 @@ void Driving::step(double h, const DriveInput& in_raw, double mu) {
   double brake = reverse_ ? in.throttle : in.brake;
   if (!reverse_ && vx_ < -0.5 && in.throttle > 0) brake = 1, throttle = 0;  // rolling back: brake first
   if (reverse_ && vx_ > 0.5 && in.brake > 0) brake = 1, throttle = 0;
+  throttle *= engine_on_ ? power_scale_ : 0.0;  // (a damaged engine gives less; no fuel, none)
   // --- steering: rate-limited, less lock at speed (keyboard), self-centring
   const double v = std::hypot(vx_, vy_);
   const double lock = S.steer_max / (1.0 + v * v / 260.0);
@@ -244,6 +245,7 @@ void Driving::collide(const World& world, const Traffic& traffic, const rj::geo:
   const double vn = wx * nx + wy * ny;
   if (vn < 0) {
     impact_ = std::max(impact_, static_cast<float>(-vn));
+    impact_dmg_ = std::max(impact_dmg_, static_cast<float>(-vn));
     wx -= 1.25 * vn * nx;
     wy -= 1.25 * vn * ny;
     const double tx = wx - (wx * nx + wy * ny) * nx, ty = wy - (wx * nx + wy * ny) * ny;

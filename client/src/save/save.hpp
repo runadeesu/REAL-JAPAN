@@ -22,6 +22,8 @@ struct SaveGame {
   double play_seconds = 0.0;
   std::string interior;  // id of the interior the player is in (empty = outside)
   std::string inventory;  // things bought in shops: "item:count;item:count"
+  std::string life;       // the body and belongings: "key:value;..." (hunger, thirst, umbrella, car fuel, home ...)
+  std::string notes;      // the notebook's lines, "|"-separated
 };
 
 constexpr int kAutosaveSlot = 0;

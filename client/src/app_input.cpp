@@ -1,5 +1,5 @@
-// Touch builds (Android): the on-screen buttons for the situation at hand. The joystick (W/A/S/D,
-// Shift at the rim), turning the view and tapping (a click) are always there in look mode.
+// What the controller's buttons and (touch builds) the on-screen buttons stand for in the situation
+// at hand. The sticks / joystick, looking and "use" work the same everywhere (platform/input.cpp).
 
 #include <string>
 #include <utility>
@@ -9,10 +9,21 @@
 
 namespace rjc {
 
-void App::updateTouchControls() {
+void App::updateInputContext() {
+  const bool menu = screen_ != Screen::Game || shop_open_ >= 0 || fuel_open_ >= 0 || till_.on;
+  input::PadMode m = input::PadMode::Walk;
+  if (menu) m = input::PadMode::Menu;
+  else if (flying_) m = input::PadMode::Fly;
+  else if (drive_train_ >= 0) m = input::PadMode::Train;
+  else if (driving_.active()) m = input::PadMode::Drive;
+  else if (photo_mode_) m = input::PadMode::Photo;
+  else if (fish_.stage > 0) m = input::PadMode::Fish;
+  input::setPadMode(m);
+
+#if defined(RJ_TOUCH)
   std::vector<std::pair<int, std::string>> keys;
   auto add = [&](int key, const char* name) { keys.push_back({key, tr(std::string("touch.") + name)}); };
-  if (screen_ == Screen::Game && shop_open_ < 0 && !till_.on) {
+  if (!menu) {
     add(KEY_E, "use");
     if (flying_) {
       add(KEY_SPACE, "brake");
@@ -30,8 +41,9 @@ void App::updateTouchControls() {
       add(KEY_SPACE, "handbrake");
       add(KEY_H, "horn");
       add(KEY_V, "view");
+      if (nearFuelStation()) add(KEY_F, "refuel");
     } else if (photo_mode_) {
-      // (E takes the picture; pinch is not available in look mode, the phone's camera zooms with the wheel)
+      // (E takes the picture)
     } else if (fish_.stage > 0) {
       add(KEY_SPACE, "reel");
     } else if (ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0) {
@@ -49,6 +61,7 @@ void App::updateTouchControls() {
   std::vector<touch::Button> b;
   for (const auto& [k, label] : keys) b.push_back({k, label.c_str()});
   touch::setButtons(b.data(), static_cast<int>(b.size()));
+#endif
 }
 
 }  // namespace rjc

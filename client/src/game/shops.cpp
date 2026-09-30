@@ -58,8 +58,8 @@ const std::vector<ShopItem>& Shops::menu(const std::string& kind) {
   static const std::vector<ShopItem> konbini = {{"onigiri", 160}, {"sandwich", 330}, {"bento", 560},
                                                 {"green_tea", 150}, {"coffee_can", 140}, {"ice_cream", 180}};
   static const std::vector<ShopItem> cafe = {{"blend", 420}, {"latte", 480}, {"tea", 450}, {"cake", 520}, {"toast", 380}};
-  static const std::vector<ShopItem> general = {{"umbrella", 700}, {"batteries", 420}, {"notebook", 210},
-                                                {"towel", 600}, {"toothbrush", 260}};
+  static const std::vector<ShopItem> general = {{"umbrella", 700}, {"flashlight", 980}, {"batteries", 420},
+                                                {"notebook", 210}, {"towel", 600},      {"toothbrush", 260}};
   if (kind == "konbini") return konbini;
   if (kind == "cafe") return cafe;
   return general;
