@@ -13,6 +13,8 @@
 //  * collisions with buildings and other vehicles bounce the car off (restitution, friction)
 // The numbers are generic values for each class of car, not any real model's specification.
 
+#include <vector>
+
 #include "game/traffic.hpp"
 #include "raylib.h"
 
@@ -76,12 +78,15 @@ class Driving {
     cam_pos_ = X.apply(cam_pos_);
   }
   void update(double dt, const World& world, const Traffic& traffic, const DriveInput& in, float wetness = 0.0f);
+  // walls that are not in the cells (lowered level crossing barriers), 6 floats each
+  void setExtraWalls(const std::vector<float>* walls) { extra_walls_ = walls; }
   // chase camera (smoothed) or the driver's eye; look offsets from the mouse
   Camera3D camera(float fov, bool first_person, float look_yaw, float look_pitch) const;
   rj::geo::Vec3d driverEye() const;
   Camera3D rearCamera() const;  // looking back from the rear of the roof (mirror view)
 
  private:
+  const std::vector<float>* extra_walls_ = nullptr;
   void step(double h, const DriveInput& in, double mu);
   void collide(const World& world, const Traffic& traffic, const rj::geo::Vec3d& before);
   void updateCamera(double dt);

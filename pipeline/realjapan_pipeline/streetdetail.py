@@ -43,7 +43,7 @@ from shapely.prepared import prep
 # Material ids shared with the client shader (client/src/render/materials.hpp).
 MAT = {"curb": 1, "sidewalk": 2, "tactile": 3, "marking": 4, "metal": 5, "metal_dark": 6, "sign": 7,
        "manhole": 8, "grating": 9, "lamp": 10, "glass": 11, "concrete": 12, "fence": 13, "bronze": 14,
-       "island": 15, "water": 16, "canopy": 17, "asphalt": 18, "ballast": 19}
+       "island": 15, "water": 16, "canopy": 17, "asphalt": 18, "ballast": 19, "glass_clear": 40}
 
 
 

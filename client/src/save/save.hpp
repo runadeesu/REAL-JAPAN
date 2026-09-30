@@ -21,6 +21,7 @@ struct SaveGame {
   int64_t money = 0;
   double play_seconds = 0.0;
   std::string interior;  // id of the interior the player is in (empty = outside)
+  std::string inventory;  // things bought in shops: "item:count;item:count"
 };
 
 constexpr int kAutosaveSlot = 0;

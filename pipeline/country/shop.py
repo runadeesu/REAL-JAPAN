@@ -51,7 +51,9 @@ def plan(fp: Polygon, front, ground: float, rng):
     return dict(ring=ring, ground=ground, front_edge=bi, kind=kind, fascia=fascia, seed=int(rng.integers(1 << 30)))
 
 
-def build(geos, ex, xf, shop) -> None:
+def build(geos, ex, xf, shop):
+    """Builds the shop floor; returns where its counter is (country frame: kind, counter x/y, the
+    customer's spot x/y, floor height), or None when the room is too small to fit out."""
     from .specials import _box_d, _dquad
     ring, g = shop["ring"], shop["ground"]
     n = len(ring)
@@ -108,8 +110,9 @@ def build(geos, ex, xf, shop) -> None:
                 if s1 - s0 < 0.05:
                     continue
                 q0, q1 = a + u * s0, a + u * s1
-                # (the panes are left open: the renderer has no see-through glass, and the lit shop
-                # seen through the window is what a shop front looks like; the collision wall stays)
+                # see-through panes (drawn blended after the opaque scene: the lit shop shows through)
+                quad("glass_clear", [(q0[0], q0[1], g + 0.40), (q1[0], q1[1], g + 0.40), (q1[0], q1[1], g + 2.72), (q0[0], q0[1], g + 2.72)],
+                     (200, 215, 225, 255))
                 quad("metal", [(q0[0], q0[1], g), (q1[0], q1[1], g), (q1[0], q1[1], g + 0.35), (q0[0], q0[1], g + 0.35)], (120, 124, 130, 255))
                 quad("metal", [(q0[0], q0[1], g + 0.35), (q1[0], q1[1], g + 0.35), (q1[0], q1[1], g + 0.40), (q0[0], q0[1], g + 0.40)], (96, 100, 106, 255))
                 wall(q0[0], q0[1], q1[0], q1[1], g - 0.3, g + 2.8)
@@ -123,6 +126,8 @@ def build(geos, ex, xf, shop) -> None:
                     q = a + u * (s0 + e) - nrm * 0.05
                     _box_d(geos, "metal", P(q[0], q[1], g + 1.25), (0.03, 0.03, 1.2), (150, 154, 160, 255))
                 q0, q1 = a + u * s0 - nrm * 0.05, a + u * (s0 + 0.85) - nrm * 0.05
+                quad("glass_clear", [(q0[0], q0[1], g + 0.12), (q1[0], q1[1], g + 0.12), (q1[0], q1[1], g + 2.38), (q0[0], q0[1], g + 2.38)],
+                     (200, 215, 225, 255))
                 quad("metal", [(q0[0], q0[1], g + 0.05), (q1[0], q1[1], g + 0.05), (q1[0], q1[1], g + 0.12), (q0[0], q0[1], g + 0.12)], (150, 154, 160, 255))
                 quad("metal", [(q0[0], q0[1], g + 2.38), (q1[0], q1[1], g + 2.38), (q1[0], q1[1], g + 2.45), (q0[0], q0[1], g + 2.45)], (150, 154, 160, 255))
             m0, m1, m2, m3 = a + u * d0 - nrm * 0.2, a + u * d1 - nrm * 0.2, a + u * d1 - nrm * 1.4, a + u * d0 - nrm * 1.4
@@ -147,7 +152,11 @@ def build(geos, ex, xf, shop) -> None:
     us, vs = (pts - a) @ u, (pts - a) @ v
     u0, u1, v0, v1 = float(us.min()) + 0.4, float(us.max()) - 0.4, max(0.0, float(vs.min())) + 1.8, float(vs.max()) - 0.5
     if u1 - u0 < 2.5 or v1 - v0 < 1.5:
-        return
+        return None
+
+    def cpt(uu, vv):  # (country frame, 2D)
+        q = a + u * uu + v * vv
+        return float(q[0]), float(q[1])
 
     def at(uu, vv, z):
         q = a + u * uu + v * vv
@@ -171,6 +180,7 @@ def build(geos, ex, xf, shop) -> None:
         obox("lamp", (u0 + u1) / 2, v1 - 0.35, zf + 1.0, (u1 - u0) / 2, 0.3, 1.0, (215, 235, 245, 255))
         owall(u0, v1 - 0.7, u1, v1 - 0.7, 2.0)
         cu = u0 + 1.4
+        till = (cpt(cu, v0 - 0.9), cpt(cu, v0 + 0.15))
         obox("metal", cu, v0 - 0.9, zf + 0.5, 1.1, 0.35, 0.5, (200, 200, 196, 255))
         obox("metal_dark", cu + 0.6, v0 - 0.9, zf + 1.1, 0.18, 0.15, 0.1, (40, 44, 50, 255))
         owall(cu - 1.1, v0 - 0.55, cu + 1.1, v0 - 0.55, 1.1)
@@ -186,6 +196,7 @@ def build(geos, ex, xf, shop) -> None:
                 owall(ur, gv0, ur, gv1, 1.4)
     elif kind == "cafe":
         cu = u1 - 1.2
+        till = (cpt(cu, (v0 + v1) / 2), cpt(cu - 1.05, (v0 + v1) / 2))
         obox("metal_dark", cu, (v0 + v1) / 2, zf + 0.55, 0.45, (v1 - v0) / 2 - 0.2, 0.55, (70, 50, 36, 255))  # counter
         owall(cu - 0.45, v0, cu - 0.45, v1, 1.1)
         for uu in np.arange(u0 + 0.9, cu - 1.4, 1.8):
@@ -205,6 +216,7 @@ def build(geos, ex, xf, shop) -> None:
                 _goods(geos, at, rng, uu + side * 0.16, side, v0 + 0.05, v1 - 0.05, zf + zz)
             owall(uu, v0, uu, v1, 1.8)
         obox("metal_dark", (u0 + u1) / 2, v1 - 0.5, zf + 0.5, min(1.4, (u1 - u0) / 3), 0.3, 0.5, (100, 80, 60, 255))
+        till = (cpt((u0 + u1) / 2, v1 - 0.5), cpt((u0 + u1) / 2, v1 - 1.4))
         owall((u0 + u1) / 2 - 1.4, v1 - 0.8, (u0 + u1) / 2 + 1.4, v1 - 0.8, 1.0)
     # ceiling lights
     for uu in np.arange(u0 + 1.0, u1 - 0.5, 2.6):
@@ -213,6 +225,7 @@ def build(geos, ex, xf, shop) -> None:
     # (the lamp source at mid height: from just under the ceiling it would burn a hot spot into it)
     c = at((u0 + u1) / 2, (v0 + v1) / 2, zf + 1.5)
     ex.lights.append(((c[0], c[1], c[2]), max(6.0, math.hypot(u1 - u0, v1) * 0.6), 3))
+    return dict(kind=kind, counter=till[0], stand=till[1], z=float(zf))
 
 
 # packaging colours (generic: no brands or labels)

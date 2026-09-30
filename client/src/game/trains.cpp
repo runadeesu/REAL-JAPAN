@@ -295,6 +295,18 @@ void Trains::chooseNextStop(Train& t) const {
   t.next_stop = pick;
 }
 
+void Trains::markObstacles(const std::vector<rj::geo::Vec3d>& pts) {
+  for (auto& c : crossings_) {
+    c.obstacle = false;
+    const double th = c.road_hd * 3.14159265358979 / 180.0, ux = std::sin(th), uy = std::cos(th);
+    for (const auto& p : pts) {
+      const double dx = p.x - c.pos.x, dy = p.y - c.pos.y;
+      const double along = dx * ux + dy * uy, across = -dx * uy + dy * ux;  // along the road / across it
+      if (std::fabs(along) < 3.6 && std::fabs(across) < c.half + 0.8 && std::fabs(p.z - c.pos.z) < 2.5) c.obstacle = true;
+    }
+  }
+}
+
 void Trains::updateCrossings(double dt) {
   // The warning starts when a train is due within about 35 s (or is within 150 m), and stops once
   // its last car has cleared the crossing; the arms come down 5 s after the lamps start and go up
@@ -358,6 +370,11 @@ void Trains::update(double dt) {
         if (gap > 0 && gap < 60.0 + t.v * t.v / (2.0 * brake) && t.v > 0.5) ats = true;
       }
       if (t.v > speedCap(t) + 1.0) ats = true;  // overspeed against the curve limit ahead (ATS-P-like)
+      for (const auto& c : crossings_) {  // a crossing's obstacle stop signal ahead
+        if (!c.obstacle || c.line != t.line) continue;
+        const double ahead = (c.s - t.s) * t.dir;
+        if (ahead > 0.0 && ahead < 60.0 + t.v * t.v / (2.0 * brake) && t.v > 0.5) ats = true;
+      }
       if (ats) a = std::min(a, -1.2);
       ats_[static_cast<size_t>(t.id) % 64] = ats;
       t.v = std::max(0.0, t.v + a * dt);
@@ -389,7 +406,23 @@ void Trains::update(double dt) {
       }
       if (gap > 0 && gap - 60.0 < dist) dist = std::max(0.0, gap - 60.0);
     }
+    // a crossing's obstacle stop signal ahead (seen from about 600 m): stop short of the crossing,
+    // braking up to the emergency rate (a train too close to stop in time runs over the crossing)
+    bool emergency = false;
+    for (const auto& c : crossings_) {
+      if (!c.obstacle || c.line != t.line) continue;
+      double ahead = (c.s - t.s) * t.dir;
+      if (L.closed) ahead = std::remainder(ahead, L.length);
+      if (ahead > 0.0 && ahead < 600.0 && ahead - 25.0 < dist) {
+        dist = std::max(0.0, ahead - 25.0);
+        emergency = true;
+      }
+    }
     if (dist <= 0.4 && t.v < 1.0) {
+      if (emergency) {  // waiting at the stop signal until the crossing is clear
+        t.v = 0;
+        continue;
+      }
       t.v = 0;
       if (t.next_stop >= 0 && std::fabs(distToStop(t)) < 3.0) {  // (distance wraps round the loop line)
         t.at_station = t.next_stop;
@@ -409,7 +442,7 @@ void Trains::update(double dt) {
     // the speed never exceeds what service braking can take off in the distance left, so the
     // train arrives on the mark instead of sliding past it
     const double vcap = std::min(std::sqrt(2.0 * brake * std::max(0.0, dist - 0.1)), speedCap(t));
-    if (t.v > vcap) t.v = std::max(vcap, t.v - 1.3 * brake * dt);
+    if (t.v > vcap) t.v = std::max(vcap, t.v - (emergency ? 1.4 : 1.3 * brake) * dt);
     else t.v = std::min({t.vmax, t.v + amax * dt, std::max(vcap, 0.3)});
     const double adv = std::min(t.v * dt, std::max(0.0, dist));
     t.s += t.dir * adv;

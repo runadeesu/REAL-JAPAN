@@ -61,6 +61,7 @@ set(RJ_SOURCES
   src/game/traffic_signals.cpp
   src/game/road_markings.cpp
   src/game/trains.cpp
+  src/game/shops.cpp
   src/game/driving.cpp
   src/game/ferries.cpp
   src/render/ships.cpp
@@ -70,6 +71,7 @@ set(RJ_SOURCES
   src/app_activities.cpp
   src/app_sound.cpp
   src/app_transit.cpp
+  src/app_shop.cpp
   src/render/aircraft.cpp
   src/render/trains.cpp
   src/game/traffic.cpp

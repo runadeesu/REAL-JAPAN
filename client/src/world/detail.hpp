@@ -51,6 +51,7 @@ enum Mat : int {
   kMatFoliage = 33,
   kMatBark = 34,
   kMatUntinted = 35,  // vertex colour only (plates, liveries), not tinted per draw
+  kMatClearGlass = 40,  // see-through glass (street detail): drawn after the opaque scene, blended
 };
 
 inline bool matIsFlat(int m) {

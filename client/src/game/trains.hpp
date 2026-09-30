@@ -76,6 +76,7 @@ struct LevelCrossing {
   bool warning = false;   // lamps and bell
   float since = 0;        // seconds since the warning started / stopped
   float arm = 0;          // 0 raised .. 1 lowered
+  bool obstacle = false;  // something (the player, the player's car) stands on the tracks here
 };
 
 struct Train {
@@ -107,6 +108,9 @@ class Trains {
   const std::vector<Station>& stations() const { return stations_; }
   const std::vector<StationGate>& gates() const { return gates_; }
   const std::vector<LevelCrossing>& crossings() const { return crossings_; }
+  // Obstacle detection at the level crossings (as the real detectors): a point on the tracks of a
+  // crossing sets its stop signal, and trains running towards it brake to a stop short of it.
+  void markObstacles(const std::vector<rj::geo::Vec3d>& pts);
   const std::vector<Train>& trains() const { return trains_; }
   const Train* train(int id) const;
   // car pose (origin ENU, compass yaw, pitch) of car k (0 = leading car)

@@ -74,10 +74,13 @@ class Spec:
     road_struct_area: Polygon = None                  # their footprints (no road painted on the ground there)
     at_grade: list = field(default_factory=list)      # per rail line: bool per point (track on the ground)
     crossings: list = field(default_factory=list)     # level crossings (dicts, see _level_crossings)
+    tolls: list = field(default_factory=list)         # expressway toll plazas on the interchange ramps (dicts)
+    pas: list = field(default_factory=list)           # parking areas: their shop building (dicts, shop.py plan)
 
 
 class CellExtra:
     def __init__(self):
+        self.shops = []   # walk-in shops built here outside the building list: (kind, counter xy, stand xy, z)
         self.decks = []
         self.trees = []
         self.walls = []   # collision walls (x0, y0, x1, y1, z low, z high), cell ENU
@@ -508,6 +511,8 @@ def build_all(ctry, terrain, rng) -> Spec:
                     holes.append(LineString(seg).buffer(rs.width / 2 + 1.5, cap_style=2))
     spec.road_struct_area = unary_union(areas) if areas else Polygon()
     spec.portal_holes = unary_union(holes) if holes else Polygon()
+    spec.tolls = _toll_plazas(ctry, terrain, spec.road_struct_area)
+    spec.pas = _parking_areas(ctry, terrain)
     # stations snapped onto the smoothed lines: concourse (and the main station's tower), walkable
     # platform decks level with the line and following its curve
     for si, (name, x, y, hd, li, k) in enumerate(st_all):
@@ -795,6 +800,138 @@ def _dquad(geos, mat, P4, col=(255, 255, 255, 255)):
     geos.setdefault(mat, DGeo()).add(P, n / ln, None, col, [0, 1, 2, 0, 2, 3])
 
 
+def _toll_plazas(ctry, terrain, avoid):
+    """A toll plaza on each interchange ramp, near its end at the ordinary road (on the ground)."""
+    out = []
+    for r in ctry.net.roads:
+        if r.kind != "ramp" or not r.name.endswith("IC"):
+            continue
+        L_ = r.line.length
+        near = avoid.buffer(25.0) if avoid is not None and not avoid.is_empty else None
+        for s_ in np.arange(max(L_ - 110.0, L_ * 0.4), L_ * 0.25, -15.0):
+            q = r.line.interpolate(float(s_))
+            if near is not None and near.contains(q):
+                continue
+            a = r.line.interpolate(max(0.0, float(s_) - 4.0))
+            b = r.line.interpolate(min(L_, float(s_) + 4.0))
+            hd = math.degrees(math.atan2(b.x - a.x, b.y - a.y)) % 360.0  # along the ramp, away from the expressway
+            out.append(dict(name=r.name, x=float(q.x), y=float(q.y), z=float(terrain.sample(q.x, q.y)), hd=hd, width=float(r.width)))
+            break
+    return out
+
+
+def _parking_areas(ctry, terrain):
+    """The parking areas' shop building: behind the car park, its glazed front towards it."""
+    out = []
+    ex = next((r for r in ctry.net.roads if r.kind == "expressway"), None)
+    if ex is None:
+        return out
+    for r in ctry.net.roads:
+        if r.kind != "lot":
+            continue
+        m = r.line.interpolate(0.5, normalized=True)
+        a = r.line.interpolate(0.45, normalized=True)
+        b = r.line.interpolate(0.55, normalized=True)
+        d = np.array([b.x - a.x, b.y - a.y])
+        d /= max(np.linalg.norm(d), 1e-9)
+        q = ex.line.interpolate(ex.line.project(m))
+        n_out = np.array([m.x - q.x, m.y - q.y])
+        n_out /= max(np.linalg.norm(n_out), 1e-9)
+        c = np.array([m.x, m.y]) + n_out * (r.width / 2 + 3.0 + 6.0)
+        ring = np.array([c - d * 13 - n_out * 6, c + d * 13 - n_out * 6, c + d * 13 + n_out * 6, c - d * 13 + n_out * 6])
+        area2 = sum(ring[i][0] * ring[(i + 1) % 4][1] - ring[(i + 1) % 4][0] * ring[i][1] for i in range(4))
+        if area2 < 0:
+            ring = ring[::-1].copy()
+        fe = 0
+        for i in range(4):  # the edge facing the car park (outward normal of a CCW ring: (dy, -dx))
+            e = ring[(i + 1) % 4] - ring[i]
+            nrm = np.array([e[1], -e[0]]) / max(np.linalg.norm(e), 1e-9)
+            if float(nrm @ -n_out) > 0.9:
+                fe = i
+        out.append(dict(name=r.name, ring=ring, ground=float(terrain.sample(c[0], c[1])), front_edge=fe, kind="konbini",
+                        fascia=(40, 120, 190), seed=int(abs(c[0] * 7 + c[1] * 3)) % (1 << 30), centre=c, d=d, lot=r.line))
+    return out
+
+
+def _obox_c(geos, xf, mat, p, d, zc, ha, hc, hz, col):
+    """A box in the country frame: centre p (2D) at height zc, half sizes along d, across it, up."""
+    d = np.asarray(d, float)
+    n = np.array([d[1], -d[0]])
+    C = []
+    for sz in (-1, 1):
+        for sc in (-1, 1):
+            for sa in (-1, 1):
+                q = np.asarray(p, float) + d * sa * ha + n * sc * hc
+                C.append([q[0], q[1], zc + sz * hz])
+    V = xf.p(np.array(C))
+    for f in ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)):
+        _dquad(geos, mat, [V[f[0]], V[f[1]], V[f[2]], V[f[3]]], col)
+
+
+def _toll_plaza(geos, ex, xf, t):
+    """Booths on islands between the lanes under a canopy, ETC posts at the entries (generic)."""
+    th = math.radians(t["hd"])
+    d = np.array([math.sin(th), math.cos(th)])
+    n = np.array([d[1], -d[0]])
+    p = np.array([t["x"], t["y"]])
+    g = t["z"]
+    edge = t["width"] / 2 + 0.7
+    for across in (-edge, 0.0, edge):
+        c = p + n * across
+        _obox_c(geos, xf, "concrete", c, d, g + 0.13, 4.5, 0.6, 0.13, (196, 196, 190, 255))       # island
+        _obox_c(geos, xf, "metal", c, d, g + 1.35, 1.0, 0.5, 1.1, (228, 230, 232, 255))           # booth
+        _obox_c(geos, xf, "sign", c, d, g + 2.5, 1.02, 0.52, 0.06, (40, 140, 80, 255))           # booth roof band
+        _obox_c(geos, xf, "sign", c - d * 4.1, d, g + 0.75, 0.07, 0.07, 0.5, (235, 190, 30, 255))  # ETC post
+        A = xf.p([[c[0] - d[0] * 4.5, c[1] - d[1] * 4.5, g - 0.3]])[0]
+        B = xf.p([[c[0] + d[0] * 4.5, c[1] + d[1] * 4.5, g - 0.3]])[0]
+        ex.walls.append((A[0], A[1], B[0], B[1], A[2], A[2] + 1.9))
+    for sa in (-1, 1):  # canopy on four columns
+        for sc in (-1, 1):
+            _obox_c(geos, xf, "concrete", p + d * sa * 5.0 + n * sc * edge, d, g + 3.1, 0.25, 0.25, 3.1, (200, 200, 196, 255))
+    _obox_c(geos, xf, "concrete", p, d, g + 6.4, 6.0, edge + 2.0, 0.3, (214, 214, 210, 255))
+    _obox_c(geos, xf, "sign", p, d, g + 6.95, 6.02, edge + 2.02, 0.25, (40, 140, 80, 255))
+    L0 = xf.p([[p[0], p[1], g + 6.0]])[0]
+    ex.lights.append(((L0[0], L0[1], L0[2]), 14.0, 0))
+
+
+def _parking_area(geos, ex, xf, pa, ground_c):
+    """The parking area's shop (a walk-in convenience store) with a flat roof, and bay markings."""
+    from . import shop as shop_mod
+    till = shop_mod.build(geos, ex, xf, pa)
+    if till:
+        ex.shops.append((till["kind"], till["counter"], till["stand"], till["z"]))
+    c, d = pa["centre"], pa["d"]
+    ring = pa["ring"]
+    n = np.array([d[1], -d[0]])
+    _obox_c(geos, xf, "concrete", c, d, pa["ground"] + shop_mod.FLOOR_H + 0.2, 13.3, 6.3, 0.2, (206, 204, 198, 255))
+    # the walls from the ground floor's top to the roof edge are the shop's; a parapet on the roof
+    for i in range(4):
+        a, b = ring[i], ring[(i + 1) % 4]
+        mid = (a + b) / 2
+        e = b - a
+        L_ = float(np.linalg.norm(e))
+        _obox_c(geos, xf, "concrete", mid, e / max(L_, 1e-9), pa["ground"] + shop_mod.FLOOR_H + 0.7, L_ / 2, 0.12, 0.3, (190, 188, 182, 255))
+    # parking bays: white lines across both sides of the car park
+    lot = pa["lot"]
+    for s_ in np.arange(6.0, lot.length - 6.0, 2.5):
+        q = lot.interpolate(float(s_))
+        a = lot.interpolate(max(0.0, float(s_) - 1.0))
+        b = lot.interpolate(min(lot.length, float(s_) + 1.0))
+        dd = np.array([b.x - a.x, b.y - a.y])
+        dd /= max(np.linalg.norm(dd), 1e-9)
+        nn = np.array([dd[1], -dd[0]])
+        for side in (-1, 1):
+            m0 = np.array([q.x, q.y]) + nn * side * 5.5
+            m1 = np.array([q.x, q.y]) + nn * side * 10.5
+            pts = [m0 - dd * 0.06, m0 + dd * 0.06, m1 + dd * 0.06, m1 - dd * 0.06]
+            P = []
+            for q2 in pts:  # draped on the ground there
+                A = xf.p([[q2[0], q2[1], 0.0]])[0]
+                A[2] = ground_c(q2[0], q2[1])[2] + 0.03
+                P.append(A)
+            _dquad(geos, "marking", P, (235, 235, 230, 255))
+
+
 def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> CellExtra:
     ex = CellExtra()
     clip = cpoly.buffer(2)
@@ -902,6 +1039,13 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
     # --- road tunnels and viaducts (country roads through ridges / across valleys) ---
     for rs in spec.road_structs:
         _road_structure(geos, ex, xf, rs, clip, ground_c)
+    # --- toll plazas and parking areas ---
+    for t in spec.tolls:
+        if cpoly.contains(Point(t["x"], t["y"])):
+            _toll_plaza(geos, ex, xf, t)
+    for pa in spec.pas:
+        if cpoly.contains(Point(float(pa["centre"][0]), float(pa["centre"][1]))):
+            _parking_area(geos, ex, xf, pa, ground_c)
     # --- the expressway on the ground: median barrier and guard rails (collision walls too), open
     # where an interchange's slip road leaves ---
     slips = [q.line.buffer(q.carriage / 2.0 + 1.5) for q in isl.net.roads if q.kind == "ramp" and q.line.intersects(clip.buffer(300))]

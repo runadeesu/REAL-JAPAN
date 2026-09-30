@@ -49,6 +49,7 @@ ARTERIALS = [(n, w, p) for n, w, p in C.ARTERIALS]
 NATIONAL_ROADS = [(n, w, p) for n, w, p in N.ROADS]
 EXPRESSWAY = N.EXPRESSWAY
 EXPRESSWAY_RAMPS = N.EXPRESSWAY_RAMPS
+EXPRESSWAY_PA = N.EXPRESSWAY_PA
 
 # Rivers (the capital's 千景川 gets a longer upper course in the country) and lakes.
 LAKES = N.LAKES

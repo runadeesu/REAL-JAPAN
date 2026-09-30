@@ -103,6 +103,7 @@ class Renderer {
   // the season (lying snow 0..1, rice paddies 0..3, leaves 0..2; see the lit shader)
   // Far view beyond the streamed cells (drawn first, in its own depth range; see App::renderScene)
   void drawCellSeas(const World& world);  // sea surfaces of the streamed cells (with the far view)
+  void drawClearGlass(const World& world);  // see-through glass of the street detail (after the opaque scene)
   void drawFarView(const class FarView& far, const World& world, const Camera3D& cam, float sea_y, float fog_density);
   void setSnowMap(Texture2D tex, Vector3 u, Vector3 v) {
     snow_tex_ = tex;

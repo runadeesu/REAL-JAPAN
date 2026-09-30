@@ -277,6 +277,8 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   } else if (id == 10) {    // street-light lamp (emissive at night)
     s.albedo = vec3(0.8, 0.8, 0.75); s.rough = 0.2;
     s.emit = vec3(1.0, 0.86, 0.66) * 14.0 * nightFactor;
+  } else if (id == 40) {    // see-through glass (drawn blended: its opacity goes out in alpha)
+    s.albedo = vec3(0.02, 0.025, 0.028); s.rough = 0.03; s.metal = 0.0; s.porosity = 0.0;
   } else if (id == 11 || id == 20 || id == 21) {  // glass (windows, shop glass)
     s.albedo = vec3(0.015, 0.02, 0.025); s.rough = 0.04; s.metal = 0.0; s.porosity = 0.0;
     float lit = id == 11 ? 0.0 : litFrom(fragMat.y);
@@ -931,6 +933,12 @@ void main() {
   float fog = 1.0 - exp(-dist * fogDensity * mix(0.6, 1.0, hf));
   vec3 fc = mix(skyRadiance(normalize(vec3(-V.x, max(-V.y, 0.02), -V.z))), hazeColor, 0.35);
   col = mix(col, fc, clamp(fog, 0.0, 1.0));
+  if (id == 40) {  // see-through glass: what is behind shows through; at grazing angles it mirrors
+    float Fg = 0.04 + 0.96 * pow(1.0 - NdV, 5.0);
+    vec3 cg = col + envSharp * Fg * (1.0 - 0.8 * inside) * (1.0 - clamp(fog, 0.0, 1.0));
+    finalColor = vec4(toneMap(cg), clamp(0.08 + 0.9 * Fg, 0.0, 0.92));
+    return;
+  }
   finalColor = vec4(toneMap(col), reflAmt * (1.0 - clamp(fog, 0.0, 1.0)));
 }
 )";

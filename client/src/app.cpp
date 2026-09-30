@@ -105,6 +105,10 @@ bool App::boot() {
     std::string aerr;
     if (std::filesystem::exists(slice_dir_ / "transport.txt") && !aviation_.load(slice_dir_ / "transport.txt", aerr))
       TraceLog(LOG_WARNING, "RJ: aviation disabled: %s", aerr.c_str());
+    std::string serr;
+    if (std::filesystem::exists(slice_dir_ / "shops.txt") && !shops_.load(slice_dir_ / "shops.txt", serr))
+      TraceLog(LOG_WARNING, "RJ: shops disabled: %s", serr.c_str());
+    if (std::filesystem::exists(slice_dir_ / "tolls.txt")) loadTolls(slice_dir_ / "tolls.txt");
   }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
@@ -208,6 +212,8 @@ void App::newGame() {
   const auto& m = world_.meta();
   player_ = Player{};
   inside_id_.clear();
+  inventory_.clear();
+  shop_open_ = -1;
   player_.pos = world_.toLocal({m.spawn_lat, m.spawn_lon, 0.0});
   player_.yaw = static_cast<float>(m.spawn_heading * DEG2RAD);
   player_.snapToGround(world_);
@@ -243,6 +249,7 @@ bool App::saveSlot(int slot) {
   s.money = ledger_ ? ledger_->balance(player_account_) : 0;
   s.play_seconds = play_seconds_;
   s.interior = inside_id_;
+  s.inventory = inventoryString();
   const bool ok = writeSave(slot, s);
   if (slot != kAutosaveSlot) toast(tr(ok ? "save.saved" : "save.failed"));
   return ok;
@@ -267,6 +274,7 @@ bool App::loadSlot(int slot) {
   ledger_ = std::make_unique<rj::econ::Ledger>();
   player_account_ = ledger_->open(rj::econ::AccountKind::Person, "player");
   if (s->money > 0) ledger_->endow(player_account_, s->money, clock_.unixUtc(), "ロード時残高 / balance at load");
+  parseInventory(s->inventory);
   play_seconds_ = s->play_seconds;
   autosave_timer_ = 0;
   session_t_ = 0;
@@ -329,6 +337,8 @@ void App::placeRoads() {
   if (trains_.loaded()) trains_.place(world_);
   if (ferries_.loaded()) ferries_.place(world_);
   if (aviation_.loaded()) aviation_.place(world_);
+  if (shops_.loaded()) shops_.place(world_);
+  for (auto& t : tolls_) t.pos = world_.toLocal(t.geo);
   // Large worlds (the island) stream: markings and the walk network cover the area around the player.
   const bool regional = world_.knownCount() > 8;
   const rj::geo::Vec3d c = in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0};
@@ -533,7 +543,7 @@ void App::update(float dt) {
     return;
   }
 
-  const bool want_lock = (screen_ == Screen::Game) && !till_.on;
+  const bool want_lock = (screen_ == Screen::Game) && !till_.on && shop_open_ < 0;
   if (want_lock != cursor_locked_) {
     if (want_lock) DisableCursor();
     else EnableCursor();
@@ -576,6 +586,7 @@ void App::update(float dt) {
         near_trees_.update(world_, rlToEnu(listen_cam_.position));
         renderer_.setCanopyCut(NearTrees::kCut);
       }
+      if (trains_.loaded()) updateCrossingSafety();
       if (trains_.loaded()) trains_.update(std::min(dt, 0.1f));
       if (trains_.loaded() && !trains_.crossings().empty()) {  // road traffic stops at the level crossings
         std::vector<Traffic::CrossingStop> xs;
@@ -752,7 +763,8 @@ void App::update(float dt) {
         player_.yaw = driving_.car().yaw + drive_look_yaw_;
       } else {
         if (trains_.loaded()) updateStationGates(dt);  // (the gate flaps shut in front of the player block the lane)
-        player_.update(dt, world_, settings_, screen_ == Screen::Game && !till_.on && worship_.stage == 0 && fish_.stage == 0, insideInterior(), nearby,
+        player_.update(dt, world_, settings_, screen_ == Screen::Game && !till_.on && worship_.stage == 0 && fish_.stage == 0 && shop_open_ < 0,
+                       insideInterior(), nearby,
                        &gate_walls_);
       }
       if (!inside_id_.empty() && player_.left_interior) {
@@ -787,6 +799,8 @@ void App::update(float dt) {
         updateFerryActions();
         updateAviationActions();
         updateDriveActions();
+        updateShopActions();
+        updateTolls();
         updateRideTest();
         updateActivities(dt);
         if (inside_id_.empty()) {
@@ -797,7 +811,9 @@ void App::update(float dt) {
           hover_.reset();
           hover_walker_ = nullptr;
         }
-        if (IsKeyPressed(KEY_ESCAPE) && photo_mode_) {
+        if (IsKeyPressed(KEY_ESCAPE) && shop_open_ >= 0) {
+          shop_open_ = -1;
+        } else if (IsKeyPressed(KEY_ESCAPE) && photo_mode_) {
           photo_mode_ = false;
         } else if (IsKeyPressed(KEY_ESCAPE) && till_.on) {
           till_.on = false;
@@ -1184,6 +1200,15 @@ void App::runSelfTest() {
     check(far_.ready() && !far_.tiles().empty(), "far view of the country built");
     check(trains_.gates().size() == trains_.stations().size(), "every station has its ticket gates (walk-in concourse)");
     check(!trains_.crossings().empty() && !trains_.crossings().front().sets.empty(), "level crossings on the main line, with barriers");
+    if (!trains_.crossings().empty()) {
+      const rj::geo::Vec3d on = trains_.crossings().front().pos;
+      trains_.markObstacles({on});
+      const bool tripped = trains_.crossings().front().obstacle;
+      trains_.markObstacles({rj::geo::Vec3d{on.x + 60.0, on.y + 60.0, on.z}});
+      check(tripped && !trains_.crossings().front().obstacle, "crossing obstacle detector (someone on the tracks stops the trains)");
+      trains_.markObstacles({});
+    }
+    check(tolls_.size() >= 4, "expressway toll plazas on the interchange ramps");
     {
       // the cars' interiors: seats to sit on, the aisle and the doorways walkable, the seat rows clear
       const CarLayout sk = carLayout(true, false), cm = carLayout(false, false);
@@ -1218,7 +1243,13 @@ void App::runSelfTest() {
       Jobs j;
       check(j.startDelivery(world_, traffic_, player_.pos), "delivery job found nearby");
     }
-    check(saveSlot(3) && loadSlot(3), "save / load in the fictional world");
+    if (shops_.loaded()) {
+      const int64_t before = ledger_ ? ledger_->balance(player_account_) : 0;
+      const ShopItem& it = Shops::menu(shops_.spots().front().kind).front();
+      const bool paid = buyItem(it) && ledger_ && ledger_->balance(player_account_) == before - it.yen && inventory_[it.key] >= 1;
+      check(paid, "walk-in shops listed; buying at a counter pays from the wallet and keeps the item");
+    }
+    check(saveSlot(3) && loadSlot(3) && (!shops_.loaded() || !inventory_.empty()), "save / load in the fictional world (with what was bought)");
   }
   // Verified interior: enter through a real entrance, stand on a real floor, walls block.
   if (!fic) check(!world_.meta().interiors.empty(), "interior listed in slice");
@@ -1527,6 +1558,7 @@ void App::drawWorldView(const Camera3D& cam) {
   if (in_session_ && screen_ != Screen::Title && !deep && !photo_request_) drawWorldMarkers(cam);
   if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_)
     renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
+  renderer_.drawClearGlass(world_);
   renderer_.drawRain(cam, lighting_, render_time_, snowfall_);
   EndMode3D();
   renderer_.endScene(cam, lighting_, render_time_);
@@ -1858,6 +1890,7 @@ void App::drawHud() {
   const float vw = ui_.vw();
   drawActivityHud();
   if (photo_mode_) return;  // viewfinder only
+  drawShopMenu();
   const auto g = world_.toGeodetic(player_.pos);
   const auto t = jst();
   const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
@@ -2276,7 +2309,16 @@ void App::drawPhone() {
           yy += 36;
         }
       }
-      yy += 20;
+      yy += 16;
+      ui_.text(tr("phone.wallet_items"), cx, yy, 26, theme::kMuted);
+      yy += 38;
+      {
+        std::string items;
+        for (const auto& [k, n] : inventory_)
+          if (n > 0) items += (items.empty() ? "" : "、") + tr("shop.item." + k) + " ×" + std::to_string(n);
+        ui_.textWrapped(items.empty() ? tr("phone.wallet_items_none") : items, cx, yy, cw, 22, theme::kText);
+        yy += 60;
+      }
       ui_.textWrapped(tr("phone.wallet_note"), cx, yy, cw, 22, theme::kWarn);
       back();
       break;

@@ -441,7 +441,7 @@ void Renderer::renderShadowMaps(const Camera3D& cam, const World& world, const L
     for (const auto& [code, cell] : world.cells()) {
       for (const auto& m : cell->gpu.chunks) DrawMesh(m, mat_depth_, cell->model);
       for (size_t i = 0; i < cell->gpu.detail.meshes.size(); ++i) {
-        if (matIsFlat(cell->gpu.detail.mats[i])) continue;
+        if (matIsFlat(cell->gpu.detail.mats[i]) || cell->gpu.detail.mats[i] == kMatClearGlass) continue;
         if (c == 1 && cell->gpu.detail.mats[i] == kMatFence) continue;  // thin rails: near cascade only
         DrawMesh(cell->gpu.detail.meshes[i], mat_depth_, cell->model);
       }
@@ -707,9 +707,12 @@ void Renderer::drawWorld(const Camera3D& cam, const World& world, bool photo_tex
       triangles_ += c->gpu.chunks[i].triangleCount;
     }
   setI(lit_, "materialOverride", -1);
-  // Street detail: sidewalks, curbs, markings, furniture (materials per vertex).
+  // Street detail: sidewalks, curbs, markings, furniture (materials per vertex; see-through glass
+  // is left for drawClearGlass).
   for (const auto& [code, c] : world.cells())
-    for (const auto& m : c->gpu.detail.meshes) {
+    for (size_t i = 0; i < c->gpu.detail.meshes.size(); ++i) {
+      if (c->gpu.detail.mats[i] == kMatClearGlass) continue;
+      const Mesh& m = c->gpu.detail.meshes[i];
       DrawMesh(m, mat_, c->model);
       ++draw_calls_;
       triangles_ += m.triangleCount;
@@ -798,6 +801,33 @@ void Renderer::drawMarkings(const RoadMarkings& rm) {
     triangles_ += m.triangleCount;
   });
   rlEnableBackfaceCulling();
+}
+
+void Renderer::drawClearGlass(const World& world) {
+  // after everything opaque: blended over what lies behind, without writing depth; the scene's
+  // reflection mask (alpha) is kept, the glass's own reflection is in its colour (lit shader, id 40)
+  rlDrawRenderBatchActive();
+  rlEnableColorBlend();
+  rlSetBlendMode(BLEND_ALPHA);
+  rlColorMask(true, true, true, false);
+  rlDisableDepthMask();
+  rlDisableBackfaceCulling();
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", -1);
+  for (const auto& [code, c] : world.cells())
+    for (size_t i = 0; i < c->gpu.detail.meshes.size(); ++i)
+      if (c->gpu.detail.mats[i] == kMatClearGlass) {
+        DrawMesh(c->gpu.detail.meshes[i], mat_, c->model);
+        ++draw_calls_;
+      }
+  rlDrawRenderBatchActive();
+  rlEnableBackfaceCulling();
+  rlEnableDepthMask();
+  rlColorMask(true, true, true, true);
+  rlDisableColorBlend();
 }
 
 void Renderer::drawOcean(const Camera3D& cam, float sea_y) {

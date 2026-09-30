@@ -304,9 +304,33 @@ void App::updateBoarding() {
   }
 }
 
+// Level crossings: a lowered barrier arm stops the player on foot and the player's car; the player
+// (or the player's car) on the tracks trips the obstacle detector, which stops the trains.
+void App::updateCrossingSafety() {
+  crossing_walls_.clear();
+  for (const auto& c : trains_.crossings()) {
+    if (c.arm < 0.55f || std::hypot(c.pos.x - player_.pos.x, c.pos.y - player_.pos.y) > 80.0) continue;
+    for (const auto& st : c.sets) {
+      const double th = st.arm_hd * DEG2RAD, len = st.arm_len * std::min(1.0f, c.arm);
+      crossing_walls_.insert(crossing_walls_.end(), {static_cast<float>(st.pos.x), static_cast<float>(st.pos.y),
+                                                     static_cast<float>(st.pos.x + std::sin(th) * len), static_cast<float>(st.pos.y + std::cos(th) * len),
+                                                     static_cast<float>(st.pos.z + 0.15), static_cast<float>(st.pos.z + 1.15)});
+    }
+  }
+  driving_.setExtraWalls(&crossing_walls_);
+  std::vector<V3> on_tracks;
+  if (driving_.active() || driving_.hasCar()) {
+    const Vehicle& v = driving_.car();
+    const double half = Traffic::lengthOf(v.type) * 0.5;
+    for (double t : {-1.0, 0.0, 1.0}) on_tracks.push_back({v.pos.x + std::sin(v.yaw) * half * t, v.pos.y + std::cos(v.yaw) * half * t, v.pos.z});
+  }
+  if (!driving_.active() && ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0 && !flying_ && !player_.fly) on_tracks.push_back(player_.pos);
+  trains_.markObstacles(on_tracks);
+}
+
 // IC ticket gates: the lane the player walks into, and from which side.
 void App::updateStationGates(float dt) {
-  gate_walls_.clear();
+  gate_walls_ = crossing_walls_;
   if (gate_closed_t_ > 0.0f) gate_closed_t_ -= dt;
   if (gate_flash_t_ > 0.0f) gate_flash_t_ -= dt;
   const auto& gates = trains_.gates();

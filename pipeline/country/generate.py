@@ -38,12 +38,12 @@ class Road:
     name: str
     width: float
     line: LineString
-    kind: str  # arterial | street | alley | mountain | rural | lane | expressway | ramp
+    kind: str  # arterial | street | alley | mountain | rural | lane | expressway | ramp | lot
     district: str = ""
 
     @property
     def sidewalk(self) -> float:
-        if self.kind in ("rural", "mountain", "lane", "expressway", "ramp"):
+        if self.kind in ("rural", "mountain", "lane", "expressway", "ramp", "lot"):
             return 0.0
         w = self.width
         return 4.5 if w >= 30 else 3.5 if w >= 16 else 2.0 if w >= 9 else 0.0
@@ -205,6 +205,33 @@ def _ramp_points(ex: Road, rp) -> np.ndarray:
     return np.vstack(head + rest)
 
 
+def _pa_frame(ex: Road, s):
+    eline = ex.line
+    s = min(max(s, 0.0), eline.length)
+    a = np.asarray(eline.interpolate(max(s - 5.0, 0.0)).coords[0])
+    b = np.asarray(eline.interpolate(min(s + 5.0, eline.length)).coords[0])
+    d = (b - a) / max(np.linalg.norm(b - a), 1e-9)
+    return np.asarray(eline.interpolate(s).coords[0]), d, np.array([-d[1], d[0]])
+
+
+def _pa_points(ex: Road, pp, side):
+    """A parking area beside the expressway: the lane off the outer lane, along the car park and
+    back on (one polyline), and the car park itself (a wide strip along the middle of it)."""
+    s0 = ex.line.project(Point(pp))
+    ch = ex.carriage / 2.0
+    sgn = 1.0  # (the lane runs the way the expressway's polyline does)
+    lane = []
+    for ds, off in ((-280.0, ch - 4.5), (-210.0, ch + 1.0), (-160.0, ch + 12.0), (-120.0, ch + 20.0), (-80.0, ch + 21.0),
+                    (80.0, ch + 21.0), (120.0, ch + 20.0), (160.0, ch + 12.0), (210.0, ch + 1.0), (280.0, ch - 4.5)):
+        q, _, nn = _pa_frame(ex, s0 + sgn * ds)
+        lane.append(q + nn * side * off)
+    lot = []
+    for ds in np.linspace(-90.0, 90.0, 10):
+        q, _, nn = _pa_frame(ex, s0 + sgn * ds)
+        lot.append(q + nn * side * (ch + 34.0))
+    return np.array(lane), np.array(lot)
+
+
 def build_roads(land, rivers, lakes, rng) -> RoadNet:
     roads = [Road(n, float(w), LineString(p), "arterial") for n, w, p in L.ARTERIALS]
     n, w, p = L.MOUNTAIN_ROAD
@@ -217,6 +244,10 @@ def build_roads(land, rivers, lakes, rng) -> RoadNet:
     roads.append(ex)
     for rn, rp in L.EXPRESSWAY_RAMPS:
         roads.append(Road(rn, 8.0, LineString(resample(chaikin(_ramp_points(ex, rp), 3), 5.0)), "ramp"))
+    for pn, pp, side in L.EXPRESSWAY_PA:
+        lane, lot = _pa_points(ex, pp, side)
+        roads.append(Road(pn, 7.0, LineString(resample(chaikin(lane, 3), 5.0)), "ramp"))
+        roads.append(Road(pn, 22.0, LineString(lot), "lot"))
     towns = _towns()
     shapely.prepare(towns)
     # national / local roads: sidewalks inside the towns, a plain two-lane road with paved

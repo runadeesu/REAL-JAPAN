@@ -212,6 +212,7 @@ void Driving::collide(const World& world, const Traffic& traffic, const rj::geo:
     rj::geo::Vec3d c{car_.pos.x + fx * o + pushx, car_.pos.y + fy * o + pushy, car_.pos.z};
     const rj::geo::Vec3d c0 = c;
     world.collide(c, half_w + 0.05);
+    world.collideWalls(c, half_w + 0.05, extra_walls_);  // guard rails, parapets, tunnel walls, lowered barriers
     pushx += c.x - c0.x;
     pushy += c.y - c0.y;
   }

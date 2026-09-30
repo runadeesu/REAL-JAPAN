@@ -23,6 +23,7 @@
 #include "game/town_sim.hpp"
 #include "game/traffic.hpp"
 #include "game/road_markings.hpp"
+#include "game/shops.hpp"
 #include "game/trains.hpp"
 #include "game/traffic_signals.hpp"
 #include "game/weather.hpp"
@@ -166,6 +167,18 @@ class App {
   Traffic traffic_;
   RoadMarkings markings_;
   Trains trains_;
+  Shops shops_;
+  int shop_open_ = -1;                     // the shop whose counter menu is open
+  std::map<std::string, int> inventory_;  // bought in shops: item key -> count
+  struct TollPlaza {
+    std::string name;
+    rj::geo::Geodetic geo;
+    double heading = 0, width = 8;
+    rj::geo::Vec3d pos;
+  };
+  std::vector<TollPlaza> tolls_;  // expressway toll plazas (tolls.txt)
+  int toll_entry_ = -1;           // the plaza the player's car came onto the expressway through
+  int toll_last_ = -1;            // the plaza just passed (until the car is clear of it)
   Crowd crowd_;  // passengers in the cars and on the platforms near the camera
   int ride_train_ = -1, ride_car_ = 0;  // riding a train (id, car)
   int ride_board_station_ = -1;         // where the ride began (fare by distance at the end)
@@ -198,6 +211,7 @@ class App {
   bool paid_shink_ = false;
   bool gate_owe_ = false;            // the exit gate shut once for a short card: let through next time
   std::vector<float> gate_walls_;    // shut gate flaps (collision, origin ENU)
+  std::vector<float> crossing_walls_;  // lowered level crossing barrier arms (collision, origin ENU)
   int gate_in_ = -1, gate_lane_in_ = -1;
   int gate_closed_gate_ = -1, gate_closed_lane_ = -1;
   float gate_closed_t_ = 0.0f;
@@ -235,6 +249,7 @@ class App {
   void updateSeatChoice();
   void updateBoarding();
   void updateStationGates(float dt);
+  void updateCrossingSafety();  // lowered barriers as walls; the player on the tracks stops trains
   void rideTestPilot();
   std::string lineName(int line) const;
   static int64_t railFare(bool shinkansen, double km);  // game fare (yen) for a ride of km
@@ -323,6 +338,13 @@ class App {
   float drive_look_yaw_ = 0.0f, drive_look_pitch_ = 0.0f;
   bool drive_first_person_ = false;
   void updateDriveActions();
+  void updateShopActions();  // at a shop counter: buy (menu)
+  void loadTolls(const std::filesystem::path& file);
+  void updateTolls();        // the player's car through a toll plaza: ETC entry / fare at the exit
+  void drawShopMenu();
+  bool buyItem(const ShopItem& it);
+  std::string inventoryString() const;
+  void parseInventory(const std::string& s);
   // test aids (scripted drive / ride); the screenshot waits until they are finished
   struct DriveLeg {
     float throttle, steer, seconds;

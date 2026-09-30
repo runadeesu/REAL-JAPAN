@@ -33,6 +33,7 @@ bool writeSave(int slot, const SaveGame& s) {
   o << "money = " << s.money << "\n";
   o << "play_seconds = " << s.play_seconds << "\n";
   o << "interior = " << s.interior << "\n";
+  o << "inventory = " << s.inventory << "\n";
   return writeFileAtomic(savePath(slot), o.str());
 }
 
@@ -60,6 +61,7 @@ std::optional<SaveGame> readSave(int slot) {
     s.money = std::stoll(get("money"));
     s.play_seconds = std::stod(get("play_seconds"));
     s.interior = get("interior");
+    s.inventory = get("inventory");
   } catch (...) {
     return std::nullopt;
   }

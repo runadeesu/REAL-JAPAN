@@ -254,9 +254,14 @@ def cook_cell(mesh: str):
         build_sidewalks([stub], fps_local, fc, to_local, ts, geos, walk)
     extra = specials.cell_detail(spec, ctry, cpoly, xf, ts, rng, geos, rp=rp)
     from country import shop as shop_mod
+    shops_out = []  # (kind, counter lat, lon, floor height, customer's spot lat, lon)
     for b in blds:  # walk-in shop ground floors
         if getattr(b, "shop", None):
-            shop_mod.build(geos, extra, xf, b.shop)
+            till = shop_mod.build(geos, extra, xf, b.shop)
+            if till:
+                cla, clo = fi.to_geodetic(*till["counter"])
+                sla, slo = fi.to_geodetic(*till["stand"])
+                shops_out.append((till["kind"], cla, clo, till["z"], sla, slo))
             if os.environ.get("RJ_COOK_SHOPS"):  # (debug: where the shops are)
                 r, fe = np.asarray(b.shop["ring"], float), b.shop["front_edge"]
                 a_, b_ = r[fe], r[(fe + 1) % len(r)]
@@ -268,6 +273,10 @@ def cook_cell(mesh: str):
                 cam = m_ + n_ * 7.0  # (a spot out in front, looking at the shop: compass yaw)
                 la_, lo_ = fi.to_geodetic(float(cam[0]), float(cam[1]))
                 print(f"SHOP {b.shop['kind']} view {la_:.7f},{lo_:.7f} yaw {math.degrees(math.atan2(-n_[0], -n_[1])) % 360:.0f}", flush=True)
+    for kind, cxy, sxy, z in getattr(extra, "shops", []):  # (the parking areas' shops)
+        cla, clo = fi.to_geodetic(*cxy)
+        sla, slo = fi.to_geodetic(*sxy)
+        shops_out.append((kind, cla, clo, z, sla, slo))
     # ground raster, contact AO, land-cover map
     M = raster_mapper(fi, bounds)
     size = TEX if (w.buildings or (rp is not None and rp.whole.area > 20000)) else (TEX_RURAL if has_land else TEX_SEA)
@@ -287,7 +296,7 @@ def cook_cell(mesh: str):
             "det": len(det)}
     print(f"{mesh}: {len(w.buildings)} buildings, {len(data) / 1e6:.2f} MB + detail {len(det) / 1e6:.2f} MB "
           f"({size}px, {dst['trees']} trees), {time.time() - tc:.1f}s", flush=True)
-    return summ, homes, works, pois, boxes
+    return summ, homes, works, pois, boxes, shops_out
 
 
 def far_boxes(blds):
@@ -455,7 +464,7 @@ def road_graph(net, fi: LocalFrame):
     """RJROAD from the generated centerlines (noded at crossings); width = carriageway width."""
     lines, widths, full, kinds = [], [], [], []
     for r in net.roads:
-        if r.carriage < 3.0:
+        if r.carriage < 3.0 or r.kind == "lot":  # (car parks are not driven through by the traffic)
             continue
         lines.append(r.line)
         widths.append(r.carriage)
@@ -543,11 +552,17 @@ def road_graph(net, fi: LocalFrame):
     return bytes(out), len(nodes), len(edges)
 
 
-def write_residents(out, homes, works, pois, rng, n_res=9000):
+def write_residents(out, homes, works, pois, rng, n_res=12000):
+    """Residents of the whole country: homes weighted by floor space (the regional towns weighted up
+    so they are not left nearly empty beside the capital), each working at a workplace near home
+    (among the nearest few dozen, by size) or, for a few, commuting further."""
     rows = []
     if homes and works:
-        hw = np.array([h["storeys"] * max(h["area"], 30.0) for h in homes])
+        from scipy.spatial import cKDTree
+        hw = np.array([h["storeys"] * max(h["area"], 30.0) * (1.0 if h["lon"] > 140.95 else 3.0) for h in homes])
         ww = np.array([w["storeys"] * max(w["area"], 30.0) for w in works])
+        wxy = np.array([[w["lat"], w["lon"] * 0.83] for w in works])
+        wtree = cKDTree(wxy)
         occ = {401: ["office_worker"] * 6 + ["engineer", "programmer", "designer", "executive", "lawyer"],
                402: ["shop_clerk"] * 5 + ["cook", "cook", "hairdresser", "barber", "patissier"],
                403: ["shop_clerk", "cook"], 404: ["shop_clerk", "office_worker", "cook"], 421: ["civil_servant"],
@@ -555,11 +570,16 @@ def write_residents(out, homes, works, pois, rng, n_res=9000):
                441: ["factory_worker", "mechanic"]}
         hi = rng.choice(len(homes), size=n_res, p=hw / hw.sum())
         wi = rng.choice(len(works), size=n_res, p=ww / ww.sum())
+        kn = min(40, len(works))
         for k in range(n_res):
-            h, wk = homes[hi[k]], works[wi[k]]
-            # people work near home (a few commute between towns)
-            if math.hypot(h["lat"] - wk["lat"], (h["lon"] - wk["lon"]) * 0.83) > 0.06 and rng.random() < 0.85:
-                continue
+            h = homes[hi[k]]
+            if rng.random() < 0.9:  # near home: one of the nearest workplaces, by size
+                _, idx = wtree.query([h["lat"], h["lon"] * 0.83], k=kn)
+                idx = np.atleast_1d(idx)
+                pw = ww[idx] / ww[idx].sum()
+                wk = works[int(idx[int(rng.choice(len(idx), p=pw))])]
+            else:  # commuting further (another town)
+                wk = works[wi[k]]
             roll = rng.random()
             if roll < 0.12:
                 o, w2 = rng.choice(["high_school_student", "university_student", "junior_high_student"]), wk
@@ -740,6 +760,21 @@ def main() -> int:
     print(f"road graph: {nn} nodes, {ne} edges", flush=True)
     specials.write_extra(spec, out, fi)
     write_far(out, ctry, spec, lc, fi, [bx for r in results for bx in r[4]])
+    # walk-in shops: the counter and where a customer stands (the client sells there)
+    with open(os.path.join(out, "shops.txt"), "w", encoding="utf-8") as f:
+        f.write("# shop kind counter_lat counter_lon floor_h stand_lat stand_lon (walk-in shops, generic; prices are game values)\n")
+        n_shops = 0
+        for r in results:
+            for kind, cla, clo, z, sla, slo in r[5]:
+                f.write(f"shop {kind} {cla:.8f} {clo:.8f} {z:.2f} {sla:.8f} {slo:.8f}\n")
+                n_shops += 1
+    print(f"shops: {n_shops}", flush=True)
+    with open(os.path.join(out, "tolls.txt"), "w", encoding="utf-8") as f:
+        f.write("# toll name lat lon h heading_deg width (expressway toll plazas on the interchange ramps; fares are game values)\n")
+        for t in spec.tolls:
+            la, lo = fi.to_geodetic(t["x"], t["y"])
+            f.write(f"toll {t['name']} {la:.8f} {lo:.8f} {t['z']:.2f} {t['hd']:.1f} {t['width']:.1f}\n")
+    print(f"toll plazas: {len(spec.tolls)}, parking areas: {len(spec.pas)}", flush=True)
     write_residents(out, homes, works, pois, rng)
     sp_lat, sp_lon = fi.to_geodetic(-265, -700)
     meta = {"id": "country", "name_ja": L.NAME_JA, "name_en": L.NAME_EN, "cells": summary,
