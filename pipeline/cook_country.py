@@ -158,6 +158,7 @@ def uv_to_xy(M, W):
 
 # ---------------------------------------------------------------------------------------------
 G = {}  # shared state for the worker processes (inherited through fork)
+HOME_NEAR = np.array([-265.0, -700.0])  # the start (country frame); the player's flat is the nearest fit shop floor in its cell
 
 
 def cook_cell(mesh: str):
@@ -185,6 +186,14 @@ def cook_cell(mesh: str):
         b = make_building(pc, terrain, rng, ns, nst)
         if b is not None:
             blds.append(b)
+    from country import shop as shop_mod
+    if cpoly.contains(Point(*HOME_NEAR)):
+        # the player's flat: the walk-in ground floor nearest the start that makes a one-room flat
+        cands = [b for b in blds if getattr(b, "shop", None) and shop_mod.home_ok(Polygon(b.shop["ring"]))] or \
+                [b for b in blds if getattr(b, "shop", None) and shop_mod.home_ok(Polygon(b.shop["ring"]), 160.0)]
+        if cands:
+            hb = min(cands, key=lambda b: float(np.hypot(*(np.asarray(b.shop["ring"], float)[:, :2].mean(axis=0) - HOME_NEAR))))
+            hb.shop["kind"] = "home"
     boxes = far_boxes(blds)
     for b in blds:
         first = None
@@ -253,12 +262,16 @@ def cook_cell(mesh: str):
         fps_local = [rec.footprint for rec in w.buildings]
         build_sidewalks([stub], fps_local, fc, to_local, ts, geos, walk)
     extra = specials.cell_detail(spec, ctry, cpoly, xf, ts, rng, geos, rp=rp)
-    from country import shop as shop_mod
     shops_out = []  # (kind, counter lat, lon, floor height, customer's spot lat, lon)
+    home_out = []   # (bed lat, lon, floor height, bedside lat, lon, doorway end lat, lon, other end lat, lon)
     for b in blds:  # walk-in shop ground floors
         if getattr(b, "shop", None):
-            till = shop_mod.build(geos, extra, xf, b.shop)
-            if till:
+            till = shop_mod.build(geos, extra, xf, b.shop, ts)
+            if till and till["kind"] == "home":
+                g_ = [fi.to_geodetic(*p_) for p_ in (till["counter"], till["stand"], *till["door"])]
+                home_out.append((g_[0][0], g_[0][1], till["z"], g_[1][0], g_[1][1], g_[2][0], g_[2][1], g_[3][0], g_[3][1]))
+                print(f"HOME at {g_[0][0]:.7f},{g_[0][1]:.7f} ({float(np.hypot(*(np.asarray(till['counter']) - HOME_NEAR))):.0f} m from the start)", flush=True)
+            elif till:
                 cla, clo = fi.to_geodetic(*till["counter"])
                 sla, slo = fi.to_geodetic(*till["stand"])
                 shops_out.append((till["kind"], cla, clo, till["z"], sla, slo))
@@ -296,7 +309,7 @@ def cook_cell(mesh: str):
             "det": len(det)}
     print(f"{mesh}: {len(w.buildings)} buildings, {len(data) / 1e6:.2f} MB + detail {len(det) / 1e6:.2f} MB "
           f"({size}px, {dst['trees']} trees), {time.time() - tc:.1f}s", flush=True)
-    return summ, homes, works, pois, boxes, shops_out
+    return summ, homes, works, pois, boxes, shops_out, home_out
 
 
 def far_boxes(blds):
@@ -769,6 +782,12 @@ def main() -> int:
                 f.write(f"shop {kind} {cla:.8f} {clo:.8f} {z:.2f} {sla:.8f} {slo:.8f}\n")
                 n_shops += 1
     print(f"shops: {n_shops}", flush=True)
+    # the player's flat (rented from the phone; the bed, the doorway locked until then)
+    with open(os.path.join(out, "home.txt"), "w", encoding="utf-8") as f:
+        f.write("# home bed_lat bed_lon floor_h bedside_lat bedside_lon door_a_lat door_a_lon door_b_lat door_b_lon (the player's flat; fictional; rent is a game value)\n")
+        for r in results:
+            for h_ in r[6]:
+                f.write("home " + " ".join(f"{x:.8f}" if i != 2 else f"{x:.2f}" for i, x in enumerate(h_)) + "\n")
     with open(os.path.join(out, "tolls.txt"), "w", encoding="utf-8") as f:
         f.write("# toll name lat lon h heading_deg width (expressway toll plazas on the interchange ramps; fares are game values)\n")
         for t in spec.tolls:
@@ -782,7 +801,7 @@ def main() -> int:
             f.write(f"fuel {pa['name']} {la:.8f} {lo:.8f} {pa['fuel_z']:.2f}\n")
     print(f"toll plazas: {len(spec.tolls)}, parking areas: {len(spec.pas)}", flush=True)
     write_residents(out, homes, works, pois, rng)
-    sp_lat, sp_lon = fi.to_geodetic(-265, -700)
+    sp_lat, sp_lon = fi.to_geodetic(*HOME_NEAR)
     meta = {"id": "country", "name_ja": L.NAME_JA, "name_en": L.NAME_EN, "cells": summary,
             "pipeline_version": PIPELINE_VERSION, "fictional": True}
     with open(os.path.join(out, "slice.json"), "w", encoding="utf-8") as f:

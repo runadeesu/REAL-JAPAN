@@ -318,6 +318,7 @@ void App::updateCrossingSafety() {
     }
   }
   if (!tolls_.empty()) updateTollBars(std::min(GetFrameTime(), 0.1f), crossing_walls_);  // (the ETC bars too)
+  addHomeDoorWall(crossing_walls_);  // (the flat's front door, locked until it is rented)
   driving_.setExtraWalls(&crossing_walls_);
   std::vector<V3> on_tracks;
   if (driving_.active() || driving_.hasCar()) {

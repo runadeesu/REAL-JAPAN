@@ -94,7 +94,7 @@ bool App::payCar(int64_t yen, const std::string& memo) {
   if (yen <= 0) return true;
   if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), yen, rj::econ::TxCategory::Purchase, clock_.unixUtc(), memo) !=
                       rj::econ::TxResult::Ok) {
-    toast(tr("rail.no_money"));
+    toast(tr("money.short"));
     return false;
   }
   return true;

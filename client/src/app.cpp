@@ -110,6 +110,7 @@ bool App::boot() {
       TraceLog(LOG_WARNING, "RJ: shops disabled: %s", serr.c_str());
     if (fileExists(slice_dir_ / "tolls.txt")) loadTolls(slice_dir_ / "tolls.txt");
     if (fileExists(slice_dir_ / "fuel.txt")) loadFuelStations(slice_dir_ / "fuel.txt");
+    if (fileExists(slice_dir_ / "home.txt")) loadHome(slice_dir_ / "home.txt");
   }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
@@ -327,6 +328,11 @@ void App::applyLaunchOverrides() {
     life_.flashlight = v.find("light") != std::string::npos;
     if (v.find("hungry") != std::string::npos) life_.hunger = 10.0f;
     if (v.find("wet") != std::string::npos) life_.wet = 0.8f;
+    if (v.find("home") != std::string::npos) {
+      life_.has_home = true;
+      life_.rent_paid_until = clock_.unixUtc() + 30 * 86400;
+      home_door_open_ = 1.0f;
+    }
   }
   if (opt_.has_pos) {
     player_.pos = world_.toLocal({opt_.lat, opt_.lon, 0.0});
@@ -361,6 +367,7 @@ void App::placeRoads() {
   if (shops_.loaded()) shops_.place(world_);
   for (auto& t : tolls_) t.pos = world_.toLocal(t.geo);
   for (auto& f : fuel_stations_) f.pos = world_.toLocal(f.geo);
+  placeHome();
   // Large worlds (the island) stream: markings and the walk network cover the area around the player.
   const bool regional = world_.knownCount() > 8;
   const rj::geo::Vec3d c = in_session_ ? player_.pos : rj::geo::Vec3d{0, 0, 0};
@@ -832,6 +839,7 @@ void App::update(float dt) {
         updateAviationActions();
         updateDriveActions();
         updateShopActions();
+        updateHome(dt);
         updateFuelStation();
         updateTolls();
         updateRideTest();
@@ -1392,6 +1400,40 @@ void App::runSelfTest() {
       talk_t_ = 0.0f;
       check(n >= 3, "talking to a passer-by (greeting, who they are, the weather, a word about the place)");
     }
+    if (home_.ok) {
+      // the flat: locked (a wall across the doorway from outside), rented from the wallet, then a
+      // night's sleep to 7:00 at half the waking hunger, and the lease kept in the save
+      const Life keep = life_;
+      const auto keep_pos = player_.pos;
+      life_.has_home = false;
+      const rj::geo::Vec3d dm{(home_.door_a.x + home_.door_b.x) / 2, (home_.door_a.y + home_.door_b.y) / 2, home_.door_a.z};
+      const double ox = dm.x - home_.bed.x, oy = dm.y - home_.bed.y, ol = std::max(1e-6, std::hypot(ox, oy));
+      player_.pos = {dm.x + ox / ol * 3.0, dm.y + oy / ol * 3.0, dm.z};  // (out in the street in front of the door)
+      std::vector<float> w0;
+      addHomeDoorWall(w0);
+      const bool locked = w0.size() == 6;
+      if (ledger_ && ledger_->balance(player_account_) < 65000)
+        ledger_->transfer(ledger_->externalAccount(), player_account_, 65000, rj::econ::TxCategory::Transfer, clock_.unixUtc(), "selftest");
+      const int64_t before = ledger_ ? ledger_->balance(player_account_) : 0;
+      const bool rented = rentHome() && life_.has_home && ledger_ && ledger_->balance(player_account_) == before - 65000;
+      std::vector<float> w1;
+      addHomeDoorWall(w1);
+      const int64_t t0 = clock_.unixUtc();
+      const auto j0 = jst();
+      clock_.advanceGame(((22 - j0.hour + 24) % 24) * 3600.0 - j0.minute * 60.0);  // 22:00
+      life_.hunger = 80.0f;
+      life_.thirst = 80.0f;
+      life_.wet = 0.5f;
+      sleepAtHome();
+      const auto j1 = jst();
+      const bool slept = j1.hour == 7 && j1.minute == 0 && std::fabs(life_.hunger - 53.0f) < 0.6f && life_.wet == 0.0f;
+      parseLife(lifeString());
+      const bool kept = life_.has_home && life_.rent_paid_until > t0;
+      clock_.advanceGame(static_cast<double>(t0 - clock_.unixUtc()));  // (back to the test's time)
+      life_ = keep;
+      player_.pos = keep_pos;
+      check(locked && rented && w1.empty() && slept && kept, "the flat: locked until rented, rent from the wallet, sleep to 7:00, kept in the save");
+    }
   }
   // Verified interior: enter through a real entrance, stand on a real floor, walls block.
   if (!fic) check(!world_.meta().interiors.empty(), "interior listed in slice");
@@ -1655,6 +1697,7 @@ void App::drawWorldView(const Camera3D& cam) {
                           gate_flash_lane_, gate_flash_ok_);
     if (!trains_.crossings().empty()) renderer_.drawCrossings(trains_, cam, render_time_);
     if (!tolls_.empty()) drawTollBars(cam);
+    drawHomeDoor(cam);
     if (shops_.loaded()) drawShopClerks(cam);
     if (world_.meta().fictional && in_session_) renderer_.drawDistantTraffic(traffic_, cam, lighting_, render_time_, jst().hour);
     renderer_.drawStationSigns(trains_, cam);
@@ -2364,6 +2407,7 @@ void App::drawMap(Rectangle r, double half, bool labels) {
       ui_.text(nm, s.x / ui_.scale() - 20, s.y / ui_.scale() - 12, pl.city ? 22 : 17, pl.city ? WHITE : Color{225, 225, 210, 255});
     }
   }
+  drawHomeOnMap(toScreen, half);
   if (jobs_.active()) {  // job target
     const Vector2 s = toScreen(jobs_.target().pos);
     DrawCircleV(s, 7 * ui_.scale(), theme::kWarn);
@@ -2475,6 +2519,10 @@ void App::drawPhone() {
       back();
       break;
     }
+    case PhoneApp::Flat:
+      drawPhoneFlat(cx, yy, cw);
+      back();
+      break;
     case PhoneApp::Bag: {
       ui_.text(tr("phone.bag"), cx, yy, 32, theme::kText);
       yy += 56;

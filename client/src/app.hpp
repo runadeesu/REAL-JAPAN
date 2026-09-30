@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <map>
 #include <optional>
@@ -414,6 +415,27 @@ class App {
   int64_t repairCost() const;
   void drawFuelMenu();
   void drawCarPhone(float x, float& y, float w);
+  // the player's flat (app_home.cpp): rented from the phone, the front door locked until then, the
+  // bed sleeps the night through
+  struct HomeSpot {
+    bool ok = false;
+    rj::geo::Geodetic bed_geo, stand_geo, door_a_geo, door_b_geo;
+    rj::geo::Vec3d bed, stand, door_a, door_b;
+  };
+  HomeSpot home_;
+  float home_door_open_ = 0.0f;  // the door leaf 0 shut .. 1 open
+  int64_t slept_until_ = 0;      // (last sleep: the wake-up message)
+  void loadHome(const std::filesystem::path& file);
+  void placeHome();
+  bool homeLocked() const { return home_.ok && !life_.has_home; }
+  bool playerOutsideHome() const;
+  void addHomeDoorWall(std::vector<float>& walls) const;
+  void updateHome(float dt);
+  bool rentHome();
+  void sleepAtHome();
+  void drawHomeDoor(const Camera3D& cam);
+  void drawPhoneFlat(float cx, float yy, float cw);
+  void drawHomeOnMap(const std::function<Vector2(const rj::geo::Vec3d&)>& toScreen, double half);
   std::string inventoryString() const;
   void parseInventory(const std::string& s);
   // test aids (scripted drive / ride); the screenshot waits until they are finished
