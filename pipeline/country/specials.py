@@ -866,8 +866,12 @@ def _parking_areas(ctry, terrain):
             nrm = np.array([e[1], -e[0]]) / max(np.linalg.norm(e), 1e-9)
             if float(nrm @ -n_out) > 0.9:
                 fe = i
+        # the fuel station on the car park's outer bays at one end (pumps under a canopy)
+        fq = r.line.interpolate(0.84, normalized=True)
+        fuel = np.array([fq.x, fq.y]) + n_out * (r.width / 2 - 4.0)
         out.append(dict(name=r.name, ring=ring, ground=float(terrain.sample(c[0], c[1])), front_edge=fe, kind="konbini",
-                        fascia=(40, 120, 190), seed=int(abs(c[0] * 7 + c[1] * 3)) % (1 << 30), centre=c, d=d, lot=r.line))
+                        fascia=(40, 120, 190), seed=int(abs(c[0] * 7 + c[1] * 3)) % (1 << 30), centre=c, d=d, lot=r.line,
+                        n_out=n_out, fuel=fuel, fuel_z=float(terrain.sample(fuel[0], fuel[1]))))
     return out
 
 
@@ -943,10 +947,45 @@ def _parking_area(geos, ex, xf, pa, ground_c):
         e = b - a
         L_ = float(np.linalg.norm(e))
         _obox_c(geos, xf, "concrete", mid, e / max(L_, 1e-9), pa["ground"] + shop_mod.FLOOR_H + 0.7, L_ / 2, 0.12, 0.3, (190, 188, 182, 255))
+    # the toilets beside the shop (a plain block: pale tiles, a dark band, doorways), vending machines
+    # along the shop front, and the fuel station on the outer bays (pumps, canopy, a green band)
+    n_out = pa["n_out"]
+    gz = pa["ground"]
+    wc = c + d * 22.0
+    _obox_c(geos, xf, "concrete", wc, d, gz + 1.6, 5.5, 4.0, 1.6, (214, 210, 200, 255))
+    _obox_c(geos, xf, "concrete", wc, d, gz + 3.35, 5.8, 4.3, 0.15, (150, 146, 140, 255))
+    _obox_c(geos, xf, "sign", wc - n_out * 4.02, d, gz + 2.7, 5.52, 0.03, 0.18, (60, 90, 150, 255))
+    for sa in (-2.6, 2.6):
+        _obox_c(geos, xf, "metal_dark", wc - n_out * 4.03 + d * sa, d, gz + 1.05, 0.55, 0.03, 1.05, (40, 42, 46, 255))
+    A = xf.p([[wc[0] - d[0] * 5.5 - n_out[0] * 4.0, wc[1] - d[1] * 5.5 - n_out[1] * 4.0, gz]])[0]
+    B = xf.p([[wc[0] + d[0] * 5.5 - n_out[0] * 4.0, wc[1] + d[1] * 5.5 - n_out[1] * 4.0, gz]])[0]
+    ex.walls.append((A[0], A[1], B[0], B[1], A[2] - 0.3, A[2] + 3.2))
+    for k in range(3):
+        vp = c - n_out * 6.9 + d * (9.5 + k * 1.1)
+        _obox_c(geos, xf, "metal", vp, d, gz + 0.92, 0.5, 0.36, 0.92, [(210, 40, 40, 255), (40, 110, 190, 255), (240, 240, 236, 255)][k])
+        _obox_c(geos, xf, "lamp", vp - n_out * 0.37, d, gz + 1.2, 0.34, 0.01, 0.5, (235, 240, 245, 255))
+    fu, fz = pa["fuel"], pa["fuel_z"]
+    for sa in (-2.4, 2.4):
+        _obox_c(geos, xf, "concrete", fu + d * sa, d, fz + 0.1, 1.6, 0.5, 0.1, (190, 188, 182, 255))
+        _obox_c(geos, xf, "metal", fu + d * sa, d, fz + 0.85, 0.35, 0.3, 0.75, (236, 236, 232, 255))
+        _obox_c(geos, xf, "sign", fu + d * sa, d, fz + 1.5, 0.36, 0.31, 0.08, (40, 140, 80, 255))
+        A = xf.p([[fu[0] + d[0] * (sa - 1.6), fu[1] + d[1] * (sa - 1.6), fz]])[0]
+        B = xf.p([[fu[0] + d[0] * (sa + 1.6), fu[1] + d[1] * (sa + 1.6), fz]])[0]
+        ex.walls.append((A[0], A[1], B[0], B[1], A[2] - 0.3, A[2] + 1.6))
+    for sa in (-1, 1):
+        for sc in (-1, 1):
+            _obox_c(geos, xf, "metal", fu + d * sa * 4.2 + n_out * sc * 3.0, d, fz + 2.6, 0.15, 0.15, 2.6, (210, 212, 214, 255))
+    _obox_c(geos, xf, "concrete", fu, d, fz + 5.35, 5.0, 4.0, 0.25, (228, 228, 224, 255))
+    for sa in (-1, 1):
+        _obox_c(geos, xf, "sign", fu + n_out * sa * 4.02, d, fz + 5.35, 5.02, 0.03, 0.26, (40, 140, 80, 255))
+    L0 = xf.p([[fu[0], fu[1], fz + 4.8]])[0]
+    ex.lights.append(((L0[0], L0[1], L0[2]), 12.0, 3))
     # parking bays: white lines across both sides of the car park
     lot = pa["lot"]
     for s_ in np.arange(6.0, lot.length - 6.0, 2.5):
         q = lot.interpolate(float(s_))
+        if math.hypot(q.x - fu[0], q.y - fu[1]) < 12.0:  # (no bays at the fuel station)
+            continue
         a = lot.interpolate(max(0.0, float(s_) - 1.0))
         b = lot.interpolate(min(lot.length, float(s_) + 1.0))
         dd = np.array([b.x - a.x, b.y - a.y])

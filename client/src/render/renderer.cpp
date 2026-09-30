@@ -525,6 +525,7 @@ void Renderer::applyFrameUniforms(const Camera3D& cam, const Lighting& L, float 
   setF(lit_, "snowSeason", snow_tex_.id ? season_snow_ : 0.0f);
   setF(lit_, "cropStage", season_crop_);
   setF(lit_, "leafStage", season_leaf_);
+  setF(lit_, "blossom", season_blossom_);
   setF(lit_, "canopyCut", canopy_cut_);
   setI(lit_, "landOn", 0);
 }

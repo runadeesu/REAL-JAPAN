@@ -136,6 +136,7 @@ uniform float snowSeason;     // 0 no snow lying .. 1 deep winter
 uniform float cropStage;      // 0 winter stubble, 1 flooded with seedlings, 2 green, 3 golden
 uniform float canopyCut;      // > 0: the canopy mesh gives way to single trees within this radius of the camera
 uniform float leafStage;      // 0 green, 1 autumn colours, 2 bare (deciduous trees)
+uniform float blossom;        // 0 .. 1 cherry blossom (late March - mid April)
 out vec4 finalColor;
 float litFrom(float p) {
   float cat = floor(p);
@@ -370,6 +371,9 @@ Surf material(int id, vec3 ng, vec2 wuv) {
     vec3 bare = vec3(0.07, 0.055, 0.045) * (0.7 + 0.6 * c.r);
     vec3 leaf = leafStage < 1.0 ? mix(green, autumn, leafStage) : mix(autumn, bare, leafStage - 1.0);
     s.albedo = mix(green, leaf, broad) * (fragColor.r * 2.0);
+    // the cherries among the broadleaf stands flower pale pink in spring, before their leaves
+    float cherry = broad * smoothstep(0.66, 0.72, texture(texNoise, wuv / 97.0).r);
+    s.albedo = mix(s.albedo, vec3(0.80, 0.56, 0.62) * (0.75 + 0.5 * c.r), cherry * blossom);
     s.n = normalize(ng + vec3(c.g - 0.5, 0.0, c.b - 0.5) * 0.9);
     s.rough = 0.8; s.porosity = 0.2;
     float sn = snowAt(fragPos, ng) * (0.55 + 0.45 * c.r);
@@ -812,6 +816,10 @@ void main() {
       vec4 t = texture(texture0, fragUV);
       if (t.a < 0.5) discard;
       s.albedo *= pow(t.rgb, vec3(2.2));
+      if (id == 33 && blossom > 0.0) {  // some street trees are cherries: pale pink in early April
+        float ch = smoothstep(0.52, 0.58, texture(texNoise, floor(wuv / 24.0) * 0.137 + 0.31).r);
+        s.albedo = mix(s.albedo, vec3(0.80, 0.55, 0.62) * (0.55 + 0.6 * t.g), ch * blossom);
+      }
       if (surfaceMode == 2) {
         // Glass in the facade photos (cool, fairly dark, unsaturated texels on vertical faces) is glossy
         // so curtain walls pick up sky and street reflections; the rest stays matte.

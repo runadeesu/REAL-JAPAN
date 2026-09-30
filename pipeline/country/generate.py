@@ -198,7 +198,9 @@ def _ramp_points(ex: Road, rp) -> np.ndarray:
     sgn = 1.0 if float((far - q0) @ d0) > 0 else -1.0
     ch = ex.carriage / 2.0
     head = []
-    for back, off in ((220.0, ch - 4.5), (140.0, ch - 1.0), (70.0, ch + 7.0), (0.0, ch + 22.0)):
+    # a taper into the outer lane, an acceleration / deceleration lane of about 140 m alongside the
+    # carriageway (its own lane, 4 m out from the carriageway edge), then away to the side
+    for back, off in ((320.0, ch - 3.5), (250.0, ch + 1.5), (200.0, ch + 4.0), (130.0, ch + 4.0), (60.0, ch + 9.0), (0.0, ch + 22.0)):
         q, _, nn = frame(s0 - sgn * back)
         head.append(q + nn * side * off)
     rest = [q for q in rp[1:] if eline.distance(Point(q)) > ch + 40.0]
@@ -449,7 +451,7 @@ def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -
             # where it runs along the expressway (the slip road's start) it is at its level
             for k in range(n):
                 for eline, ez, en, ehalf in ex_profiles:
-                    if eline.distance(Point(P[k])) < (ehalf + 1.0 if 0 < k < n - 1 else 15.0):
+                    if eline.distance(Point(P[k])) < (ehalf + 6.0 if 0 < k < n - 1 else 15.0):  # (incl. the lane alongside)
                         t = eline.project(Point(P[k])) / max(eline.length, 1e-9)
                         z[k] = float(np.interp(t * (en - 1), np.arange(en), ez))
                         pinned[k] = True

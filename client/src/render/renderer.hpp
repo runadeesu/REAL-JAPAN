@@ -111,10 +111,11 @@ class Renderer {
     snow_v_ = v;
   }
   void setCanopyCut(float r) { canopy_cut_ = r; }  // single trees replace the canopy within r of the camera
-  void setSeason(float snow, float crop, float leaf) {
+  void setSeason(float snow, float crop, float leaf, float blossom = 0.0f) {
     season_snow_ = snow;
     season_crop_ = crop;
     season_leaf_ = leaf;
+    season_blossom_ = blossom;
   }
   // neutral_floor: flat stand-in plane outside data coverage (off underground, where it would cut through).
   void drawWorld(const Camera3D& cam, const World& world, bool photo_textures, bool neutral_floor = true);
@@ -237,7 +238,7 @@ class Renderer {
   RenderOptions opt_{};
   Texture2D snow_tex_{};
   Vector3 snow_u_{0, 0, 0}, snow_v_{0, 0, 0};
-  float season_snow_ = 0.0f, season_crop_ = 2.0f, season_leaf_ = 0.0f;
+  float season_snow_ = 0.0f, season_crop_ = 2.0f, season_leaf_ = 0.0f, season_blossom_ = 0.0f;
   float canopy_cut_ = 0.0f;
   float exposure_ = 1.0f;
   float exposure_override_ = 0.0f;

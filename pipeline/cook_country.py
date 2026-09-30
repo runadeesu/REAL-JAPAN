@@ -774,6 +774,12 @@ def main() -> int:
         for t in spec.tolls:
             la, lo = fi.to_geodetic(t["x"], t["y"])
             f.write(f"toll {t['name']} {la:.8f} {lo:.8f} {t['z']:.2f} {t['hd']:.1f} {t['width']:.1f}\n")
+    # fuel stations (the client fills the tank and mends the car there; prices are game values)
+    with open(os.path.join(out, "fuel.txt"), "w", encoding="utf-8") as f:
+        f.write("# fuel name lat lon h (fuel stations, generic; prices are game values)\n")
+        for pa in spec.pas:
+            la, lo = fi.to_geodetic(float(pa["fuel"][0]), float(pa["fuel"][1]))
+            f.write(f"fuel {pa['name']} {la:.8f} {lo:.8f} {pa['fuel_z']:.2f}\n")
     print(f"toll plazas: {len(spec.tolls)}, parking areas: {len(spec.pas)}", flush=True)
     write_residents(out, homes, works, pois, rng)
     sp_lat, sp_lon = fi.to_geodetic(-265, -700)

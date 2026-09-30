@@ -89,6 +89,7 @@ set(RJ_SOURCES
   src/app_shop.cpp
   src/app_life.cpp
   src/app_car.cpp
+  src/app_talk.cpp
   src/render/aircraft.cpp
   src/render/trains.cpp
   src/game/traffic.cpp

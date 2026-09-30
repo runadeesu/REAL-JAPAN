@@ -510,6 +510,13 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
       w.dodge.x *= k;
       w.dodge.y *= k;
     }
+    bool held = false;
+    if (auto h = hold_.find(it->first); h != hold_.end()) {  // talking to the player: stand, face them
+      held = true;
+      step = 0.0;
+      w.waiting = true;
+      if ((h->second -= real_dt) <= 0.0f) hold_.erase(h);
+    }
     w.dist += step;
     if (!w.waiting && !dodging) w.phase += real_dt * 7.5f * (w.speed / 1.4f);
     const auto base = rj::nav::GridNav::pointAt(w.path, w.dist, &w.dir);
@@ -523,7 +530,7 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
     const float rate = 0.9f * real_dt;
     w.off_eff += std::clamp(tgt - w.off_eff, -rate, rate);
     w.pos = {base.x + perp.x * w.off_eff + w.dodge.x, base.y + perp.y * w.off_eff + w.dodge.y};
-    const double hy = std::atan2(w.dir.x, w.dir.y);
+    const double hy = held ? std::atan2(hold_face_.x - w.pos.x, hold_face_.y - w.pos.y) : std::atan2(w.dir.x, w.dir.y);
     w.yaw = static_cast<float>(wrapAngle(w.yaw + wrapAngle(hy - w.yaw) * std::min(1.0, real_dt * 5.0)));
     if (auto h = world.surfaceHeight(w.pos.x, w.pos.y)) w.z = static_cast<float>(*h);
     const bool far = std::hypot(w.pos.x - me.x, w.pos.y - me.y) > (w.visitor ? kVisitorKeep : kVisibleRadius * 1.3);

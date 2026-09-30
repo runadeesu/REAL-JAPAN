@@ -358,6 +358,16 @@ class App {
   void drawShopMenu();
   void drawShopClerks(const Camera3D& cam);
   int shop_greeted_ = -1;  // the counter whose clerk said hello
+  bool tsuyu_ = false, tsuyu_seen_ = false;
+  // talking to people in the street (app_talk.cpp)
+  void updateTalk(float dt);
+  void startTalk(const Walker& w);
+  void drawTalk();
+  float talk_t_ = 0.0f;
+  rj::geo::Vec3d talk_at_{};
+  std::string talk_speaker_;
+  std::vector<std::string> talk_lines_;
+  std::map<size_t, int> talked_;  // walker -> times talked (this session)  // the rainy season (for its start / end message)
   // what the controller's (and on touch builds the on-screen) buttons mean now (app_input.cpp)
   void updateInputContext();
   int shrine_frame_ = -10;  // last frame the shrine prompt was up (its extra buttons)

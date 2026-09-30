@@ -78,6 +78,16 @@ class Pedestrians {
   void update(TownSim& town, const World& world, const TrafficSignals& signals, const rj::sim::CivilDateTime& now,
               const rj::geo::Vec3d& player, float real_dt, float crowd_factor = 1.0f);
   const std::map<size_t, Walker>& walkers() const { return walkers_; }
+  // someone stops to talk to the player for a while (facing them), then walks on
+  void hold(size_t id, float seconds, const rj::geo::Vec3d& face) {
+    hold_[id] = seconds;
+    hold_face_ = face;
+  }
+  size_t idOf(const Walker* w) const {
+    for (const auto& [id, x] : walkers_)
+      if (&x == w) return id;
+    return static_cast<size_t>(-1);
+  }
   const Walker* pick(const rj::geo::Vec3d& eye, const rj::geo::Vec3d& dir, double max_dist) const;
   size_t visitorCount() const { return n_visitors_; }
   size_t sourceCount() const { return sources_.size(); }
@@ -114,6 +124,8 @@ class Pedestrians {
   std::vector<int16_t> cross_id_;  // per nav cell: crossing index or -1
   const RoadMarkings* markings_ = nullptr;
   std::map<size_t, Walker> walkers_;
+  std::map<size_t, float> hold_;  // walker -> seconds left talking
+  rj::geo::Vec3d hold_face_{};
   std::map<size_t, int> pending_;  // npc -> trip start minute being routed
   std::map<size_t, int> failed_;   // npc -> trip start minute that had no route
   std::vector<Job> queue_;

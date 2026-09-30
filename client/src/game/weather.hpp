@@ -2,8 +2,9 @@
 // Local weather simulation for the slice (game-side model; NOT a real forecast feed).
 // States change on a Markov chain every 20-70 game minutes with smooth transitions.
 // Wetness accumulates with rain and dries with sun and wind; it drives wet roads,
-// puddles and reflections in the renderer. Snow / typhoon / tsuyu are TODO but the
-// state structure (parameters, not hard-coded effects) is built for them.
+// puddles and reflections in the renderer. The season leans the chain: the rainy season (tsuyu,
+// early June to mid July) brings more rain, and from August to mid October a typhoon (strong
+// wind, torrential rain) may come by for some hours. Dates and odds are game assumptions.
 
 #include <cstdint>
 #include <string>
@@ -21,6 +22,7 @@ enum class WeatherKind : int {
   Thunder,     // 雷雨
   Fog,         // 霧
   Windy,       // 強風
+  Typhoon,     // 台風
   Count
 };
 
@@ -39,6 +41,12 @@ class WeatherSim {
  public:
   void set(WeatherKind k, bool instant);
   void setAuto(bool on) { auto_ = on; }
+  void setDate(int month, int day) {
+    month_ = month;
+    day_ = day;
+  }
+  bool tsuyu() const { return (month_ == 6 && day_ >= 7) || (month_ == 7 && day_ <= 19); }
+  bool typhoonSeason() const { return (month_ == 8 && day_ >= 10) || month_ == 9 || (month_ == 10 && day_ <= 15); }
   void update(double game_dt_s, double real_dt_s, float sun_elevation_deg);
 
   WeatherKind kind() const { return kind_; }
@@ -53,6 +61,7 @@ class WeatherSim {
   WeatherKind kind_ = WeatherKind::Fair;
   WeatherParams cur_ = weatherTarget(WeatherKind::Fair);
   bool auto_ = true;
+  int month_ = 9, day_ = 26;
   double until_change_s_ = 2400.0;
   float wetness_ = 0.0f;
   float lightning_ = 0.0f;

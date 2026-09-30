@@ -216,7 +216,7 @@ EXPRESSWAY_RAMPS = [
 ]
 # Parking area (fictional): a car park with a small shop beside the expressway on the plain west of
 # 稲穂 (name, a point on the expressway, side: +1 to the left of the way towards 朝凪, -1 right).
-EXPRESSWAY_PA = [("稲穂PA", (-13400, 2660), 1)]
+EXPRESSWAY_PA = [("稲穂PA", (-13400, 2660), 1), ("稲穂PA", (-13400, 2660), -1)]  # (both carriageways)
 
 # ---------------------------------------------------------------------------------------------
 # Second airport on the southern island (one 2,000 m runway): threshold A, threshold B, width.

@@ -840,6 +840,7 @@ void App::update(float dt) {
           hover_ = world_.pick(player_.eyeEnu(), player_.forwardEnu(), 300.0);
           hover_walker_ =
               peds_.pick(player_.eyeEnu(), player_.forwardEnu(), hover_ ? std::min(40.0, hover_->distance) : 40.0);
+          updateTalk(dt);
         } else {
           hover_.reset();
           hover_walker_ = nullptr;
@@ -897,7 +898,18 @@ void App::update(float dt) {
   const double game_dt = weather_prev_unix_ ? static_cast<double>(now_unix - weather_prev_unix_) : 0.0;
   weather_prev_unix_ = now_unix;
   render_time_ += dt;
+  {
+    const auto jt = clock_.jst();
+    weather_.setDate(jt.date.m, jt.date.d);
+  }
+  const WeatherKind wk0 = weather_.kind();
   weather_.update(game_dt, dt, static_cast<float>(sun.elevation_deg));
+  if (in_session_ && wk0 != WeatherKind::Typhoon && weather_.kind() == WeatherKind::Typhoon) toast(tr("weather.typhoon_warn"));
+  if (in_session_ && weather_.tsuyu() != tsuyu_) {
+    if (tsuyu_seen_) toast(tr(weather_.tsuyu() ? "weather.tsuyu_in" : "weather.tsuyu_out"));
+    tsuyu_ = weather_.tsuyu();
+  }
+  tsuyu_seen_ = in_session_;
   lighting_ = computeLighting(static_cast<float>(sun.elevation_deg), static_cast<float>(sun.azimuth_deg), weather_.now(),
                               weather_.wetness(), weather_.lightning(), Vector2{weather_.cloudOffsetX(), weather_.cloudOffsetY()});
   {
@@ -972,8 +984,11 @@ void App::updateSeason() {
   else if (doy < 130.0f) leaf = 2.0f - 2.0f * ramp(doy, 100.0f, 125.0f);
   else if (doy < 330.0f) leaf = ramp(doy, 285.0f, 318.0f);
   else leaf = 1.0f + ramp(doy, 330.0f, 350.0f);
-  if (const char* e = std::getenv("RJ_SEASON")) std::sscanf(e, "%f,%f,%f", &snow, &crop, &leaf);  // test aid
-  renderer_.setSeason(snow, crop, leaf);
+  // cherry blossom: the cherries among the broadleaf trees and along the streets flower from late
+  // March, full in early April, gone by mid April (typical dates, one date for the whole country)
+  float blossom = ramp(doy, 83.0f, 91.0f) * (1.0f - ramp(doy, 100.0f, 108.0f));
+  if (const char* e = std::getenv("RJ_SEASON")) std::sscanf(e, "%f,%f,%f,%f", &snow, &crop, &leaf, &blossom);  // test aid
+  renderer_.setSeason(snow, crop, leaf, blossom);
   // precipitation falls as snow in the season of lying snow, where the snow lies (the north side of
   // the spine, the high ground): a game rule from the snow map, not a temperature model
   snowfall_ = 0.0f;
@@ -1368,6 +1383,14 @@ void App::runSelfTest() {
       life_ = keep;
       inventory_ = inv;
       check(ate && umb && decay && kept, "eating and using what was bought; hunger and thirst over the hours; kept in the save");
+    }
+    {
+      Walker w;
+      w.visitor = true;
+      startTalk(w);
+      const size_t n = talk_lines_.size();
+      talk_t_ = 0.0f;
+      check(n >= 3, "talking to a passer-by (greeting, who they are, the weather, a word about the place)");
     }
   }
   // Verified interior: enter through a real entrance, stand on a real floor, walls block.
@@ -2035,6 +2058,7 @@ void App::drawHud() {
   if (photo_mode_) return;  // viewfinder only
   drawShopMenu();
   drawFuelMenu();
+  if (screen_ == Screen::Game) drawTalk();
   const auto g = world_.toGeodetic(player_.pos);
   const auto t = jst();
   const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
