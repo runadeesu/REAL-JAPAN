@@ -83,7 +83,7 @@ void App::drawShopMenu() {
   const ShopSpot& sp = shops_.spots()[static_cast<size_t>(shop_open_)];
   const auto& items = Shops::menu(sp.kind);
   const float w = 720, x = (ui_.vw() - w) / 2, row = 64;
-  const float h = 170 + row * static_cast<float>(items.size());
+  const float h = 240 + row * static_cast<float>(items.size());
   float y = 540 - h / 2;
   ui_.panel({x, y, w, h}, Color{16, 18, 22, 225});
   ui_.text(tr("shop.name." + sp.kind), x + 30, y + 22, 34, theme::kText);
@@ -100,6 +100,7 @@ void App::drawShopMenu() {
     y += row;
   }
   ui_.text(tr("shop.hint"), x + 30, y + 18, 22, theme::kMuted);
+  if (ui_.button({x + w - 224, y + 58, 200, 52}, tr("shop.close"), true, 26.0f)) shop_open_ = -1;  // (touch: no E key)
 }
 
 void App::loadTolls(const std::filesystem::path& file) {

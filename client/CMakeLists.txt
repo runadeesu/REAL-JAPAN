@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(RealJapan VERSION 0.6.0 LANGUAGES C CXX)
+project(RealJapan VERSION 0.7.0 LANGUAGES C CXX)
 
 # PROJECT: REAL JAPAN native client (Windows x64 primary target, Linux for dev).
 #   Linux:   cmake -S client -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release

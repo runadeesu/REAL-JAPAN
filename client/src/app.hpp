@@ -186,6 +186,7 @@ class App {
   int ride_board_station_ = -1;         // where the ride began (fare by distance at the end)
   FarView far_;                         // the country beyond the streamed cells (fictional world)
   NearTrees near_trees_;                // single forest trees near the camera (fictional world)
+  bool near_trees_low_ = true;          // the camera near the ground (single trees drawn)
   void updateFarMapping();
   void updateSeason();
   float snowfall_ = 0.0f;  // 0 rain .. 1 snow (updateSeason)

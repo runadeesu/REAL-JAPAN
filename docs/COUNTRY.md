@@ -41,7 +41,7 @@ capital 千景 with its layout kept; the country grew around it.
 | 秋津新幹線 | 千景中央 — 千景北 — 紫苑 — 新朝凪 (8 cars, up to 300 km/h) |
 | 雪見新幹線 | 千景北 — 湯の沢温泉 — (long tunnel under the spine) — 雪見 |
 | Roads | national roads between the towns (two lanes with paved shoulders outside the towns, sidewalks inside), mountain pass road, the volcano skyline road; road tunnels and viaducts where a road cannot follow the ground within its grade |
-| Expressway | 秋津自動車道 千景西 IC — 稲穂 IC — 紫苑 IC — 朝凪 IC (four lanes with a median barrier, guard rails, tunnels and viaducts; on viaducts through built-up land and over every road and railway it crosses; one two-way slip road per interchange, simplified) |
+| Expressway | 秋津自動車道 千景西 IC — 稲穂 IC — 紫苑 IC — 朝凪 IC (four lanes with a median barrier, guard rails, tunnels and viaducts; on viaducts through built-up land and over every road and railway it crosses; one two-way slip road per interchange, simplified; a toll plaza on each slip road, an ETC gantry where the slip road is a viaduct; 稲穂 PA with a car park and a shop) |
 | Air | 千景空港 ⇄ 南島空港 (regional jet: take-off, cruise, approach and landing on the map) |
 | Sea | 千景港 ⇄ 台場 (harbour ferry), 千景港 ⇄ 島ノ浦港 (high-speed ferry), 朝凪港 ⇄ 島ノ浦港 (car ferry) |
 
@@ -49,11 +49,18 @@ Rail profiles are grade-limited (bridging narrow valleys, tunnelling through rid
 stations; viaducts clear the streets in towns); tunnel mouths have portals, the ground is cut away
 there and dug into cuttings on the approaches. Outside the towns the main line runs at grade on the
 flat and meets roads at level crossings (warning lamps flashing in turn, bell, barriers; road
-traffic waits). Fares are distance-based game values charged by IC card at the exit gate.
+traffic waits; lowered barriers stop people and the player's car, and a train brakes to a stop short
+of a crossing with someone or something on it). Fares are distance-based game values charged by IC
+card at the exit gate. Expressway tolls are ETC-style: the entry plaza is recorded and the exit plaza
+charges by the distance between them (game values).
 
 Road profiles are grade-limited too (mountain roads 10 %, the expressway 5 %); where the ground
 lies more than about 14 m above the profile the road goes into a tunnel (portal, lit tube, walkway),
 more than about 9 m below it onto a viaduct (piers, parapets). The ground is left as it is there.
+Each free end of a road is at ground level: the profile is capped by a cone of the grade rising from
+each end (v0.7.0; before, the expressway could not get down the steep mountain edge above 朝凪 within
+5 % and ended, with its slip road, 250 m in the air — now a long tunnel brings it down), and it never
+goes below the sea (an inlet is crossed on a viaduct).
 
 ### Getting on and off (first person)
 
@@ -69,7 +76,11 @@ look at the door and press E. The crosshair shows an icon and a label for what c
 
 * Walk-in shops on the ground floor of about half the small shop buildings in the capital's old
   town and the regional towns (convenience store, cafe, general shop): generic fit-out, no brands
-  or names.
+  or names; see-through glazing and doors; buy at the counter (look at it, E or click; the goods
+  and prices are game values, what is bought is kept in the save and listed in the phone's wallet).
+  `shops.txt` lists each counter and where to stand; `tolls.txt` the toll plazas.
+* Residents (12,000) live in the houses of every town, weighted towards the regional towns, and
+  mostly work near home (game assumptions, not statistics).
 * Single trees (conifers and broadleaf, from the land-cover forest mask) within about 100 m of the
   player; the canopy surface beyond.
 * Snow falls instead of rain in winter where the snow lies.
@@ -86,17 +97,18 @@ look at the door and press E. The crosshair shows an icon and a label for what c
 * `rail.txt` (lines with names, stations, readings), `transport.txt` (airports, piers, ferry routes),
   `roads.rjroad`, `residents.csv`, `client.txt` (cells, place names, readings, POIs).
 
-Figures of this build (v0.6.0): main island about 1,380 km², 1,507 cells, 196,473 generated
+Figures of this build (v0.7.0): main island about 1,380 km², 1,507 cells, 196,283 generated
 buildings, about 530 MB of cell data (walk-in shops and stations add detail geometry; cook: about
-32 minutes on 4 processes). 39 road tunnels and 57 viaducts, 6 level crossings, 4 interchanges.
+32 minutes on 4 processes). 49 road tunnels and 49 viaducts, 7 level crossings, 4 interchanges with
+toll plazas, 1 parking area, 5,940 walk-in shop counters, 12,000 residents.
 
 ## Not implemented (honest list)
 
-* Interchanges are simplified (one two-way slip road, no toll gates, no acceleration lanes); no
-  service areas; no switchbacks on mountain roads.
-* Level crossing barriers do not stop the player on foot; trains do not react to anything on the
-  crossing.
-* Shops cannot be shopped in (the till job is the only shop activity); other buildings cannot be
-  entered (stations and the walk-in shops only).
-* People outside the area around the player; residents' life simulation outside the capital.
-* Glass is not see-through in the renderer: shop windows are left open.
+* Interchanges are simplified (one two-way slip road, no acceleration lanes); toll plazas have no
+  barriers (pass and pay); one parking area on one side only, with a shop and no other buildings;
+  no switchbacks on mountain roads.
+* Bought goods cannot be eaten or used yet; no shop staff; other buildings cannot be entered
+  (stations and the walk-in shops only).
+* People and cars are shown around the player only (simple moving cars on the far roads).
+* Only the walk-in shops have see-through glass; other windows are opaque (photo texture or
+  interior mapping).

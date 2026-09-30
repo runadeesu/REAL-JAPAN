@@ -429,6 +429,7 @@ shop.name.konbini = Convenience store (fictional, generic)
 shop.name.cafe = Cafe (fictional, generic)
 shop.name.general = General shop (fictional, generic)
 shop.hint = Keys 1-6 or click to buy · E / Esc to close (prices are game values)
+shop.close = Close
 shop.bought = Bought {item} ({yen} yen)
 shop.have = have {n}
 shop.item.onigiri = Rice ball

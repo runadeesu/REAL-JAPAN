@@ -593,8 +593,14 @@ void App::update(float dt) {
       }
       if (world_.meta().fictional && world_.hasOrigin()) {
         far_.stitch(world_);  // far terrain edges onto the loaded cells' ground
-        near_trees_.update(world_, rlToEnu(listen_cam_.position));
-        renderer_.setCanopyCut(NearTrees::kCut);
+        // single trees only near the ground: seen from high up (flying) the canopy stays whole
+        // (the forest floor inside the cut would lie outside the shadow map there and go black)
+        const auto cam = rlToEnu(listen_cam_.position);
+        const auto gz = world_.terrainHeight(cam.x, cam.y);
+        const bool low = !gz || cam.z - *gz < 60.0;
+        if (low) near_trees_.update(world_, cam);
+        near_trees_low_ = low;
+        renderer_.setCanopyCut(low ? NearTrees::kCut : 0.0f);
       }
       if (trains_.loaded()) updateCrossingSafety();
       if (trains_.loaded()) trains_.update(std::min(dt, 0.1f));
@@ -1487,7 +1493,7 @@ void App::drawWorldView(const Camera3D& cam) {
   renderer_.setLights(collectLights(cam));
   BeginMode3D(cam);
   renderer_.drawWorld(cam, world_, settings_.photo_textures, !in && !world_.meta().fictional);
-  if (world_.meta().fictional && !deep) near_trees_.draw(renderer_);  // single trees in the forest near the camera
+  if (world_.meta().fictional && !deep && near_trees_low_) near_trees_.draw(renderer_);  // single trees in the forest near the camera
   // the sea is opaque (its alpha is the reflection amount): before the blended road markings
   if (world_.meta().fictional && !deep) {
     if (far_.ready()) {
@@ -1715,7 +1721,7 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v0.6.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
+  ui_.textRight("v0.7.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
                  vw - 30, 1040, 20, theme::kMuted);
 }
 
@@ -2274,7 +2280,11 @@ void App::drawPhone() {
       ui_.text(tr("phone.not_impl"), cx, yy, 26, theme::kWarn);
       yy += 40;
       ui_.textWrapped(tr("phone.not_impl_list"), cx, yy, cw, 22, theme::kMuted);
+#if defined(RJ_TOUCH)
+      if (ui_.button({cx, y + h - 76, cw, 56}, tr("shop.close"), true, 28)) screen_ = Screen::Game;  // (no Tab key)
+#else
       ui_.textCentered(tr("phone.hint"), x + w / 2, y + h - 50, 20, theme::kMuted);
+#endif
       break;
     }
     case PhoneApp::Work:

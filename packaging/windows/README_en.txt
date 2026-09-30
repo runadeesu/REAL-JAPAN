@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  development build v0.6.0
+PROJECT: REAL JAPAN  —  development build v0.7.0
 ==========================================================================
 
 Two worlds are included:
@@ -44,7 +44,9 @@ teleports are gone)
                         At a stop, walk out through the open doors; the distance fare (plus
                         a Shinkansen charge; game values) is taken at the exit gate, whose
                         flaps shut if the card is short. The Akitsu Main Line has level
-                        crossings (lamps, bell and barriers as a train comes).
+                        crossings (lamps, bell and barriers as a train comes; lowered barriers
+                        stop you and your car, and a train stops short of a crossing with
+                        someone on it).
                         Lines: Chikage Loop, Akitsu Main Line (Nishigaoka - Shion - Asanagi),
                         Akitsu Shinkansen (Chikage-Chuo - Chikage-Kita - Shion - Shin-Asanagi),
                         Yukimi Shinkansen (Chikage-Kita - Yunosawa Onsen - Yukimi).
@@ -54,7 +56,9 @@ teleports are gone)
   Cars                : look at the door of a stopped car and press E. W/S throttle, brake /
                         reverse, A/D steer, Space handbrake, H horn, V chase / driver's seat,
                         E (stopped) get out. The Akitsu Expressway (Chikage-Nishi, Inaho,
-                        Shion and Asanagi interchanges) can be driven too.
+                        Shion and Asanagi interchanges) can be driven too: the toll is taken
+                        ETC-style at the exit plaza by the distance from the entry plaza
+                        (game values); Inaho PA has a car park and a shop.
   Ferry               : while the ship is alongside a gangway is laid to the pier: walk up it
                         (the fare is taken as you step aboard). Walk the deck, look at a bench
                         and press E to sit / stand. After berthing walk down the gangway.
@@ -69,7 +73,9 @@ teleports are gone)
 SHOPS
   In the capital's old town (Furuichi) and the regional towns (Shion, Yunosawa Onsen, Yukimi,
   ...) about half the small shops can be walked into (convenience store, cafe, general shop;
-  generic procedural fit-out, no names or brands). Nothing can be bought yet.
+  generic procedural fit-out, no names or brands; see-through glass). Look at the counter and
+  press E (or click) to buy: number keys or a click on an item. The goods and prices are game
+  values; what you buy is kept in the save and listed in the phone's wallet.
 
 WORK AND HOBBIES (phone "Work" / "Hobbies" apps)
   Taxi driver (Tokyo tariff meter), delivery rider, train driver, convenience-store till;
@@ -102,18 +108,18 @@ HONEST NOTES
     vehicle / aircraft figures, climate) are game values, not statistics or real
     specifications. Trains, cars, aircraft, ships and stations are generic procedural
     models, not real types.
-  * Not implemented in Akitsu: level crossings (railways run on viaducts, embankments, in
-    cuttings or tunnels), expressways and road tunnels, individual trees in the
-    countryside (forests are a canopy surface), falling snow (in winter snow only lies),
-    interiors in the regional towns. People and traffic appear only around the player.
+  * Not implemented in Akitsu: toll barriers and acceleration lanes (interchanges are
+    simplified), using or eating what you buy, shop staff, entering buildings other than
+    stations and the walk-in shops. People and traffic appear only around the player.
   * In Shibuya, estimated content (crossings, signals, street lights, utility poles on roads
     PLATEAU does not cover, near-field building detail, lit windows at night) is labelled as
     estimated in the game.
-  * Not implemented: 3D shop interiors, conversation, voices, a home, building interiors
+  * Not implemented: conversation, voices, a home, building interiors
     other than the verified underground mall (no public source, so not invented), real data
     beyond Shibuya, car damage, GI / ray tracing, photo-real quality (not reached). See
     docs/STATUS.md in the repository for every item.
   * Tested on Linux and Wine with software OpenGL; not yet on real Windows PCs / GPUs.
+  * An Android build (experimental, not yet run on a device) is provided separately.
 
 DATA SOURCES
   * 3D City Model (Project PLATEAU) Shibuya-ku (FY2025), MLIT - processed

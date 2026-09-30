@@ -429,6 +429,7 @@ shop.name.konbini = コンビニ（架空・汎用）
 shop.name.cafe = 喫茶店（架空・汎用）
 shop.name.general = 雑貨店（架空・汎用）
 shop.hint = 1〜6 キーまたはクリックで購入 · E / Esc で閉じる（価格はゲーム上の値）
+shop.close = 閉じる
 shop.bought = {item}を買いました（{yen} 円）
 shop.have = 持っている {n}
 shop.item.onigiri = おにぎり

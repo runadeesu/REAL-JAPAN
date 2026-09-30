@@ -33,7 +33,7 @@ python3 pipeline/cook_slice.py pipeline/slices/shibuya.json      # 写真テク�
 
 ```bash
 python3 pipeline/cook_country.py              # 全国を生成して game/data/world/country/ へ
-                                              # 4 プロセス並列で約 30 分（地形と区画 12 分＋セル 18 分）、1,507 セル・約 390 MB（外部データ不要）
+                                              # 4 プロセス並列で約 32 分（地形と区画 11 分＋セル 21 分）、1,507 セル・約 530 MB（外部データ不要）
 python3 pipeline/cook_country.py --preview --only 50405559,50405569   # 地形 40 m の簡易版で一部だけ（確認用）
 python3 pipeline/tools_preview_country.py out.png                     # 国全体の地図のプレビュー
 ```

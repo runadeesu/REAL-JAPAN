@@ -4,7 +4,7 @@
 #   Steps: tools/fetch_deps.sh -> pipeline/fetch_plateau.py -> pipeline/cook_slice.py -> this script
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VER="0.6.0"
+VER="0.7.0"
 NAME="RealJapan-${VER}-win64"
 BUILD="$ROOT/build-win"
 DIST="$ROOT/dist/$NAME"

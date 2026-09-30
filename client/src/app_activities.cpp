@@ -197,12 +197,16 @@ void App::takePhoto() {
   // save the frame (without the HUD) and check the photo spots in view
   Image img = LoadImageFromScreen();
   const auto dir = userDir() / "photos";
-  std::error_code ec;
-  std::filesystem::create_directories(dir, ec);
   const auto t = jst();
   char name[64];
   std::snprintf(name, sizeof name, "photo_%04d%02d%02d_%02d%02d%02d_%d.png", t.date.y, t.date.m, t.date.d, t.hour, t.minute, t.second, photos_taken_);
-  ExportImage(img, pathToUtf8(dir / name).c_str());
+  // (encoded in memory and written by our own file code: raylib's fopen cannot take a non-ASCII
+  // Windows path, nor an absolute one on Android)
+  int size = 0;
+  if (unsigned char* png = ExportImageToMemory(img, ".png", &size)) {
+    writeFileAtomic(dir / name, std::string(reinterpret_cast<char*>(png), static_cast<size_t>(size)));
+    MemFree(png);
+  }
   UnloadImage(img);
   ++photos_taken_;
   audio_.cue(Cue::Shutter, 0.6f);
