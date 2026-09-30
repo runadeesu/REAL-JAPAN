@@ -460,6 +460,20 @@ def flatten_for_roads(terrain: CountryTerrain, roads, rivers, skip_box=(-4300, -
             for k in range(n - 2, -1, -1):
                 if not pinned[k]:
                     z[k] = min(max(z[k], z[k + 1] - g), z[k + 1] + g)
+        # The ends meet the roads there on the ground: coming down a slope steeper than it may
+        # descend, the grade-limited profile would otherwise stay up and end in the air (the
+        # expressway's port-city end did, 250 m over the town). No higher than a cone of the grade
+        # from each free end: the road dives into the hillside earlier, in a tunnel.
+        ground0 = terrain.sample(P[:, 0], P[:, 1]).astype(float)
+        dist = np.arange(n) * (Lr / max(n - 1, 1))
+        for end, de in ((0, dist), (n - 1, Lr - dist)):
+            if pinned[end] or over[end]:
+                continue
+            lift = 9.5 if (r.kind == "expressway" and urb[end]) else 0.0
+            z = np.where(pinned, z, np.minimum(z, max(float(ground0[end]), 0.0) + lift + 0.5 + grade * de))
+        # never under the sea: across an inlet the (smoothed) profile would follow the sea bed;
+        # it stays above the water and the stretch becomes a viaduct
+        z = np.where(pinned, z, np.maximum(z, 2.0))
         if r.kind == "expressway":
             ex_profiles.append((r.line, z.copy(), n, r.carriage / 2.0))
         # tunnels and viaducts (country roads only; short runs closed / dropped)

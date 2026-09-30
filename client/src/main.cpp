@@ -1,5 +1,6 @@
-// PROJECT: REAL JAPAN — native client entry point (Windows x64 / Linux).
+// PROJECT: REAL JAPAN — native client entry point (Windows x64 / Linux / Android).
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -9,7 +10,24 @@
 #include "platform/paths.hpp"
 #include "raylib.h"
 
+#if defined(__ANDROID__)
+#include <android_native_app_glue.h>
+extern "C" struct android_app* GetAndroidApp(void);  // (raylib, rcore_android.c)
+#endif
+
 namespace {
+
+#if defined(__ANDROID__)
+// raylib handles the activity's lifecycle; on top of that, pausing (home button, a call, the screen
+// going off) writes the autosave. The callback runs on the game's own thread, inside raylib's
+// event polling, so the save is safe here.
+rjc::App* g_app = nullptr;
+void (*g_raylib_cmd)(struct android_app*, int32_t) = nullptr;
+void onAppCmd(struct android_app* a, int32_t cmd) {
+  if (g_raylib_cmd) g_raylib_cmd(a, cmd);
+  if (cmd == APP_CMD_PAUSE && g_app) g_app->autosave();
+}
+#endif
 
 rjc::LaunchOptions parseArgs(int argc, char** argv) {
   rjc::LaunchOptions o;
@@ -56,6 +74,16 @@ int main(int argc, char** argv) {
   rjc::Settings s;
   s.load(rjc::dataDir() / "config" / "default.ini", rjc::userDir() / "settings.ini");
 
+#if defined(__ANDROID__)
+  // Full screen, landscape. The game draws `render_height` lines (0: the panel's own) and the system
+  // scales the picture up to the panel; the width follows the panel's shape (patched raylib, see
+  // tools/package_android.sh).
+  SetConfigFlags(FLAG_FULLSCREEN_MODE);
+  SetTraceLogLevel(LOG_INFO);
+  InitWindow(0, std::max(0, s.render_height), "PROJECT: REAL JAPAN");
+  if (!IsWindowReady()) return 2;
+  SetExitKey(KEY_NULL);
+#else
   unsigned int flags = FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT;
   if (s.vsync) flags |= FLAG_VSYNC_HINT;
   SetConfigFlags(flags);
@@ -65,11 +93,23 @@ int main(int argc, char** argv) {
   if (s.fullscreen) ToggleBorderlessWindowed();
   SetExitKey(KEY_NULL);
   SetWindowMinSize(800, 600);
+#endif
 
   int rc;
   {
     rjc::App app(opt);
+#if defined(__ANDROID__)
+    if (struct android_app* a = GetAndroidApp()) {
+      g_app = &app;
+      g_raylib_cmd = a->onAppCmd;
+      a->onAppCmd = onAppCmd;
+    }
     rc = app.run();
+    if (struct android_app* a = GetAndroidApp(); a && a->onAppCmd == onAppCmd) a->onAppCmd = g_raylib_cmd;
+    g_app = nullptr;
+#else
+    rc = app.run();
+#endif
   }
   CloseWindow();
   return rc;

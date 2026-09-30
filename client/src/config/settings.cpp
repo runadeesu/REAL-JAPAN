@@ -44,6 +44,8 @@ void applyKv(Settings& s, const std::map<std::string, std::string>& kv) {
   b("dev_overlay", s.dev_overlay);
   i("volume", s.volume);
   s.volume = std::clamp(s.volume, 0, 100);
+  i("render_height", s.render_height);
+  s.render_height = std::clamp(s.render_height, 0, 4320);
   s.width = std::clamp(s.width, 800, 7680);
   s.height = std::clamp(s.height, 600, 4320);
   s.fov = std::clamp(s.fov, 50.0f, 100.0f);
@@ -69,6 +71,9 @@ const std::vector<int>& Settings::viewDistances() {
 
 void Settings::load(const std::filesystem::path& defaults, const std::filesystem::path& user) {
   if (auto t = readText(defaults)) applyKv(*this, parseKeyValue(*t));
+#if defined(__ANDROID__)
+  if (auto t = readText(defaults.parent_path() / "android.ini")) applyKv(*this, parseKeyValue(*t));  // lighter phone defaults
+#endif
   if (auto t = readText(user)) applyKv(*this, parseKeyValue(*t));
 }
 
@@ -92,6 +97,7 @@ bool Settings::save(const std::filesystem::path& user) const {
     << "head_bob = " << (head_bob ? 1 : 0) << "\n"
     << "dev_overlay = " << (dev_overlay ? 1 : 0) << "\n"
     << "volume = " << volume << "\n"
+    << "render_height = " << render_height << "\n"
     << "world = " << world << "\n";
   return writeFileAtomic(user, o.str());
 }

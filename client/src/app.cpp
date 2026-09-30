@@ -86,7 +86,7 @@ bool App::boot() {
   saved_world_ = settings_.world;  // a --world launch option is not written back to settings.ini
   if (!opt_.world.empty()) settings_.world = opt_.world == "shibuya" ? "shibuya" : "country";
   slice_dir_ = data / "world" / settings_.world;
-  if (!std::filesystem::exists(slice_dir_ / "client.txt")) slice_dir_ = data / "world" / "shibuya";  // country not cooked
+  if (!fileExists(slice_dir_ / "client.txt")) slice_dir_ = data / "world" / "shibuya";  // country not cooked
   std::string err;
   if (!world_.loadMeta(slice_dir_, err)) {
     fatal_ = "World data error: " + err;
@@ -97,18 +97,18 @@ bool App::boot() {
     std::string terr;
     if (!traffic_.load(slice_dir_ / "roads.rjroad", terr)) TraceLog(LOG_WARNING, "RJ: traffic disabled: %s", terr.c_str());
     std::string rerr;
-    if (std::filesystem::exists(slice_dir_ / "rail.txt") && !trains_.load(slice_dir_ / "rail.txt", rerr))
+    if (fileExists(slice_dir_ / "rail.txt") && !trains_.load(slice_dir_ / "rail.txt", rerr))
       TraceLog(LOG_WARNING, "RJ: trains disabled: %s", rerr.c_str());
     std::string ferr;
-    if (std::filesystem::exists(slice_dir_ / "transport.txt") && !ferries_.load(slice_dir_ / "transport.txt", ferr))
+    if (fileExists(slice_dir_ / "transport.txt") && !ferries_.load(slice_dir_ / "transport.txt", ferr))
       TraceLog(LOG_WARNING, "RJ: ferries disabled: %s", ferr.c_str());
     std::string aerr;
-    if (std::filesystem::exists(slice_dir_ / "transport.txt") && !aviation_.load(slice_dir_ / "transport.txt", aerr))
+    if (fileExists(slice_dir_ / "transport.txt") && !aviation_.load(slice_dir_ / "transport.txt", aerr))
       TraceLog(LOG_WARNING, "RJ: aviation disabled: %s", aerr.c_str());
     std::string serr;
-    if (std::filesystem::exists(slice_dir_ / "shops.txt") && !shops_.load(slice_dir_ / "shops.txt", serr))
+    if (fileExists(slice_dir_ / "shops.txt") && !shops_.load(slice_dir_ / "shops.txt", serr))
       TraceLog(LOG_WARNING, "RJ: shops disabled: %s", serr.c_str());
-    if (std::filesystem::exists(slice_dir_ / "tolls.txt")) loadTolls(slice_dir_ / "tolls.txt");
+    if (fileExists(slice_dir_ / "tolls.txt")) loadTolls(slice_dir_ / "tolls.txt");
   }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
@@ -130,11 +130,14 @@ bool App::boot() {
   {
     // The distribution may come as two ZIP parts: say clearly when one was not extracted.
     std::string missing;
-    std::error_code ec;
     for (const auto& c : world_.meta().cells)
-      if (!std::filesystem::exists(slice_dir_ / "cells" / (c.mesh + ".rjcell"), ec)) missing += " " + c.mesh + ".rjcell";
+      if (!fileExists(slice_dir_ / "cells" / (c.mesh + ".rjcell"))) missing += " " + c.mesh + ".rjcell";
     if (!missing.empty()) {
+#if defined(__ANDROID__)
+      fatal_ = tr("error.missing_cells_android") + "\n\n" + missing;
+#else
       fatal_ = tr("error.missing_cells") + "\n\n" + pathToUtf8(slice_dir_ / "cells") + ":" + missing;
+#endif
       return false;
     }
   }
@@ -284,6 +287,10 @@ bool App::loadSlot(int slot) {
   return true;
 }
 
+void App::autosave() {
+  if (in_session_) saveSlot(kAutosaveSlot);
+}
+
 void App::endSession() {
   if (in_session_) saveSlot(kAutosaveSlot);
   in_session_ = false;
@@ -356,6 +363,9 @@ void App::placeRoads() {
 
 // ---------------------------------------------------------------------------
 void App::update(float dt) {
+#if defined(RJ_TOUCH)
+  touch::update();  // (before anything reads the keys or the mouse)
+#endif
   ui_.beginFrame();
   if (screen_ == Screen::Boot) return;  // boot happens after the first frame is shown
   if (screen_ == Screen::Fatal) {
@@ -1294,7 +1304,7 @@ void App::runSelfTest() {
       player_.auto_forward_s = 0.0f;
       TraceLog(LOG_INFO, "RJ: %d of %d underground entrances walked into from the street", reach, total);
       const std::string what = "underground entrances can be walked into (" + std::to_string(reach) + " of " + std::to_string(total) + ")";
-      check(reach > 0, what.c_str());
+      check(reach == total && total > 0, what.c_str());
       player_.pos = spawn;
     }
   }
@@ -1627,6 +1637,10 @@ void App::draw() {
     default: break;
   }
   if (settings_.show_fps) ui_.textRight(i18n_.f("hud.fps", {{"n", std::to_string(GetFPS())}}), ui_.vw() - 20, 1040, 24, theme::kMuted);
+#if defined(RJ_TOUCH)
+  updateTouchControls();
+  if (screen_ == Screen::Game) touch::draw(ui_.hasFont() ? ui_.font() : GetFontDefault());
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1887,6 +1901,14 @@ void App::drawCredits() {
 
 // ---------------------------------------------------------------------------
 void App::drawHud() {
+#if defined(RJ_TOUCH)
+  // (touch: the flight / speed panels at the top left, clear of the joystick; the buttons say the keys)
+  constexpr bool kTouchHud = true;
+  constexpr float kHudPanelY = 110;
+#else
+  constexpr bool kTouchHud = false;
+  constexpr float kHudPanelY = 900;
+#endif
   const float vw = ui_.vw();
   drawActivityHud();
   if (photo_mode_) return;  // viewfinder only
@@ -1904,22 +1926,22 @@ void App::drawHud() {
                   static_cast<int>(alt_ft / 10) * 10, static_cast<int>(pl.verticalSpeed() * 196.85 / 10) * 10, static_cast<int>(pl.heading()) % 360);
     char buf2[160];
     std::snprintf(buf2, sizeof buf2, "THR %3d%%   FLAPS %d°   RPM %4d", static_cast<int>(pc.throttle * 100), pc.flaps * 10, static_cast<int>(pl.rpm()));
-    ui_.panel({30, 900, 760, 130}, Color{0, 0, 0, 140});
-    ui_.text(buf, 50, 912, 30, theme::kText);
-    ui_.text(buf2, 50, 950, 26, theme::kMuted);
-    ui_.text(tr("fly.help"), 50, 992, 20, theme::kMuted);
+    ui_.panel({30, kHudPanelY, 760, 130}, Color{0, 0, 0, 140});
+    ui_.text(buf, 50, kHudPanelY + 12, 30, theme::kText);
+    ui_.text(buf2, 50, kHudPanelY + 50, 26, theme::kMuted);
+    if (!kTouchHud) ui_.text(tr("fly.help"), 50, kHudPanelY + 92, 20, theme::kMuted);
     if (pl.stalled()) ui_.textCentered("STALL", vw / 2, 120, 48, theme::kWarn);
   }
   if (driving_.active() && screen_ == Screen::Game) {  // speedometer
     const double v = driving_.car().v;
     const std::string kmh = std::to_string(static_cast<int>(std::lround(std::fabs(v) * 3.6)));
-    ui_.panel({30, 900, 400, 130}, Color{0, 0, 0, 140});
-    ui_.text(kmh, 54, 912, 72, theme::kText);
-    ui_.text("km/h", 64 + ui_.measure(kmh, 72), 954, 28, theme::kMuted);
+    ui_.panel({30, kHudPanelY, 400, 130}, Color{0, 0, 0, 140});
+    ui_.text(kmh, 54, kHudPanelY + 12, 72, theme::kText);
+    ui_.text("km/h", 64 + ui_.measure(kmh, 72), kHudPanelY + 54, 28, theme::kMuted);
     const int gear = driving_.gear();
-    ui_.textRight(gear < 0 ? "R" : "D" + std::to_string(gear), 406, 912, 34, gear < 0 ? theme::kWarn : theme::kMuted);
-    ui_.textRight(std::to_string(static_cast<int>(driving_.rpm() / 100.0f) * 100) + " rpm", 406, 954, 22, theme::kMuted);
-    ui_.text(tr("drive.help"), 54, 992, 20, theme::kMuted);
+    ui_.textRight(gear < 0 ? "R" : "D" + std::to_string(gear), 406, kHudPanelY + 12, 34, gear < 0 ? theme::kWarn : theme::kMuted);
+    ui_.textRight(std::to_string(static_cast<int>(driving_.rpm() / 100.0f) * 100) + " rpm", 406, kHudPanelY + 54, 22, theme::kMuted);
+    if (!kTouchHud) ui_.text(tr("drive.help"), 54, kHudPanelY + 92, 20, theme::kMuted);
   }
   if (screen_ == Screen::Game && aim_icon_ != AimIcon::None) {
     // what the crosshair offers: a ring round it and a word beside it (E or click)
@@ -1949,7 +1971,11 @@ void App::drawHud() {
       ui_.textCentered(prompt_, vw / 2, 791, 28, theme::kText);
     }
     if (session_t_ < 20.0f && screen_ == Screen::Game)
+#if defined(RJ_TOUCH)
+      ui_.textCentered(tr("hud.controls_touch"), vw / 2, 1030, 22,
+#else
       ui_.textCentered(tr("hud.controls_short"), vw / 2, 1030, 22,
+#endif
                        Color{255, 255, 255, static_cast<unsigned char>(std::min(1.0f, (20.0f - session_t_) / 3.0f) * 190)});
     return;
   }

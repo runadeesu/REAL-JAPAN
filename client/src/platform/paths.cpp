@@ -1,7 +1,9 @@
 // NOTE: this translation unit must not include raylib.h (windows.h clashes).
 #include "platform/paths.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
@@ -11,6 +13,12 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
+
+#if defined(__ANDROID__)
+#include <android/asset_manager.h>
+#include <android_native_app_glue.h>
+extern "C" struct android_app* GetAndroidApp(void);  // (raylib, rcore_android.c)
 #endif
 
 namespace rjc {
@@ -28,6 +36,49 @@ fs::path exeDir() {
 #endif
 }
 
+#if defined(__ANDROID__)
+// Android: the game data stays inside the APK (stored uncompressed) and is read through the asset
+// manager; dataDir() is the marker "apk:/data" that readFile() and friends recognise.
+namespace {
+constexpr const char* kApk = "apk:/";
+AAssetManager* assets() {
+  struct android_app* app = GetAndroidApp();
+  return app && app->activity ? app->activity->assetManager : nullptr;
+}
+bool isApk(const fs::path& p, std::string& name) {
+  const std::string s = p.generic_string();
+  if (s.rfind(kApk, 0) != 0) return false;
+  name = s.substr(5);
+  return true;
+}
+std::optional<std::vector<unsigned char>> readAsset(const std::string& name) {
+  AAssetManager* m = assets();
+  AAsset* a = m ? AAssetManager_open(m, name.c_str(), AASSET_MODE_BUFFER) : nullptr;
+  if (!a) return std::nullopt;
+  const off64_t n = AAsset_getLength64(a);
+  std::vector<unsigned char> data(static_cast<size_t>(std::max<off64_t>(n, 0)));
+  const void* buf = AAsset_getBuffer(a);
+  bool ok = true;
+  if (buf) std::memcpy(data.data(), buf, data.size());
+  else ok = AAsset_read(a, data.data(), data.size()) == static_cast<int>(data.size());
+  AAsset_close(a);
+  if (!ok) return std::nullopt;
+  return data;
+}
+}  // namespace
+
+fs::path dataDir() { return fs::path("apk:") / "data"; }
+
+fs::path userDir() {
+  static fs::path cached;
+  if (!cached.empty()) return cached;
+  struct android_app* app = GetAndroidApp();
+  cached = app && app->activity && app->activity->internalDataPath ? fs::path(app->activity->internalDataPath) : fs::path("/sdcard/RealJapan");
+  std::error_code ec;
+  fs::create_directories(cached / "saves", ec);
+  return cached;
+}
+#else
 fs::path dataDir() { return exeDir() / "data"; }
 
 fs::path userDir() {
@@ -52,8 +103,43 @@ fs::path userDir() {
   fs::create_directories(cached / "saves", ec);
   return cached;
 }
+#endif
+
+bool fileExists(const fs::path& p) {
+#if defined(__ANDROID__)
+  if (std::string name; isApk(p, name)) {
+    AAssetManager* m = assets();
+    AAsset* a = m ? AAssetManager_open(m, name.c_str(), AASSET_MODE_STREAMING) : nullptr;
+    if (a) AAsset_close(a);
+    return a != nullptr;
+  }
+#endif
+  std::error_code ec;
+  return fs::exists(p, ec);
+}
+
+std::vector<fs::path> listFiles(const fs::path& dir) {
+  std::vector<fs::path> out;
+#if defined(__ANDROID__)
+  if (std::string name; isApk(dir, name)) {
+    AAssetManager* m = assets();
+    AAssetDir* d = m ? AAssetManager_openDir(m, name.c_str()) : nullptr;
+    if (!d) return out;
+    while (const char* f = AAssetDir_getNextFileName(d)) out.push_back(dir / f);
+    AAssetDir_close(d);
+    return out;
+  }
+#endif
+  std::error_code ec;
+  for (const auto& e : fs::directory_iterator(dir, ec))
+    if (e.is_regular_file(ec)) out.push_back(e.path());
+  return out;
+}
 
 std::optional<std::vector<unsigned char>> readFile(const fs::path& p) {
+#if defined(__ANDROID__)
+  if (std::string name; isApk(p, name)) return readAsset(name);
+#endif
   std::ifstream in(p, std::ios::binary);
   if (!in) return std::nullopt;
   in.seekg(0, std::ios::end);

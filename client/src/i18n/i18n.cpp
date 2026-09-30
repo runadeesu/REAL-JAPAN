@@ -26,10 +26,9 @@ std::string I18n::f(const std::string& key, const std::vector<std::pair<std::str
 }
 
 void I18n::collectAllCodepoints(const std::filesystem::path& dir, std::set<int>& out) const {
-  std::error_code ec;
-  for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-    if (e.path().extension() != ".lang") continue;
-    if (auto t = readText(e.path())) collectCodepoints(*t, out);
+  for (const auto& f : listFiles(dir)) {
+    if (f.extension() != ".lang") continue;
+    if (auto t = readText(f)) collectCodepoints(*t, out);
   }
 }
 

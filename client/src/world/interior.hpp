@@ -51,6 +51,7 @@ class Interior {
     float a[3], b[3], c[3];
   };
   void rebuildHash();
+  void addLidsForUprightOpenings();
 
   std::string id_, name_;
   rj::geo::LocalFrame frame_{rj::geo::Geodetic{}};

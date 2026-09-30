@@ -170,7 +170,53 @@ bool Interior::load(const std::filesystem::path& file, std::string& err) {
     unload();
     return false;
   }
+  addLidsForUprightOpenings();
   return true;
+}
+
+// Some entrances close with an upright surface (a doorway at the top of the stairs) rather than a
+// lid over the stairwell: seen from above it has no area, so nobody could step "over" it. Each one
+// next to an entrance gets a flat lid 1.2 m deep on the side where the interior floor lies below.
+void Interior::addLidsForUprightOpenings() {
+  auto floorUnder = [&](double x, double y, double z_top) {
+    for (const Tri& t : floors_local_)
+      if (auto z = zAt(t.a, t.b, t.c, x, y); z && *z < z_top - 0.3 && *z > z_top - 12.0) return true;
+    return false;
+  };
+  std::vector<Tri> lids;
+  for (const Tri& t : openings_local_) {
+    const double area = 0.5 * std::fabs((t.b[0] - t.a[0]) * (t.c[1] - t.a[1]) - (t.c[0] - t.a[0]) * (t.b[1] - t.a[1]));
+    if (area > 0.05) continue;
+    const float* v[3] = {t.a, t.b, t.c};
+    int i0 = 0, i1 = 1;
+    double dmax = -1;
+    for (int i = 0; i < 3; ++i)
+      for (int j = i + 1; j < 3; ++j)
+        if (const double d = std::hypot(v[j][0] - v[i][0], v[j][1] - v[i][1]); d > dmax) {
+          dmax = d;
+          i0 = i;
+          i1 = j;
+        }
+    if (dmax < 0.3) continue;
+    const double zb = std::min({t.a[2], t.b[2], t.c[2]});
+    const double mx = 0.5 * (v[i0][0] + v[i1][0]), my = 0.5 * (v[i0][1] + v[i1][1]);
+    bool near_entrance = false;
+    for (const auto& e : ents_local_)
+      near_entrance |= std::hypot(e.first.x - mx, e.first.y - my) < 6.0 && std::fabs(e.first.z - zb) < 2.5;
+    if (!near_entrance) continue;
+    const double nx = -(v[i1][1] - v[i0][1]) / dmax, ny = (v[i1][0] - v[i0][0]) / dmax;
+    for (const double side : {1.0, -1.0}) {
+      if (!floorUnder(mx + nx * side * 0.9, my + ny * side * 0.9, zb + 0.3)) continue;
+      const float dx = static_cast<float>(nx * side * 1.2), dy = static_cast<float>(ny * side * 1.2), z = static_cast<float>(zb);
+      const Tri a{{v[i0][0], v[i0][1], z}, {v[i1][0], v[i1][1], z}, {v[i1][0] + dx, v[i1][1] + dy, z}};
+      const Tri b{{v[i0][0], v[i0][1], z}, {v[i1][0] + dx, v[i1][1] + dy, z}, {v[i0][0] + dx, v[i0][1] + dy, z}};
+      lids.push_back(a);
+      lids.push_back(b);
+      break;
+    }
+  }
+  if (!lids.empty()) TraceLog(LOG_INFO, "RJ: interior %s: %zu upright entrance openings got a lid", id_.c_str(), lids.size() / 2);
+  openings_local_.insert(openings_local_.end(), lids.begin(), lids.end());
 }
 
 void Interior::unload() {

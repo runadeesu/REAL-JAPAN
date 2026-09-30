@@ -5,10 +5,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <fstream>
 #include <sstream>
 
 #include "app.hpp"
+#include "platform/paths.hpp"
 #include "ui/ui.hpp"
 #include "util/text.hpp"
 
@@ -104,7 +104,7 @@ void App::drawShopMenu() {
 
 void App::loadTolls(const std::filesystem::path& file) {
   tolls_.clear();
-  std::ifstream in(file);
+  std::istringstream in(readText(file).value_or(""));
   std::string line;
   while (std::getline(in, line)) {
     if (line.empty() || line[0] == '#') continue;

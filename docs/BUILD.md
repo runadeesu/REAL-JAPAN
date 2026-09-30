@@ -1,6 +1,6 @@
 # ビルド手順
 
-開発は Linux（Ubuntu 24.04 で確認）で行い、Windows x64 向け EXE は MinGW-w64 でクロスコンパイルする。
+開発は Linux（Ubuntu 24.04 で確認）で行い、Windows x64 向け EXE は MinGW-w64 で、Android 向け APK は Android NDK でクロスコンパイルする。
 
 ## 1. 必要なもの
 
@@ -16,6 +16,7 @@ pip install numpy pillow mapbox-earcut fonttools pytest
 ```bash
 tools/fetch_deps.sh        # third_party/raylib (5.5) と BIZ UDPゴシック (OFL) を取得し、フォントを
                            # JIS 第1・第2水準＋ゲーム内の全文字にサブセット化（要 pip install fonttools）
+                           # raylib には OpenGL ES 3.0 / Android 用の小さな修正を当てる（tools/patch_raylib.py）
 ```
 
 ## 3. 実データの取得とクック
@@ -56,8 +57,32 @@ cmake --build build-linux
 Windows x64（Release, 配布用）:
 ```bash
 tools/package_windows.sh
-# -> dist/RealJapan-0.6.0-win64*.zip（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
+# -> dist/RealJapan-0.7.0-win64*.zip（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
 ```
+
+OpenGL ES 3.0 の描画とタッチ操作を Linux で試す（Android 版と同じコード。マウス左ドラッグが指 1 本、
+視点固定中は Alt＋ドラッグ）:
+```bash
+cmake -S client -B build-gles -G Ninja -DCMAKE_BUILD_TYPE=Release -DRJ_GLES=ON
+cmake --build build-gles --target RealJapan && ln -sfn ../game/data build-gles/data
+```
+
+Android（arm64-v8a, OpenGL ES 3.0, Android 7.0 以上）:
+```bash
+# 必要: Android NDK r26（ANDROID_NDK, 既定 /usr/lib/android-ndk）、aapt・zipalign・apksigner、
+#       keytool（JDK）、android.jar（ANDROID_JAR, 既定 /usr/lib/android-sdk/platforms/android-23/android.jar）
+#       Ubuntu: sudo apt-get install -y google-android-ndk-r26c-installer aapt zipalign apksigner \
+#                 libandroid-23-java openjdk-21-jre-headless
+python3 tools/package_android.py          # --full で全部入りの 1 本（約 560 MB）も作る
+# -> dist/RealJapan-0.7.0-android/
+#      RealJapan-0.7.0-android-arm64.apk     本体（libmain.so・設定・言語・フォント・地図）
+#      RealJapan-0.7.0-android-dataNN.apk    街のセル（スプリット APK、各 30 MB 未満）
+#    インストール: adb install-multiple dist/RealJapan-0.7.0-android/*.apk
+```
+Java のコードは無く、NativeActivity が `libmain.so`（raylib の android_main → main()）を読み込む。
+ゲームデータは APK の中から AAssetManager で直接読む（`platform/paths.cpp` の `apk:/data`）。
+署名は `packaging/android/debug.keystore`（リポジトリに置いた公開のデバッグ鍵。新しい版を上書き
+インストールしてセーブを残すため。パスワード `android`）。
 
 ## 6. 自動スクリーンショット（起動確認用）
 

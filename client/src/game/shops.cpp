@@ -1,19 +1,20 @@
 #include "game/shops.hpp"
 
 #include <cmath>
-#include <fstream>
 #include <sstream>
 
+#include "platform/paths.hpp"
 #include "world/world.hpp"
 
 namespace rjc {
 
 bool Shops::load(const std::filesystem::path& file, std::string& err) {
-  std::ifstream in(file);
-  if (!in) {
+  const auto text = readText(file);
+  if (!text) {
     err = "cannot open " + file.string();
     return false;
   }
+  std::istringstream in(*text);
   spots_.clear();
   std::string line;
   while (std::getline(in, line)) {

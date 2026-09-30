@@ -71,6 +71,8 @@ class App {
  public:
   explicit App(LaunchOptions o) : opt_(std::move(o)) {}
   int run();
+  // Android: the system may end a paused app without warning, so pausing saves the autosave slot.
+  void autosave();
 
  private:
   enum class Screen { Boot, Loading, Title, Settings, Slots, Credits, Game, Pause, Phone, Fatal };
@@ -342,6 +344,9 @@ class App {
   void loadTolls(const std::filesystem::path& file);
   void updateTolls();        // the player's car through a toll plaza: ETC entry / fare at the exit
   void drawShopMenu();
+  // touch builds (Android): which on-screen buttons the current situation needs (app_touch.cpp)
+  void updateTouchControls();
+  int shrine_frame_ = -10;  // last frame the shrine prompt was up (its extra buttons)
   bool buyItem(const ShopItem& it);
   std::string inventoryString() const;
   void parseInventory(const std::string& s);

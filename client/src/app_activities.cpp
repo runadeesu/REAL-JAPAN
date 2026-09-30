@@ -357,6 +357,7 @@ void App::updateActivities(float dt) {
     const V3 q = world_.toLocal({p.lat, p.lon, 0.0});
     if (std::hypot(q.x - player_.pos.x, q.y - player_.pos.y) > 45.0) continue;
     prompt_ = i18n_.f(temple ? "worship.prompt_temple" : "worship.prompt", {{"place", p.name}});
+    shrine_frame_ = frame_;
     const bool o = IsKeyPressed(KEY_O), g = IsKeyPressed(KEY_G);
     if (e && ledger_ && ledger_->transfer(player_account_, ledger_->externalAccount(), 100, rj::econ::TxCategory::Purchase, clock_.unixUtc(), tr("worship.offering")) == rj::econ::TxResult::Ok) {
       worship_ = {};
@@ -468,15 +469,20 @@ void App::drawActivityHud() {
       const int n = t->notch;
       const std::string notch = n > 0 ? "P" + std::to_string(n) : n == 0 ? "N" : n <= -8 ? "EB" : "B" + std::to_string(-n);
       const int kmh = static_cast<int>(t->v * 3.6 + 0.5);
-      ui_.panel({30, 870, 560, 160}, Color{0, 0, 0, 150});
-      ui_.text(std::to_string(kmh), 54, 882, 72, theme::kText);
-      ui_.text("km/h", 64 + ui_.measure(std::to_string(kmh), 72), 924, 28, theme::kMuted);
-      ui_.textRight(notch, 566, 884, 44, n < 0 ? theme::kWarn : theme::kGood);
+#if defined(RJ_TOUCH)
+      constexpr float y0 = 110;  // (touch: at the top left, clear of the joystick)
+#else
+      constexpr float y0 = 870;
+#endif
+      ui_.panel({30, y0, 560, 160}, Color{0, 0, 0, 150});
+      ui_.text(std::to_string(kmh), 54, y0 + 12, 72, theme::kText);
+      ui_.text("km/h", 64 + ui_.measure(std::to_string(kmh), 72), y0 + 54, 28, theme::kMuted);
+      ui_.textRight(notch, 566, y0 + 14, 44, n < 0 ? theme::kWarn : theme::kGood);
       const double ds = trains_.distToStop(*t);
       const std::string nxt = t->next_stop >= 0 ? trains_.stations()[static_cast<size_t>(t->next_stop)].name : "-";
       ui_.text(i18n_.f("job.train.hud", {{"station", nxt}, {"d", ds < 1e8 ? std::to_string(static_cast<int>(ds)) : std::string("-")}, {"lim", std::to_string(static_cast<int>(t->vmax * 3.6))}}),
-               54, 966, 24, theme::kText);
-      ui_.text(tr(t->at_station >= 0 ? "job.train.help_doors" : "job.train.help"), 54, 1000, 20, theme::kMuted);
+               54, y0 + 96, 24, theme::kText);
+      ui_.text(tr(t->at_station >= 0 ? "job.train.help_doors" : "job.train.help"), 54, y0 + 130, 20, theme::kMuted);
       if (trains_.atsActive(*t)) ui_.textCentered("ATS", vw / 2, 140, 48, theme::kWarn);
     }
     if (train_msg_t_ > 0) ui_.textCentered(train_msg_, vw / 2, 200, 34, theme::kGood);

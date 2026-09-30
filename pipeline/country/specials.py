@@ -817,6 +817,24 @@ def _toll_plazas(ctry, terrain, avoid):
             hd = math.degrees(math.atan2(b.x - a.x, b.y - a.y)) % 360.0  # along the ramp, away from the expressway
             out.append(dict(name=r.name, x=float(q.x), y=float(q.y), z=float(terrain.sample(q.x, q.y)), hd=hd, width=float(r.width)))
             break
+        else:
+            # a ramp on a viaduct all the way (the port city's): an ETC gantry over its deck instead
+            s_ = max(L_ - 150.0, L_ * 0.5)
+            q = r.line.interpolate(s_)
+            deck = None
+            for rs in getattr(ctry, "road_structs", []) or []:
+                if rs.kind != "bridge":
+                    continue
+                d2 = (rs.pts[:, 0] - q.x) ** 2 + (rs.pts[:, 1] - q.y) ** 2
+                i = int(np.argmin(d2))
+                if d2[i] < (rs.width / 2 + 1.0) ** 2 and (deck is None or d2[i] < deck[0]):
+                    deck = (float(d2[i]), float(rs.pts[i, 2]))
+            if deck is None:
+                continue
+            a = r.line.interpolate(max(0.0, s_ - 4.0))
+            b = r.line.interpolate(min(L_, s_ + 4.0))
+            hd = math.degrees(math.atan2(b.x - a.x, b.y - a.y)) % 360.0
+            out.append(dict(name=r.name, x=float(q.x), y=float(q.y), z=deck[1], hd=hd, width=float(r.width), elevated=True))
     return out
 
 
@@ -869,12 +887,25 @@ def _obox_c(geos, xf, mat, p, d, zc, ha, hc, hz, col):
 
 
 def _toll_plaza(geos, ex, xf, t):
-    """Booths on islands between the lanes under a canopy, ETC posts at the entries (generic)."""
+    """Booths on islands between the lanes under a canopy, ETC posts at the entries (generic); on a
+    viaduct a gantry with the ETC readers over the deck."""
     th = math.radians(t["hd"])
     d = np.array([math.sin(th), math.cos(th)])
     n = np.array([d[1], -d[0]])
     p = np.array([t["x"], t["y"]])
     g = t["z"]
+    if t.get("elevated"):
+        post = t["width"] / 2 + 0.3
+        for sc in (-1, 1):
+            _obox_c(geos, xf, "metal", p + n * sc * post, d, g + 2.9, 0.18, 0.18, 2.9, (200, 204, 208, 255))
+        _obox_c(geos, xf, "metal", p, d, g + 5.75, 0.25, post + 0.2, 0.2, (200, 204, 208, 255))           # beam
+        _obox_c(geos, xf, "sign", p - d * 0.3, d, g + 6.45, 0.05, 2.6, 0.45, (40, 140, 80, 255))          # green panel
+        _obox_c(geos, xf, "sign", p - d * 0.3, d, g + 5.3, 0.05, 1.2, 0.18, (235, 190, 30, 255))          # ETC band
+        for sc in (-0.45, 0.45):                                                                          # readers
+            _obox_c(geos, xf, "metal", p + n * sc * post - d * 0.2, d, g + 5.35, 0.2, 0.25, 0.18, (70, 74, 80, 255))
+        L0 = xf.p([[p[0], p[1], g + 5.4]])[0]
+        ex.lights.append(((L0[0], L0[1], L0[2]), 12.0, 0))
+        return
     edge = t["width"] / 2 + 0.7
     for across in (-edge, 0.0, edge):
         c = p + n * across
@@ -888,8 +919,9 @@ def _toll_plaza(geos, ex, xf, t):
     for sa in (-1, 1):  # canopy on four columns
         for sc in (-1, 1):
             _obox_c(geos, xf, "concrete", p + d * sa * 5.0 + n * sc * edge, d, g + 3.1, 0.25, 0.25, 3.1, (200, 200, 196, 255))
-    _obox_c(geos, xf, "concrete", p, d, g + 6.4, 6.0, edge + 2.0, 0.3, (214, 214, 210, 255))
-    _obox_c(geos, xf, "sign", p, d, g + 6.95, 6.02, edge + 2.02, 0.25, (40, 140, 80, 255))
+    _obox_c(geos, xf, "concrete", p, d, g + 6.55, 6.0, edge + 2.0, 0.45, (214, 214, 210, 255))
+    for sa in (-1, 1):  # the green fascia bands along its front and back
+        _obox_c(geos, xf, "sign", p + d * sa * 6.02, d, g + 6.7, 0.04, edge + 2.02, 0.3, (40, 140, 80, 255))
     L0 = xf.p([[p[0], p[1], g + 6.0]])[0]
     ex.lights.append(((L0[0], L0[1], L0[2]), 14.0, 0))
 

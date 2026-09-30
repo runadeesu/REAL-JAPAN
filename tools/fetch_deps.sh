@@ -12,6 +12,7 @@ if [ ! -f "$TP/raylib/CMakeLists.txt" ]; then
 fi
 (cd "$TP/raylib" && test "$(git rev-parse HEAD)" = "c1ab645ca298a2801097931d1079b10ff7eb9df8") \
   || echo "warning: raylib is not the pinned 5.5 commit"
+python3 "$ROOT/tools/patch_raylib.py"  # OpenGL ES 3.0 / Android fixes (idempotent)
 
 if [ ! -f "$ROOT/game/data/fonts/BIZUDPGothic-Regular.ttf" ]; then
   if [ ! -d "$TP/gfonts" ]; then

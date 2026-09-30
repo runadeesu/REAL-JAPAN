@@ -214,15 +214,36 @@ Lighting lerpLighting(const Lighting& a, const Lighting& b, float t) {
 }
 
 // ---------------------------------------------------------------------------
+namespace {
+// The shaders are written for desktop GLSL 3.30; OpenGL ES 3.0 (Android) takes the same code with
+// its own version line and default precisions.
+Shader loadShader(const char* vs, const char* fs) {
+#if defined(RJ_GLES)
+  auto adapt = [](const char* src, std::string& out) -> const char* {
+    if (!src) return nullptr;
+    out = src;
+    const std::string v = "#version 330";
+    if (const auto p = out.find(v); p != std::string::npos)
+      out.replace(p, v.size(), "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;");
+    return out.c_str();
+  };
+  std::string a, b;
+  return LoadShaderFromMemory(adapt(vs, a), adapt(fs, b));
+#else
+  return LoadShaderFromMemory(vs, fs);
+#endif
+}
+}  // namespace
+
 bool Renderer::init() {
-  lit_ = LoadShaderFromMemory(shaders::kLitVs, shaders::kLitFs);
-  depth_ = LoadShaderFromMemory(shaders::kDepthVs, shaders::kDepthFs);
-  sky_ = LoadShaderFromMemory(shaders::kSkyVs, shaders::kSkyFs);
-  ssao_ = LoadShaderFromMemory(nullptr, shaders::kSsaoFs);
-  blur_ = LoadShaderFromMemory(nullptr, shaders::kBlurFs);
-  bright_ = LoadShaderFromMemory(nullptr, shaders::kBrightFs);
-  composite_ = LoadShaderFromMemory(nullptr, shaders::kCompositeFs);
-  ssr_ = LoadShaderFromMemory(nullptr, shaders::kSsrFs);
+  lit_ = loadShader(shaders::kLitVs, shaders::kLitFs);
+  depth_ = loadShader(shaders::kDepthVs, shaders::kDepthFs);
+  sky_ = loadShader(shaders::kSkyVs, shaders::kSkyFs);
+  ssao_ = loadShader(nullptr, shaders::kSsaoFs);
+  blur_ = loadShader(nullptr, shaders::kBlurFs);
+  bright_ = loadShader(nullptr, shaders::kBrightFs);
+  composite_ = loadShader(nullptr, shaders::kCompositeFs);
+  ssr_ = loadShader(nullptr, shaders::kSsrFs);
   for (Shader* s : {&lit_, &depth_, &sky_, &ssao_, &blur_, &bright_, &composite_, &ssr_})
     if (!IsShaderValid(*s)) {
       TraceLog(LOG_ERROR, "RJ: shader compilation failed");
