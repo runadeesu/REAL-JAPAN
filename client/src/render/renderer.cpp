@@ -297,6 +297,7 @@ bool Renderer::init() {
   }
   plane_ = GenMeshPlane(12000.0f, 12000.0f, 1, 1);
   ocean_ = GenMeshPlane(40000.0f, 40000.0f, 80, 80);
+  ocean_near_ = GenMeshPlane(480.0f, 480.0f, 160, 160);
   {
     // the open sea to the horizon for the far view: a disc following the Earth's curvature below
     // the camera (the streamed cells' own seas and the far terrain follow it too, so they meet
@@ -352,7 +353,7 @@ void Renderer::shutdown() {
   if (car_display_.id) UnloadRenderTexture(car_display_);
   car_display_ = RenderTexture2D{};
   signs_built_ = false;
-  for (Mesh* m : {&plane_, &ocean_, &ocean_curved_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_, &unit_box_}) UnloadMesh(*m);
+  for (Mesh* m : {&plane_, &ocean_, &ocean_near_, &ocean_curved_, &body_, &legs_, &torso_, &head_, &lens_, &pedlens_, &unit_box_}) UnloadMesh(*m);
   for (auto& s : shadow_)
     if (s.id) {
       rlUnloadFramebuffer(s.id);
@@ -533,6 +534,7 @@ void Renderer::applyFrameUniforms(const Camera3D& cam, const Lighting& L, float 
 void Renderer::beginScene(const RenderOptions& o, const Lighting& L, const Camera3D& cam, float time_s) {
   opt_ = o;
   frame_L_ = L;
+  scene_cam_ = cam;
   draw_calls_ = 0;
   triangles_ = 0;
   ++frame_;
@@ -895,7 +897,25 @@ void Renderer::drawOcean(const Camera3D& cam, float sea_y) {
   setI(lit_, "materialOverride", -1);
 }
 
-void Renderer::drawCellSeas(const World& world) {
+void Renderer::drawWaves(const Camera3D& cam, float sea_y, float amp) {
+  if (amp <= 0.0f) return;
+  rlDrawRenderBatchActive();
+  rlDisableColorBlend();
+  mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+  setI(lit_, "surfaceMode", 0);
+  setI(lit_, "useTexture", 0);
+  setI(lit_, "materialOverride", kMatWater);
+  setF(lit_, "waveAmp", amp);
+  set3(lit_, "waveCam", cam.position);
+  const float gx = std::round(cam.position.x / 3.0f) * 3.0f, gz = std::round(cam.position.z / 3.0f) * 3.0f;
+  DrawMesh(ocean_near_, mat_, MatrixTranslate(gx, sea_y + 0.04f, gz));
+  ++draw_calls_;
+  setF(lit_, "waveAmp", 0.0f);
+  setI(lit_, "materialOverride", -1);
+}
+
+void Renderer::drawCellSeas(const World& world, float tide) {
   rlDrawRenderBatchActive();
   rlDisableColorBlend();  // opaque: alpha carries the reflection amount
   mat_.maps[MATERIAL_MAP_DIFFUSE].texture = Texture2D{rlGetTextureIdDefault(), 1, 1, 1, 7};
@@ -906,7 +926,7 @@ void Renderer::drawCellSeas(const World& world) {
   rlDisableBackfaceCulling();
   for (const auto& [code, c] : world.cells())
     if (c->gpu.sea.vaoId) {
-      DrawMesh(c->gpu.sea, mat_, c->model);
+      DrawMesh(c->gpu.sea, mat_, MatrixMultiply(c->model, MatrixTranslate(0.0f, tide, 0.0f)));
       ++draw_calls_;
     }
   rlEnableBackfaceCulling();
@@ -1788,6 +1808,13 @@ void Renderer::drawCrowd(const std::vector<CrowdPerson>& people) {
 }
 
 void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
+  struct Bag {
+    rj::geo::Vec3d c;
+    float yaw;
+    Vector3 half;
+    Color col;
+  };
+  std::vector<Bag> bags;  // (drawn after the people: the box draw sets its own material state)
   setI(lit_, "materialOverride", -1);
   setI(lit_, "useTexture", 0);
   setI(lit_, "surfaceMode", 0);
@@ -1800,6 +1827,27 @@ void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
     const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), MatrixRotateY(-w.yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
     const Mesh& m = humans_.frame(static_cast<BodyVariant>(w.variant % static_cast<int>(BodyVariant::Count)), w.phase, w.waiting);
     drawHuman(m, M, w.shirt, w.pants, w.skin, w.hair);
+    {
+      // what they carry (by person): a shoulder bag, a rucksack (a school bag for children), a
+      // shopping bag in the hand, or nothing
+      const uint32_t hb = static_cast<uint32_t>(id * 2246822519u) ^ 0x5bd1e995u;
+      const int kind = static_cast<int>((hb >> 3) % 10);
+      const double fx = std::sin(w.yaw), fy = std::cos(w.yaw), rx = fy, ry = -fx;
+      auto at = [&](double along, double right, double up) {
+        return rj::geo::Vec3d{w.pos.x + fx * along * s + rx * right * s, w.pos.y + fy * along * s + ry * right * s, static_cast<double>(w.z) + up * s};
+      };
+      static const Color kBagCol[] = {{40, 40, 44, 255}, {90, 64, 44, 255}, {150, 30, 40, 255}, {40, 60, 110, 255}, {200, 196, 186, 255}, {60, 90, 60, 255}};
+      const Color bc = kBagCol[(hb >> 8) % 6];
+      if (w.age < 13) {  // randoseru
+        bags.push_back({at(-0.2, 0.0, 1.0), w.yaw, {0.15f * s, 0.09f * s, 0.17f * s}, (hb & 1) ? Color{170, 30, 36, 255} : Color{30, 30, 34, 255}});
+      } else if (kind < 3) {  // shoulder bag at the hip
+        bags.push_back({at(0.0, 0.2, 0.95), w.yaw, {0.05f * s, 0.15f * s, 0.12f * s}, bc});
+      } else if (kind < 5) {  // rucksack
+        bags.push_back({at(-0.2, 0.0, 1.22), w.yaw, {0.16f * s, 0.08f * s, 0.21f * s}, bc});
+      } else if (kind == 5 && !w.waiting) {  // a shopping bag in the hand
+        bags.push_back({at(0.02, 0.27, 0.55), w.yaw, {0.04f * s, 0.14f * s, 0.15f * s}, Color{236, 234, 226, 255}});
+      }
+    }
     // In the rain most people carry umbrellas; clear vinyl ones are the most common in Tokyo.
     const uint32_t h = static_cast<uint32_t>(id * 2654435761u);
     if (rain > 0.12f && (h & 1023u) < static_cast<uint32_t>(std::min(1.0f, 0.55f + rain) * 1023.0f)) {
@@ -1812,6 +1860,7 @@ void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
     }
   }
   rlEnableBackfaceCulling();
+  for (const Bag& b : bags) drawBox(b.c, b.yaw, b.half, kMatDefault, b.col);
 }
 
 void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s, float snow) {
@@ -2007,6 +2056,23 @@ void Renderer::endScene(const Camera3D& cam, const Lighting& L, float time_s) {
   set2(composite_, "invRes", Vector2{1.0f / tw_, 1.0f / th_});
   static const int dbg = std::getenv("RJ_DEBUG_VIEW") ? std::atoi(std::getenv("RJ_DEBUG_VIEW")) : 0;
   setI(composite_, "debugView", dbg);
+  {
+    // camera motion blur: each pixel's position last frame (depth + last frame's view-projection)
+    const Matrix view = GetCameraMatrix(scene_cam_);
+    const Matrix proj = MatrixPerspective(scene_cam_.fovy * DEG2RAD, static_cast<double>(tw_) / std::max(1, th_), rlGetCullDistanceNear(), rlGetCullDistanceFar());
+    const Matrix vp = MatrixMultiply(view, proj);
+    const bool jump = Vector3Distance(scene_cam_.position, prev_cam_pos_) > 30.0f;  // (teleport, origin rebase)
+    const float mb = prev_vp_ok_ && !jump ? opt_.motion_blur : 0.0f;
+    setF(composite_, "motionBlur", mb);
+    if (mb > 0.0f) {
+      SetShaderValueMatrix(composite_, GetShaderLocation(composite_, "reproj"), MatrixMultiply(MatrixInvert(vp), prev_vp_));
+      Texture2D depth{scene_.depth.id, tw_, th_, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+      SetShaderValueTexture(composite_, GetShaderLocation(composite_, "texDepth"), depth);
+    }
+    prev_vp_ = vp;
+    prev_cam_pos_ = scene_cam_.position;
+    prev_vp_ok_ = true;
+  }
   DrawTexturePro(scene_.texture, Rectangle{0, 0, static_cast<float>(tw_), -static_cast<float>(th_)},
                  Rectangle{0, 0, static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight())}, Vector2{0, 0}, 0.0f,
                  WHITE);

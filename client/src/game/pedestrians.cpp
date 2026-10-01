@@ -502,13 +502,15 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
           if (g == grid.end()) continue;
           for (size_t o : g->second) {
             if (o == it->first) continue;
-            const Walker& ow = walkers_.at(o);
+            const auto oit = walkers_.find(o);
+            if (oit == walkers_.end()) continue;  // (gone earlier in this loop)
+            const Walker& ow = oit->second;
             near(ow.pos.x, ow.pos.y, 0.85);
             // two residents who meet stop and talk a while (about one pair in twelve)
             if (chat_tick && !w.visitor && !ow.visitor && w.chat_with == static_cast<size_t>(-1) && ow.chat_with == static_cast<size_t>(-1) && !w.waiting &&
                 std::hypot(ow.pos.x - w.pos.x, ow.pos.y - w.pos.y) < 1.8 && !hold_.count(it->first) && !hold_.count(o) &&
                 ((it->first * 2654435761u) ^ (o * 40503u)) % 12u == 0 && it->first < o) {
-              Walker& o2 = walkers_.at(o);
+              Walker& o2 = oit->second;
               w.chat_with = o;
               o2.chat_with = it->first;
               w.chat_t = o2.chat_t = static_cast<float>(8.0 + rnd() * 6.0);

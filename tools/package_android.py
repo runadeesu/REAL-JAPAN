@@ -13,7 +13,8 @@
                                              (size-limited transfers); installed together with
                                              the main APK (a split-APK installer or
                                              `adb install-multiple *.apk`)
-    --full also writes one APK with everything (~560 MB) for `adb install`.
+    --full also writes one APK with everything (~560 MB) for `adb install`; --single writes only
+    that one APK (dist/RealJapan-<ver>-android-arm64-full.apk), no split APKs.
 
   The game reads its data straight from the installed APKs (nothing is copied on the first
   start). All APKs are signed with packaging/android/debug.keystore, a public debug key kept in
@@ -28,8 +29,8 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VER = "0.7.0"
-VCODE = 70
+VER = "0.8.0"
+VCODE = 80
 PKG = "io.github.runadeesu.realjapan"
 MIN_SDK, TARGET_SDK = 24, 34
 SPLIT_BUDGET = int(28.5 * 1024 * 1024)  # file bytes per data APK (stored, the cells are compressed already)
@@ -103,15 +104,18 @@ def finish(unsigned: str, out_apk: str, ks: str):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", action="store_true", help="also one APK with everything (~560 MB)")
+    ap.add_argument("--single", action="store_true", help="only the one APK with everything (no split APKs)")
     ap.add_argument("--no-build", action="store_true", help="use build-android/libmain.so as it is")
     a = ap.parse_args()
     ndk = os.environ.get("ANDROID_NDK", "/usr/lib/android-ndk")
     jar = os.environ.get("ANDROID_JAR", "/usr/lib/android-sdk/platforms/android-23/android.jar")
     ks = os.path.join(ROOT, "packaging", "android", "debug.keystore")
-    for need in ("game/data/world/country/client.txt", "game/data/world/shibuya/client.txt", "game/data/fonts/BIZUDPGothic-Regular.ttf"):
+    for need in ("game/data/world/country/client.txt", "game/data/fonts/BIZUDPGothic-Regular.ttf"):
         if not os.path.exists(os.path.join(ROOT, need)):
-            print(f"missing {need}: cook the worlds / run tools/fetch_deps.sh first", file=sys.stderr)
+            print(f"missing {need}: cook the world / run tools/fetch_deps.sh first", file=sys.stderr)
             return 1
+    if not os.path.exists(os.path.join(ROOT, "game/data/world/shibuya/client.txt")):
+        print("note: the Shibuya world is not cooked; packaging without it", file=sys.stderr)
 
     if a.no_build:
         lib = os.path.join(ROOT, "build-android", "libmain.stripped.so")
@@ -152,6 +156,10 @@ def main() -> int:
         finish(unsigned, out_apk, ks)
         shutil.rmtree(d)
 
+    if a.single:
+        base_apk(os.path.join(ROOT, "dist", f"{name}-arm64-full.apk"), files)
+        print(f"packaged: {os.path.join(ROOT, 'dist', name + '-arm64-full.apk')}")
+        return 0
     main_apk = os.path.join(dist, f"{name}-arm64.apk")
     base_apk(main_apk, base_files)
 

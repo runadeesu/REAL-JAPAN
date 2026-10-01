@@ -45,6 +45,7 @@ bool App::buyItem(const ShopItem& it) {
     return false;
   }
   ++inventory_[it.key];
+  if (shop_open_ >= 0) ++shop_visits_[shop_open_];  // (the clerk gets to know a regular)
   toast(i18n_.f("shop.bought", {{"item", name}, {"yen", withCommas(it.yen)}}) + "  " + tr("shop.thanks"));
   return true;
 }
@@ -67,7 +68,7 @@ void App::updateShopActions() {
   // the clerk greets whoever comes up to the counter (words on the screen; there are no voices)
   {
     const int k = shops_.near(player_.pos, 3.5);
-    if (k >= 0 && k != shop_greeted_) toast(tr("shop.welcome"));
+    if (k >= 0 && k != shop_greeted_) toast(tr(shop_visits_[k] >= 3 ? "shop.welcome_regular" : "shop.welcome"));
     if (k >= 0) shop_greeted_ = k;
     else if (shop_greeted_ >= 0 && shops_.near(player_.pos, 12.0) != shop_greeted_) shop_greeted_ = -1;
   }

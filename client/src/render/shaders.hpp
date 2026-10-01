@@ -18,6 +18,8 @@ uniform mat4 matView;
 uniform mat4 matProjection;
 uniform float timeSec;
 uniform float windStrength;
+uniform float waveAmp;   // > 0: the sea near the camera, with travelling waves
+uniform vec3 waveCam;
 out vec3 fragPos;
 out vec3 fragNormal;
 out vec4 fragColor;
@@ -31,8 +33,27 @@ void main() {
     float a = vertexTexCoord2.y * windStrength;
     wp.xz += vec2(sin(ph), cos(ph * 0.83)) * 0.07 * a + vec2(sin(ph * 3.1), sin(ph * 2.7)) * 0.02 * a;
   }
+  vec3 nrm = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
+  if (waveAmp > 0.0) {
+    // swell and wind waves: four travelling sines (deep-water speed c = sqrt(g / k)), crests up only
+    // (no troughs under the flat sea further out), fading out 110-225 m from the camera (flat at the mesh edge)
+    float f = (1.0 - smoothstep(110.0, 225.0, length(wp.xz - waveCam.xz))) * waveAmp;
+    vec2 D[4] = vec2[](vec2(0.8, 0.6), vec2(-0.32, 0.95), vec2(0.97, -0.24), vec2(0.5, -0.87));
+    float L[4] = float[](38.0, 21.0, 11.0, 6.0);
+    float A[4] = float[](0.35, 0.2, 0.12, 0.06);
+    float h = 0.0;
+    vec2 g = vec2(0.0);
+    for (int i = 0; i < 4; ++i) {
+      float k = 6.2831853 / L[i];
+      float ph = k * dot(D[i], wp.xz) - sqrt(9.81 * k) * timeSec;
+      h += A[i] * (sin(ph) + 1.0) * 0.5;
+      g += A[i] * 0.5 * k * D[i] * cos(ph);
+    }
+    wp.y += h * f;
+    nrm = normalize(vec3(-g.x * f, 1.0, -g.y * f));
+  }
   fragPos = wp.xyz;
-  fragNormal = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
+  fragNormal = nrm;
   fragColor = vertexColor;
   fragUV = vertexTexCoord;
   fragMat = vertexTexCoord2;
@@ -1199,6 +1220,9 @@ uniform float rainOverlay;
 uniform int debugView;       // 1 = reflection amount (scene alpha), 2 = SSAO, 3 = SSR
 uniform float timeSec;
 uniform vec2 invRes;
+uniform float motionBlur;    // > 0: camera motion blur (strength)
+uniform mat4 reproj;         // this frame's NDC -> last frame's clip space
+uniform sampler2D texDepth;
 out vec4 finalColor;
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 // FXAA (Lottes, simplified console variant): the scene target is not multisampled.
@@ -1224,6 +1248,19 @@ vec3 fxaa(vec2 uv) {
 void main() {
   vec2 uv = fragTexCoord;
   vec3 c = fxaa(uv);
+  if (motionBlur > 0.0) {
+    // where this pixel was last frame; smear along the way (up to 40 px, 8 taps)
+    float d = texture(texDepth, uv).r;
+    vec4 prev = reproj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    vec2 vel = (uv - (prev.xy / prev.w * 0.5 + 0.5)) * motionBlur;
+    float px = length(vel / invRes);
+    if (px > 1.0) {
+      vel *= min(1.0, 40.0 / px);
+      vec3 acc = c;
+      for (int i = 1; i < 8; ++i) acc += texture(texture0, uv - vel * (float(i) / 7.0 - 0.5)).rgb;
+      c = acc / 8.0;
+    }
+  }
   // AO / bloom / SSR targets went through an odd number of render-target blits (each flips Y).
   vec2 uvf = vec2(uv.x, 1.0 - uv.y);
   float ao = texture(texAO, uvf).r;

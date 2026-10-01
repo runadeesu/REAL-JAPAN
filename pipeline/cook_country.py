@@ -224,7 +224,7 @@ def cook_cell(mesh: str):
         cx, cy = b.footprint.mean(axis=0)
         bla, blo = fi.to_geodetic(cx, cy)
         area = Polygon(b.footprint).area
-        entry = {"id": bid, "lat": bla, "lon": blo, "usage": b.usage, "storeys": max(1, b.storeys), "area": area}
+        entry = {"id": bid, "lat": bla, "lon": blo, "usage": b.usage, "storeys": max(1, b.storeys), "area": area, "name": b.name}
         if b.usage in (411, 412, 413, 414, 415):
             homes.append(entry)
         elif b.usage in (401, 402, 403, 404, 421, 422, 431, 441):
@@ -586,6 +586,8 @@ def write_residents(out, homes, works, pois, rng, n_res=12000):
         hi = rng.choice(len(homes), size=n_res, p=hw / hw.sum())
         wi = rng.choice(len(works), size=n_res, p=ww / ww.sum())
         kn = min(40, len(works))
+        schools = [w for w in works if str(w.get("name", "")).endswith("学校")]
+        stree = cKDTree(np.array([[w["lat"], w["lon"] * 0.83] for w in schools])) if schools else None
         for k in range(n_res):
             h = homes[hi[k]]
             if rng.random() < 0.9:  # near home: one of the nearest workplaces, by size
@@ -596,8 +598,9 @@ def write_residents(out, homes, works, pois, rng, n_res=12000):
             else:  # commuting further (another town)
                 wk = works[wi[k]]
             roll = rng.random()
-            if roll < 0.12:
-                o, w2 = rng.choice(["high_school_student", "university_student", "junior_high_student"]), wk
+            if roll < 0.12:  # a student: at the nearest school (the schools' buildings), else near home
+                o = rng.choice(["high_school_student", "university_student", "junior_high_student"])
+                w2 = schools[int(stree.query([h["lat"], h["lon"] * 0.83])[1])] if stree is not None and o != "university_student" else wk
             elif roll < 0.25:
                 o, w2 = "retired", None
             else:
@@ -703,6 +706,10 @@ def main() -> int:
     spec = specials.build_all(ctry, terrain, rng)
     spec.fuel_lots = specials.pick_fuel_lots(ctry, terrain)
     print(f"town fuel stations: {', '.join(o['name'] for o in spec.fuel_lots)}", flush=True)
+    spec.schools = specials.pick_school_sites(ctry, terrain, [o["centre"] for o in spec.fuel_lots])
+    for site in spec.schools:
+        spec.buildings.append(specials.school_building(site, rng))
+    print(f"schools: {len(spec.schools)} ({', '.join(o['name'] for o in spec.schools)})", flush=True)
     print(f"specials: {len(spec.buildings)} structures ({time.time() - t0:.0f}s)", flush=True)
     lc = LandCover(ctry, spec)
     print(f"land cover ({time.time() - t0:.0f}s)", flush=True)

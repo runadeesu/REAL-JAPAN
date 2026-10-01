@@ -48,6 +48,12 @@ class WeatherSim {
   bool tsuyu() const { return (month_ == 6 && day_ >= 7) || (month_ == 7 && day_ <= 19); }
   bool typhoonSeason() const { return (month_ == 8 && day_ >= 10) || month_ == 9 || (month_ == 10 && day_ <= 15); }
   void update(double game_dt_s, double real_dt_s, float sun_elevation_deg);
+  // a region's climate (regional weather): how often a change turns wetter, how likely typhoons are
+  void setClimate(float wet_bias, float typhoon_mul, uint32_t seed) {
+    wet_bias_ = wet_bias;
+    typhoon_mul_ = typhoon_mul;
+    rng_ = seed | 1u;
+  }
 
   WeatherKind kind() const { return kind_; }
   const WeatherParams& now() const { return cur_; }
@@ -69,6 +75,7 @@ class WeatherSim {
   float wind_dir_ = 2.4f;  // radians, direction the wind blows towards (compass)
   float cloud_x_ = 0.0f, cloud_y_ = 0.0f;
   uint32_t rng_ = 20260926u;
+  float wet_bias_ = 0.0f, typhoon_mul_ = 1.0f;
   float rand01();
 };
 

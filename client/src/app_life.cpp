@@ -46,9 +46,9 @@ const ItemUse* findUse(const std::string& k) {
 
 std::string App::lifeString() const {
   char b[320];
-  std::snprintf(b, sizeof b, "hunger:%.1f;thirst:%.1f;wet:%.2f;umbrella:%d;light:%d;battery:%.3f;fuel:%.3f;damage:%.3f;home:%d;rent:%lld;talks:%d;tips:%lld",
+  std::snprintf(b, sizeof b, "hunger:%.1f;thirst:%.1f;wet:%.2f;umbrella:%d;light:%d;battery:%.3f;fuel:%.3f;damage:%.3f;home:%d;rent:%lld;talks:%d;tips:%lld;study:%d",
                 life_.hunger, life_.thirst, life_.wet, life_.umbrella ? 1 : 0, life_.flashlight ? 1 : 0, life_.battery, life_.fuel, life_.damage,
-                life_.has_home ? 1 : 0, static_cast<long long>(life_.rent_paid_until), life_.talks, static_cast<long long>(life_.tips));
+                life_.has_home ? 1 : 0, static_cast<long long>(life_.rent_paid_until), life_.talks, static_cast<long long>(life_.tips), life_.study);
   return b;
 }
 
@@ -73,6 +73,7 @@ void App::parseLife(const std::string& s) {
     else if (k == "rent") life_.rent_paid_until = static_cast<int64_t>(v);
     else if (k == "talks") life_.talks = static_cast<int>(v);
     else if (k == "tips") life_.tips = static_cast<int64_t>(v);
+    else if (k == "study") life_.study = static_cast<int>(v);
   }
 }
 

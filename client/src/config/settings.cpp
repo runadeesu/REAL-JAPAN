@@ -40,6 +40,7 @@ void applyKv(Settings& s, const std::map<std::string, std::string>& kv) {
   b("show_fps", s.show_fps);
   b("photo_textures", s.photo_textures);
   b("post_fx", s.post_fx);
+  b("motion_blur", s.motion_blur);
   b("head_bob", s.head_bob);
   b("dev_overlay", s.dev_overlay);
   i("volume", s.volume);
@@ -94,6 +95,7 @@ bool Settings::save(const std::filesystem::path& user) const {
     << "show_fps = " << (show_fps ? 1 : 0) << "\n"
     << "photo_textures = " << (photo_textures ? 1 : 0) << "\n"
     << "post_fx = " << (post_fx ? 1 : 0) << "\n"
+    << "motion_blur = " << (motion_blur ? 1 : 0) << "\n"
     << "head_bob = " << (head_bob ? 1 : 0) << "\n"
     << "dev_overlay = " << (dev_overlay ? 1 : 0) << "\n"
     << "volume = " << volume << "\n"

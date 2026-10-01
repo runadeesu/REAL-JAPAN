@@ -12,6 +12,7 @@
 #include "app.hpp"
 #include "raymath.h"
 #include "rj/sim/npc.hpp"
+#include "rj/sim/social.hpp"
 #include "ui/ui.hpp"
 #include "world/coords.hpp"
 
@@ -50,13 +51,44 @@ void App::updateTalk(float dt) {
 
 void App::startTalk(const Walker& w) {
   const size_t id = peds_.idOf(&w);
-  const int met = talked_[id]++;
+  int met = talked_[id]++;
   ++life_.talks;
   talk_lines_.clear();
   const auto t = jst();
   const uint32_t h = static_cast<uint32_t>(id * 2654435761u) ^ static_cast<uint32_t>(life_.talks * 40503u);
+  // where we are (the nearest named place)
+  std::string here;
+  {
+    double bd = 1500.0;
+    for (const auto& p : world_.meta().pois) {
+      const rj::geo::Vec3d q = world_.toLocal({p.lat, p.lon, 0.0});
+      if (const double d = std::hypot(q.x - player_.pos.x, q.y - player_.pos.y); d < bd) {
+        bd = d;
+        here = p.name;
+      }
+    }
+  }
+  // a resident remembers earlier talks (rjcore social memory, replayed from the saved log)
+  std::string known_line;
+  if (!w.visitor) {
+    constexpr rj::sim::EntityId kPlayer = 1;
+    auto& log = met_log_[w.npc];
+    rj::sim::SocialMemory mem;
+    for (const auto& [ut, place] : log) mem.recordEncounter(kPlayer, ut, 0.1f, place, "talk");
+    mem.decay(clock_.unixUtc());
+    if (mem.recognizes(kPlayer) && !log.empty()) {
+      const auto lvl = mem.level(kPlayer);
+      met = std::max(met, 1);
+      const int days = static_cast<int>((clock_.unixUtc() - log.back().first) / 86400);
+      known_line = i18n_.f(lvl >= rj::sim::RelationshipLevel::Friend ? "talk.know_friend" : "talk.know",
+                           {{"place", log.back().second.empty() ? tr("talk.here") : log.back().second}, {"days", std::to_string(days)}});
+    }
+    log.push_back({clock_.unixUtc(), here});
+    if (log.size() > 12) log.erase(log.begin());
+  }
   // greeting
   talk_lines_.push_back(tr(met > 0 ? "talk.again" : t.hour < 10 ? "talk.greet_morning" : t.hour < 17 ? "talk.greet_day" : "talk.greet_evening"));
+  if (!known_line.empty()) talk_lines_.push_back(known_line);
   if (w.visitor) {
     talk_speaker_ = tr("talk.visitor");
     talk_lines_.push_back(tr((h & 1) ? "talk.visitor_1" : "talk.visitor_2"));
@@ -129,6 +161,28 @@ void App::drawSpeech(const Camera3D& cam) {
     ui_.panel({x, y, tw, fs + 14.0f}, Color{250, 250, 246, a});
     ui_.text(text, x + 12, y + 6, fs, Color{30, 30, 34, a});
   }
+}
+
+void App::updateSchool() {
+  // a school (the fictional country's schools: their building's name ends in 学校): on a weekday
+  // between 8:30 and 15:30 the player can sit in on a class (50 game minutes; the classroom is not
+  // shown) - the subjects go round, and the count is kept
+  if (!hover_ || !hover_->building || hover_->distance > 14.0 || aim_icon_ != AimIcon::None) return;
+  if (driving_.active() || ride_train_ >= 0 || ride_ferry_ >= 0 || ride_jet_ >= 0 || flying_ || player_.fly || life_.guitar) return;
+  const std::string& nm = hover_->building->name;
+  static const std::string kSchool = "学校";
+  if (nm.size() < kSchool.size() || nm.compare(nm.size() - kSchool.size(), kSchool.size(), kSchool) != 0) return;
+  const auto t = jst();
+  const bool weekday = rj::sim::dayType(t.date) == rj::sim::DayType::Weekday;
+  const int m = t.hour * 60 + t.minute;
+  const bool open = weekday && m >= 8 * 60 + 30 && m < 15 * 60 + 30;
+  aim_icon_ = AimIcon::Hand;
+  aim_label_ = open ? i18n_.f("aim.school", {{"school", nm}}) : i18n_.f(weekday ? "aim.school_after" : "aim.school_holiday", {{"school", nm}});
+  if (!open || !usePressed()) return;
+  clock_.advanceGame(50.0 * 60.0);
+  ++life_.study;
+  const std::string subj = tr("school.subject." + std::to_string(life_.study % 7));
+  message(nm, i18n_.f("school.attended", {{"subject", subj}, {"n", std::to_string(life_.study)}}));
 }
 
 }  // namespace rjc

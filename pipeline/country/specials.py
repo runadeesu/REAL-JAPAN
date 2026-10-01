@@ -77,6 +77,7 @@ class Spec:
     tolls: list = field(default_factory=list)         # expressway toll plazas on the interchange ramps (dicts)
     pas: list = field(default_factory=list)           # parking areas: their shop building (dicts, shop.py plan)
     fuel_lots: list = field(default_factory=list)     # fuel stations on a roadside lot in the towns (dicts)
+    schools: list = field(default_factory=list)       # schools: the building's site and its sports ground (dicts)
 
 
 class CellExtra:
@@ -946,6 +947,144 @@ def pick_fuel_lots(ctry, terrain):
     return out
 
 
+SCHOOL_KINDS = (("小学校", "Elementary School"), ("中学校", "Junior High School"), ("高等学校", "High School"))
+
+
+def pick_school_sites(ctry, terrain, avoid):
+    """Schools (fictional, generic): an 84 x 64 m site beside a road in each town, 300 m to 1.6 km
+    from its centre, on building land (its parcels get no buildings), fairly level, clear of other
+    roads and at least 900 m from the other schools and the fuel stations (avoid: points). The bigger
+    towns get an elementary school, a junior high and a high school; the smaller ones fewer."""
+    from shapely.strtree import STRtree
+    from . import nation as N
+    allr = [r for r in ctry.net.roads if r.kind != "lot"]
+    atree = STRtree([r.line for r in allr])
+    ptree = STRtree([pc.poly for pc in ctry.parcels])
+    towns = list(N.CITIES) + [(n_, "", s_, p_) for n_, s_, p_ in L.DISTRICTS if n_ in ("古市", "西ヶ丘", "臨海")]
+    out, taken = [], [np.asarray(a, float) for a in avoid]
+    for name, _en, style, poly in towns:
+        if style in ("center", "airport", "kyoto_center"):
+            continue
+        P = Polygon(poly)
+        want = 3 if P.area > 4e6 else 2 if P.area > 1.2e6 else 1
+        cc = np.array([P.centroid.x, P.centroid.y])
+        cands = []
+        for k in atree.query(P, predicate="intersects"):
+            r = allr[int(k)]
+            if r.width < 6.0 or r.kind in ("expressway", "ramp"):
+                continue
+            for s_ in np.arange(30.0, r.line.length - 30.0, 50.0):
+                q = r.line.interpolate(float(s_))
+                dist = float(np.hypot(q.x - cc[0], q.y - cc[1]))
+                if 300.0 <= dist <= 1600.0 and P.contains(q):
+                    cands.append((dist, r, float(s_)))
+        cands.sort(key=lambda t: t[0])
+        got = 0
+        for dist, r, s_ in cands:
+            if got >= want:
+                break
+            q0, q1 = r.line.interpolate(max(0.0, s_ - 1.0)), r.line.interpolate(min(r.line.length, s_ + 1.0))
+            t = np.array([q1.x - q0.x, q1.y - q0.y])
+            t /= max(np.linalg.norm(t), 1e-9)
+            q = np.array([r.line.interpolate(s_).x, r.line.interpolate(s_).y])
+            for sg in (1.0, -1.0):
+                n = np.array([-t[1], t[0]]) * sg
+                c = q + n * (r.width / 2 + 3.0 + 32.0)
+                if any(float(np.hypot(*(c - a))) < 900.0 for a in taken):
+                    break
+                rect = Polygon([c - t * 42 - n * 32, c + t * 42 - n * 32, c + t * 42 + n * 32, c - t * 42 + n * 32])
+                if any(allr[int(k)].line.distance(rect) < allr[int(k)].width / 2 + 1.0 for k in atree.query(rect.buffer(8.0)) if allr[int(k)] is not r):
+                    continue
+                if r.line.distance(rect) < r.width / 2 + 1.0:
+                    continue
+                pcs = [ctry.parcels[int(k)] for k in ptree.query(rect, predicate="intersects")]
+                if sum(pc.poly.intersection(rect).area for pc in pcs) < 0.8 * rect.area:
+                    continue
+                ring_ = np.asarray(rect.exterior.coords)
+                zs = terrain.sample(ring_[:, 0], ring_[:, 1])
+                if float(np.max(zs) - np.min(zs)) > 3.0:
+                    continue
+                for pc in pcs:
+                    if pc.poly.intersection(rect).area > 0.25 * pc.poly.area:
+                        pc.fuel = True  # (no building on the site; the same mark as the fuel stations')
+                kind = SCHOOL_KINDS[got % 3]
+                out.append(dict(name=f"{name}{kind[0]}", name_en=f"{_en or name} {kind[1]}", centre=c, d=t, n_out=-n, rect=rect,
+                                ground=float(np.min(zs))))
+                taken.append(c)
+                got += 1
+                break
+    return out
+
+
+def school_building(site, rng):
+    """The school's building (three storeys, the school facade) along the back of the site, a clock
+    on its front; the sports ground in front of it towards the road is cell detail (_school_ground)."""
+    from .buildings import BuildingOut, Geo, SCHOOL, _flat_top, walls
+    c, d, n_out, g0 = site["centre"], site["d"], site["n_out"], site["ground"]
+    bc = c - n_out * (32 - 9.5)  # (13 m deep, 2.5 m in from the back of the site)
+    ring = np.array([bc - d * 30 - n_out * 6.5, bc + d * 30 - n_out * 6.5, bc + d * 30 + n_out * 6.5, bc - d * 30 + n_out * 6.5])
+    if sum(ring[i][0] * ring[(i + 1) % 4][1] - ring[(i + 1) % 4][0] * ring[i][1] for i in range(4)) < 0:
+        ring = ring[::-1].copy()
+    g, gear = Geo(), Geo()
+    h = 12.6
+    closed = np.vstack([ring, ring[:1]])
+    walls(g, closed, g0 - 1.5, g0 + h, g0, SCHOOL, (232, 230, 222))
+    _flat_top(g, gear, Polygon(ring), g0 + h, g0, SCHOOL, (232, 230, 222), rng, big=True)
+    # the clock over the entrance (a dark face on a pale disc, as a flat panel)
+    fc = bc + n_out * 6.52
+    for half, col in ((0.75, (240, 240, 236)), (0.6, (40, 44, 50))):
+        a, b = fc - d * half, fc + d * half
+        g.quad((a[0], a[1], g0 + h - 1.0 - half), (b[0], b[1], g0 + h - 1.0 - half), (b[0], b[1], g0 + h - 1.0 + half),
+               (a[0], a[1], g0 + h - 1.0 + half), PUBLIC, col, [(0, 0), (1, 0), (1, 1), (0, 1)])
+        fc = fc + n_out * 0.01
+    return BuildingOut(g, gear, ring, g0, h, 3, 422, site["name"], "school")
+
+
+def _school_ground(geos, ex, xf, site, ground_c):
+    """The sports ground (sand), a fence round the site with a gate on the road side, goals."""
+    rect = site["rect"]
+    c, d, n_out = site["centre"], site["d"], site["n_out"]
+    yard = Polygon([c - d * 41 + n_out * 31, c + d * 41 + n_out * 31, c + d * 41 - n_out * 12, c - d * 41 - n_out * 12])
+    x0, y0, x1, y1 = yard.bounds
+    for x in np.arange(x0, x1, 4.0):
+        for y in np.arange(y0, y1, 4.0):
+            for part in parts(sbox(x, y, x + 4.0, y + 4.0).intersection(yard)):
+                ring = np.asarray(orient(part, 1.0).exterior.coords)[:-1]
+                if len(ring) < 3:
+                    continue
+                V = []
+                for q in ring:
+                    A = xf.p([[q[0], q[1], 0.0]])[0]
+                    A[2] = ground_c(q[0], q[1])[2] + 0.05
+                    V.append(A)
+                for k in range(1, len(V) - 1):
+                    _dquad(geos, "concrete", [V[0], V[k], V[k + 1], V[k + 1]], (190, 160, 118, 255))  # (sand)
+    # fence: 1.8 m mesh round the site, a 6 m gate opening in the middle of the road side
+    corners = list(np.asarray(rect.exterior.coords)[:-1])
+    for i in range(4):
+        a, b = np.asarray(corners[i]), np.asarray(corners[(i + 1) % 4])
+        mid = (a + b) / 2
+        road_side = float((mid - c) @ n_out) > 25.0
+        segs = [(a, mid - (b - a) / np.linalg.norm(b - a) * 3.0), (mid + (b - a) / np.linalg.norm(b - a) * 3.0, b)] if road_side else [(a, b)]
+        for p, q in segs:
+            L_ = float(np.linalg.norm(q - p))
+            n_ = max(1, int(L_ / 6.0))
+            for k in range(n_):
+                pa, pb = p + (q - p) * k / n_, p + (q - p) * (k + 1) / n_
+                A, B = xf.p([[pa[0], pa[1], 0.0]])[0], xf.p([[pb[0], pb[1], 0.0]])[0]
+                A[2], B[2] = ground_c(*pa)[2], ground_c(*pb)[2]
+                _dquad(geos, "fence", [A, B, B + [0, 0, 1.8], A + [0, 0, 1.8]], (120, 140, 120, 255))
+                _dquad(geos, "fence", [B, A, A + [0, 0, 1.8], B + [0, 0, 1.8]], (120, 140, 120, 255))
+                ex.walls.append((A[0], A[1], B[0], B[1], min(A[2], B[2]) - 0.3, max(A[2], B[2]) + 1.8))
+    # football goals at both ends of the ground
+    gz = site["ground"]
+    for sa in (-1, 1):
+        gp = c + d * sa * 36 + n_out * 10
+        for sc in (-1, 1):
+            _obox_c(geos, xf, "metal", gp + n_out * sc * 3.6, d, gz + 1.2, 0.06, 0.06, 1.2, (236, 236, 232, 255))
+        _obox_c(geos, xf, "metal", gp, d, gz + 2.4, 0.06, 3.66, 0.06, (236, 236, 232, 255))
+
+
 def _town_fuel(geos, ex, xf, lot, ground_c):
     """A roadside fuel station (generic): a concrete apron over the lot, a canopy on four posts over
     two pump islands, a kiosk at the back with a lit window, a blank price board on a pole by the
@@ -1258,6 +1397,9 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
     for lot in spec.fuel_lots:
         if cpoly.contains(Point(float(lot["centre"][0]), float(lot["centre"][1]))):
             _town_fuel(geos, ex, xf, lot, ground_c)
+    for site in spec.schools:
+        if cpoly.contains(Point(float(site["centre"][0]), float(site["centre"][1]))):
+            _school_ground(geos, ex, xf, site, ground_c)
     # --- the expressway on the ground: median barrier and guard rails (collision walls too), open
     # where an interchange's slip road leaves ---
     slips = [q.line.buffer(q.carriage / 2.0 + 1.5) for q in isl.net.roads if q.kind == "ramp" and q.line.intersects(clip.buffer(300))]

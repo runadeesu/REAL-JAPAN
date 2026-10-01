@@ -113,6 +113,7 @@ bool App::boot() {
     if (fileExists(slice_dir_ / "tolls.txt")) loadTolls(slice_dir_ / "tolls.txt");
     if (fileExists(slice_dir_ / "fuel.txt")) loadFuelStations(slice_dir_ / "fuel.txt");
     if (fileExists(slice_dir_ / "home.txt")) loadHome(slice_dir_ / "home.txt");
+    setupRegions();
   }
   // Glyphs: every language file + real building names + resident names + ASCII.
   std::set<int> cps;
@@ -368,6 +369,7 @@ void App::applyLaunchOverrides() {
     if (parseWeather(opt_.weather, k)) {
       weather_.set(k, true);
       weather_.setAuto(false);
+      weather_forced_ = true;
     }
   }
   if (opt_.dev) settings_.dev_overlay = true;
@@ -832,9 +834,12 @@ void App::update(float dt) {
         player_.yaw = driving_.car().yaw + drive_look_yaw_;
       } else {
         if (trains_.loaded()) updateStationGates(dt);  // (the gate flaps shut in front of the player block the lane)
+        const rj::geo::Vec3d before_move = player_.pos;
+        if (swimming_) player_.pos.z += 1.25;  // (the walker's floor search starts from standing height)
         player_.update(dt, world_, settings_, screen_ == Screen::Game && !till_.on && worship_.stage == 0 && fish_.stage == 0 && shop_open_ < 0 && vend_open_ < 0 && !travel_.on,
                        insideInterior(), nearby,
                        &gate_walls_);
+        updateSwimming(before_move, dt);
       }
       if (!inside_id_.empty() && player_.left_interior) {
         // Walked up the stairs and out onto the pavement.
@@ -887,6 +892,7 @@ void App::update(float dt) {
           hover_walker_ =
               peds_.pick(player_.eyeEnu(), player_.forwardEnu(), hover_ ? std::min(40.0, hover_->distance) : 40.0);
           updateTalk(dt);
+          updateSchool();
         } else {
           hover_.reset();
           hover_walker_ = nullptr;
@@ -951,6 +957,7 @@ void App::update(float dt) {
     weather_.setDate(jt.date.m, jt.date.d);
   }
   const WeatherKind wk0 = weather_.kind();
+  updateRegions(game_dt, dt, static_cast<float>(sun.elevation_deg));
   weather_.update(game_dt, dt, static_cast<float>(sun.elevation_deg));
   if (in_session_ && wk0 != WeatherKind::Typhoon && weather_.kind() == WeatherKind::Typhoon) message(tr("msg.from.weather"), tr("weather.typhoon_warn"));
   if (in_session_ && weather_.tsuyu() != tsuyu_) {
@@ -1688,6 +1695,7 @@ void App::drawWorldView(const Camera3D& cam) {
   ro.post = settings_.post_fx;
   ro.ssao = settings_.post_fx;
   ro.bloom = settings_.post_fx;
+  ro.motion_blur = settings_.post_fx && (settings_.motion_blur || std::getenv("RJ_MOTION_BLUR")) ? 0.7f : 0.0f;
   if (ro.shadows) {
     std::vector<Renderer::Caster> casters;
     facades_.forEachMesh([&](const Mesh& m, int lod) {
@@ -1744,7 +1752,12 @@ void App::drawWorldView(const Camera3D& cam) {
   // the sea is opaque (its alpha is the reflection amount): before the blended road markings
   if (world_.meta().fictional && !deep) {
     if (far_.ready()) {
-      renderer_.drawCellSeas(world_);  // (the far view has the open sea beyond the streamed cells)
+      const float tide = static_cast<float>(tideM());
+      renderer_.drawCellSeas(world_, tide);  // (the far view has the open sea beyond the streamed cells)
+      const auto g = world_.toGeodetic(rlToEnu(cam.position));
+      const float sea = static_cast<float>(world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z) + tide;
+      static const bool no_waves = std::getenv("RJ_NO_WAVES") != nullptr;  // debug isolation
+      if (cam.position.y - sea < 400.0f && !in && !no_waves) renderer_.drawWaves(cam, sea, waveAmp());
     } else {
       // Sea level (height 0) under the camera, in the floating-origin frame.
       const auto g = world_.toGeodetic(rlToEnu(cam.position));
@@ -1979,7 +1992,7 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v0.7.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
+  ui_.textRight("v0.8.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
                  vw - 30, 1040, 20, theme::kMuted);
 }
 
@@ -2092,6 +2105,11 @@ void App::drawSettings() {
   y += rh + gap;
   if (ui_.stepper({x, y, w, rh}, tr("settings.head_bob"), onoff(settings_.head_bob))) {
     settings_.head_bob = !settings_.head_bob;
+    changed = true;
+  }
+  y += rh + gap;
+  if (ui_.stepper({x, y, w, rh}, tr("settings.motion_blur"), onoff(settings_.motion_blur))) {
+    settings_.motion_blur = !settings_.motion_blur;
     changed = true;
   }
   y += rh + gap;
@@ -2611,6 +2629,16 @@ void App::drawPhone() {
       const auto g = world_.toGeodetic(player_.pos);
       const auto sun = rj::env::sunPosition(clock_.unixUtc(), g.lat_deg, g.lon_deg);
       yy += ui_.textWrapped(i18n_.f("phone.clock_sun", {{"el", fixed(sun.elevation_deg, 1)}, {"az", fixed(sun.azimuth_deg, 0)}}), cx, yy, cw, 24, theme::kText) + 12;
+      if (!regions_.empty()) {  // regional weather
+        ui_.text(tr("phone.clock_regions"), cx, yy, 22, theme::kText);
+        yy += 32;
+        for (const auto& r : regions_) {
+          ui_.text(tr("region." + r.key), cx + 10, yy, 19, &r == &regions_[static_cast<size_t>(std::max(0, region_))] ? theme::kGood : theme::kMuted);
+          ui_.textRight(tr(std::string("weather.") + weatherKey(r.sim.kind())), cx + cw, yy, 19, theme::kText);
+          yy += 26;
+        }
+        yy += 10;
+      }
       ui_.textWrapped(tr("phone.clock_weather"), cx, yy, cw, 22, theme::kWarn);
       back();
       break;

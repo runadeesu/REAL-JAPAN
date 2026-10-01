@@ -388,7 +388,7 @@ void App::updateActivities(float dt) {
   // fishing spot: water right in front (piers, quays, the shore)
   double sea_z;
   V3 spot;
-  if (!player_.fly && waterAhead(sea_z, spot)) {
+  if (!player_.fly && !swimming_ && waterAhead(sea_z, spot)) {
     prompt_ = tr("fish.prompt");
     if (e) {
       fish_.rng ^= static_cast<uint32_t>(clock_.unixUtc()) | 1u;

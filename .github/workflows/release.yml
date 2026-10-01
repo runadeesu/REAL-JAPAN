@@ -1,0 +1,113 @@
+# Builds every package from the source and attaches them to a DRAFT GitHub release (drafts are
+# visible only to the repository's collaborators until someone publishes them):
+#   RealJapan-<ver>-all.zip                 the Windows installer and the Android APK in one file
+#   RealJapan-<ver>-win64-setup.exe         Windows 10/11 x64, one-file installer
+#   RealJapan-<ver>-win64.zip               Windows 10/11 x64, the same as one ZIP
+#   RealJapan-<ver>-android-arm64-full.apk  Android 7.0+ (arm64), one APK with everything
+# The fictional country is generated from the code (no outside data). The Shibuya world needs the
+# PLATEAU / GSI downloads; if they fail the packages are made without it (the notes say so).
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      shibuya:
+        description: "Also fetch and cook the Shibuya world (PLATEAU / GSI downloads)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build mingw-w64 nsis xvfb \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libgl1-mesa-dri
+          python3 -m pip install --break-system-packages numpy pillow mapbox-earcut shapely scipy fonttools
+
+      - name: Version
+        id: ver
+        run: echo "ver=$(sed -n 's/^project(RealJapan VERSION \([0-9.]*\).*/\1/p' client/CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Third-party sources and the font
+        run: tools/fetch_deps.sh
+
+      - name: Core tests
+        run: |
+          cmake -S core -B core/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build core/build
+          ./core/build/rjcore_tests
+
+      - name: Cook the fictional country (Akitsu)
+        run: python3 -u pipeline/cook_country.py --workers 4
+
+      - name: Fetch and cook Shibuya (PLATEAU / GSI)
+        id: shibuya
+        if: ${{ inputs.shibuya }}
+        continue-on-error: true
+        timeout-minutes: 90
+        run: |
+          python3 -u pipeline/fetch_plateau.py pipeline/slices/shibuya.json
+          python3 -u pipeline/cook_slice.py pipeline/slices/shibuya.json
+
+      - name: Linux build and selftest (the cooked data, software rendering)
+        run: |
+          cmake -S client -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-linux
+          cd build-linux && xvfb-run -a -s "-screen 0 1280x720x24" ./RealJapan --selftest 2>&1 | tee selftest.log | grep -E "SELFTEST" || true
+          grep -q "SELFTEST OK" selftest.log
+
+      - name: Windows package (ZIP and installer)
+        run: tools/package_windows.sh
+
+      - name: Android package (one APK)
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          NDK="$(ls -d "$SDK"/ndk/26.* 2>/dev/null | sort -V | tail -1)"
+          [ -n "$NDK" ] || NDK="$ANDROID_NDK_LATEST_HOME"
+          BT="$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)"
+          JAR="$(ls -d "$SDK"/platforms/android-* | sort -V | tail -1)/android.jar"
+          echo "NDK $NDK, build-tools $BT, $JAR"
+          PATH="$BT:$PATH" ANDROID_NDK="$NDK" ANDROID_JAR="$JAR" python3 tools/package_android.py --single
+
+      - name: All in one
+        run: tools/package_all.sh
+
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.ver.outputs.ver }}
+          SHIBUYA: ${{ steps.shibuya.outcome }}
+        run: |
+          cd dist
+          {
+            echo "PROJECT: REAL JAPAN v${VER} (development build, built by this workflow from commit ${GITHUB_SHA::7})"
+            echo
+            echo "- RealJapan-${VER}-all.zip: the Windows installer and the Android APK in one file"
+            echo "- RealJapan-${VER}-win64-setup.exe: Windows 10/11 x64 installer (not code-signed)"
+            echo "- RealJapan-${VER}-win64.zip: the same as a ZIP (extract, run RealJapan.exe)"
+            echo "- RealJapan-${VER}-android-arm64-full.apk: Android 7.0+ arm64 (experimental, not tested on a device)"
+            echo
+            if [ "$SHIBUYA" = "success" ]; then echo "Worlds: the fictional country Akitsu and Shibuya (PLATEAU / GSI data, see LICENSES)."; \
+            else echo "Worlds: the fictional country Akitsu only (the Shibuya world was not included in this build)."; fi
+            echo
+            echo "SHA-256:"
+            sha256sum RealJapan-${VER}-all.zip RealJapan-${VER}-win64-setup.exe RealJapan-${VER}-win64.zip RealJapan-${VER}-android-arm64-full.apk
+          } > notes.md
+          cat notes.md
+          TAG="v${VER}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber RealJapan-${VER}-all.zip RealJapan-${VER}-win64-setup.exe RealJapan-${VER}-win64.zip RealJapan-${VER}-android-arm64-full.apk
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "PROJECT: REAL JAPAN v${VER}" --notes-file notes.md \
+              RealJapan-${VER}-all.zip RealJapan-${VER}-win64-setup.exe RealJapan-${VER}-win64.zip RealJapan-${VER}-android-arm64-full.apk
+          fi

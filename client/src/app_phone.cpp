@@ -80,6 +80,17 @@ std::string App::phoneString() const {
   for (const auto& m : msgs_) s += "m~" + std::to_string(m.t) + "~" + clean(m.from) + "~" + clean(m.text) + "|";
   for (const auto& o : orders_) s += "o~" + std::to_string(o.due) + "~" + clean(o.item) + "~" + std::to_string(o.count) + "~" + (o.to_home ? "1" : "0") + "|";
   s += "u~" + std::to_string(msgs_unread_) + "|";
+  for (const auto& [npc, log] : met_log_) {  // residents' memories of talks: r~npc~t,place;t,place
+    s += "r~" + std::to_string(npc) + "~";
+    for (const auto& [t, p] : log) {
+      std::string q = clean(p);
+      for (char& c : q)
+        if (c == ';' || c == ',') c = ' ';
+      s += std::to_string(t) + "," + q + ";";
+    }
+    s += "|";
+  }
+  for (const auto& [shop, n] : shop_visits_) s += "s~" + std::to_string(shop) + "~" + std::to_string(n) + "|";
   if (flight_prepaid_) s += "f~1|";
   return s;
 }
@@ -87,6 +98,8 @@ std::string App::phoneString() const {
 void App::parsePhone(const std::string& s) {
   msgs_.clear();
   orders_.clear();
+  met_log_.clear();
+  shop_visits_.clear();
   msgs_unread_ = 0;
   flight_prepaid_ = false;
   std::istringstream in(s);
@@ -101,6 +114,16 @@ void App::parsePhone(const std::string& s) {
     else if (f[0] == "o" && f.size() >= 5) orders_.push_back({std::atoll(f[1].c_str()), f[2], std::atoi(f[3].c_str()), f[4] == "1"});
     else if (f[0] == "u" && f.size() >= 2) msgs_unread_ = std::atoi(f[1].c_str());
     else if (f[0] == "f") flight_prepaid_ = true;
+    else if (f[0] == "s" && f.size() >= 3) shop_visits_[std::atoi(f[1].c_str())] = std::atoi(f[2].c_str());
+    else if (f[0] == "r" && f.size() >= 3) {
+      auto& log = met_log_[static_cast<size_t>(std::atoll(f[1].c_str()))];
+      std::istringstream es(f[2]);
+      std::string e;
+      while (std::getline(es, e, ';')) {
+        const auto c = e.find(',');
+        if (c != std::string::npos) log.push_back({std::atoll(e.substr(0, c).c_str()), e.substr(c + 1)});
+      }
+    }
   }
 }
 
@@ -219,8 +242,10 @@ void App::drawPhoneCall(float cx, float yy, float cw, float bottom) {
     // the forecast: the game's own weather run ahead on a copy (the same random sequence)
     call_title_ = tr("call.weather");
     call_lines_.clear();
-    call_lines_.push_back(i18n_.f("call.weather_now", {{"w", tr(std::string("weather.") + weatherKey(weather_.kind()))}}));
-    WeatherSim w = weather_;
+    call_lines_.push_back(i18n_.f("call.weather_now", {{"w", tr(std::string("weather.") + weatherKey(localWeather().kind()))}}));
+    for (const auto& r : regions_)  // (the other regions now)
+      call_lines_.push_back(tr("region." + r.key) + "：" + tr(std::string("weather.") + weatherKey(r.sim.kind())));
+    WeatherSim w = localWeather();
     for (int h = 1; h <= 12; ++h) {
       w.update(3600.0, 3600.0, 30.0f);
       if (h == 3 || h == 6 || h == 12)
@@ -648,6 +673,120 @@ void App::updateAtc() {
     atc_stage_ = 0;
     caption(i18n_.f("atc.landed", {{"tower", tower}}));
   }
+}
+
+// ------------------------------------------------------------------------------------------------
+// regional weather
+
+void App::setupRegions() {
+  regions_.clear();
+  region_ = -1;
+  if (!world_.meta().fictional) return;
+  // (centres of the fictional country's regions; climates are game assumptions: the north is snowier
+  // and greyer in winter, the southern island sees more typhoons, the western plain is drier)
+  struct Def {
+    const char* key;
+    double lat, lon;
+    float wet, typhoon;
+  };
+  static const Def defs[] = {{"capital", 33.79, 141.00, 0.0f, 1.0f},  {"west", 33.78, 140.61, -0.15f, 0.8f}, {"shion", 33.81, 140.74, 0.0f, 0.9f},
+                             {"north", 34.03, 140.83, 0.25f, 0.6f},   {"onsen", 33.90, 140.91, 0.15f, 0.8f}, {"island", 33.68, 140.82, 0.1f, 2.2f}};
+  uint32_t seed = 9001u;
+  for (const auto& d : defs) {
+    WeatherRegion r;
+    r.key = d.key;
+    r.g = {d.lat, d.lon, 0.0};
+    r.sim.setClimate(d.wet, d.typhoon, seed += 7919u);
+    r.sim.set(weather_.kind(), true);
+    regions_.push_back(r);
+  }
+}
+
+void App::updateRegions(double game_dt, float dt, float sun_el) {
+  if (regions_.empty() || weather_forced_) {
+    region_ = -1;
+    return;
+  }
+  const auto jt = clock_.jst();
+  double bd = 1e18;
+  for (size_t i = 0; i < regions_.size(); ++i) {
+    auto& r = regions_[i];
+    r.sim.setDate(jt.date.m, jt.date.d);
+    r.sim.update(game_dt, dt, sun_el);
+    const rj::geo::Vec3d q = world_.toLocal(r.g);
+    if (const double d = std::hypot(q.x - player_.pos.x, q.y - player_.pos.y); d < bd) {
+      bd = d;
+      region_ = static_cast<int>(i);
+    }
+  }
+  weather_.setAuto(false);
+  const WeatherKind k = regions_[static_cast<size_t>(region_)].sim.kind();
+  if (weather_.kind() != k) weather_.set(k, false);  // (the sky changes over a few minutes)
+}
+
+// ------------------------------------------------------------------------------------------------
+// the sea: tide, waves, swimming
+
+double App::tideM() const {
+  // the principal lunar tide (12 h 25 min) with springs and neaps over half a lunar month: up to
+  // about +-0.6 m (typical of the Pacific coast; a game model, not a tide table)
+  const double t = static_cast<double>(clock_.unixUtc());
+  const double m2 = std::sin(2.0 * 3.14159265358979 * t / 44712.0);
+  const double spring = 0.7 + 0.3 * std::cos(2.0 * 3.14159265358979 * t / (29.53 * 86400.0 / 2.0));
+  return 0.6 * m2 * spring;
+}
+
+float App::waveAmp() const {
+  const auto& w = localWeather();
+  float a = std::clamp(0.25f + w.now().wind_ms / 9.0f, 0.25f, 2.2f);
+  if (w.kind() == WeatherKind::Typhoon) a *= 1.4f;
+  return a;
+}
+
+void App::updateSwimming(const rj::geo::Vec3d& before, float dt) {
+  // too deep to stand (the ground more than 1.2 m under the sea's surface): float with the head out
+  // of the water and swim slowly; the clothes get soaked
+  const bool was = swimming_;
+  swimming_ = false;
+  if (!world_.meta().fictional || driving_.active() || ride_train_ >= 0 || ride_ferry_ >= 0 || ride_jet_ >= 0 || flying_ || player_.fly || !inside_id_.empty())
+    return;
+  const auto g = world_.toGeodetic(player_.pos);
+  const double sea = world_.toLocal({g.lat_deg, g.lon_deg, 0.0}).z + tideM();
+  const auto ground = world_.terrainHeight(player_.pos.x, player_.pos.y);
+  if (!ground || *ground > sea - 1.2 || player_.pos.z > sea + 0.3) {
+    if (was) toast(tr("swim.out"));
+    return;
+  }
+  // (a deck or pier over the water carries the player: someone put under one climbs onto it)
+  if (const auto fl = world_.floorBelow(player_.pos.x, player_.pos.y, sea + 4.0); fl && *fl > sea - 0.2) {
+    if (player_.pos.z < *fl) player_.pos.z = *fl;
+    return;
+  }
+  swimming_ = true;
+  // slower than walking: keep 45 % of this frame's move
+  player_.pos.x = before.x + (player_.pos.x - before.x) * 0.45;
+  player_.pos.y = before.y + (player_.pos.y - before.y) * 0.45;
+  // bob with the waves (the same four travelling waves the sea's vertex shader draws)
+  double wave = 0.0;
+  {
+    const double X = player_.pos.x, Z = -player_.pos.y;  // (the shader works in raylib's x / z)
+    static const double D[4][2] = {{0.8, 0.6}, {-0.32, 0.95}, {0.97, -0.24}, {0.5, -0.87}};
+    static const double Lw[4] = {38.0, 21.0, 11.0, 6.0}, Aw[4] = {0.35, 0.2, 0.12, 0.06};
+    for (int i = 0; i < 4; ++i) {
+      const double k = 6.2831853 / Lw[i];
+      wave += Aw[i] * (std::sin(k * (D[i][0] * X + D[i][1] * Z) - std::sqrt(9.81 * k) * render_time_) + 1.0) * 0.5;
+    }
+    wave *= waveAmp();
+  }
+  player_.pos.z = sea - 1.25 + wave;
+  player_.vel_z = 0;
+  life_.wet = 1.0f;
+  if (life_.umbrella) life_.umbrella = false;
+  if (!was) {
+    toast(tr("swim.in"));
+    audio_.cue(Cue::Splash, 0.7f);
+  }
+  (void)dt;
 }
 
 }  // namespace rjc

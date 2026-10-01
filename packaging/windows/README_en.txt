@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  development build v0.7.0
+PROJECT: REAL JAPAN  —  development build v0.8.0
 ==========================================================================
 
 Two worlds are included:
@@ -11,11 +11,13 @@ Two worlds are included:
     world = shibuya in settings.ini or the launch option --world shibuya.
 
 HOW TO START
-  1. Extract the ZIP anywhere (e.g. your Desktop). If the download comes in several parts
-     (-part1.zip ... -part19.zip), extract all of them to the same place (they all fill the
-     same RealJapan-0.6.0-win64 folder); with a part missing the game says that world data
-     is missing.
-  2. Double-click RealJapan.exe. No installer or extra runtime (DLL) is needed.
+  Installer (RealJapan-0.8.0-win64-setup.exe, one file)
+    Run it: it installs for you into %LOCALAPPDATA%\Programs\RealJapan (no administrator
+    rights). Start from the Start menu or the desktop ("PROJECT REAL JAPAN"). Uninstall from
+    Settings -> Apps (saves and settings are kept).
+  ZIP (RealJapan-0.8.0-win64.zip, one file)
+  1. Extract the ZIP anywhere (e.g. your Desktop).
+  2. Double-click RealJapan.exe. No extra runtime (DLL) is needed.
      This development build is not signed: if Windows shows "Windows protected your PC",
      choose "More info" -> "Run anyway".
   3. Keep the "data" folder next to RealJapan.exe.
@@ -26,6 +28,14 @@ REQUIREMENTS
             recommended (if it is slow, turn off post-processing / shadows in Settings)
   Memory  : 8 GB or more      Disk : about 1 GB
   Sound   : speakers / headphones (all sound is synthesised in code; Settings -> Volume)
+
+GAME CONTROLLER
+  Xbox-style and DualShock-style controllers work (plug one in and the on-screen help switches).
+  Left stick: move (all the way: run)   Right stick: look   X: use (E)   Y: camera (V)
+  A: jump   B: crouch   BACK: phone   START: menu   D-pad: arrow keys
+  Driving: RT throttle, LT brake, A handbrake, B horn, LB fuel station   Flying: RT/LT power
+  Guitar: A B X Y LB RB LT RT play eight notes, L3 the band, R3 put it away
+  Menus and the phone: move the pointer with a stick or the D-pad, A selects, B goes back
 
 CONTROLS (ON FOOT)
   W A S D / arrows : move     Shift : run     Space : jump     Mouse : look
@@ -77,6 +87,25 @@ SHOPS
   press E (or click) to buy: number keys or a click on an item. The goods and prices are game
   values; what you buy is kept in the save and listed in the phone's wallet.
 
+DAILY LIFE (v0.8.0)
+  Body     : hunger and thirst fall with time (at zero you cannot run); rain soaks your clothes.
+             Eat, drink and use what you bought from the phone's Bag app (umbrella, flashlight and
+             batteries, notebook, towel).
+  Home     : rent a studio flat in the phone's Home app (rent ¥65,000 per 30 days, a game value;
+             a house on the map). Look at the bed and press E to sleep to 7:00 (a nap by day).
+  Phone    : 19 apps - messages, phone (forecast, speaking clock), transit, taxi, online shop
+             (next day, to your flat's parcel box), food delivery, hotel, flights, camera, music,
+             SNS and more (all fictional, in-game).
+  People   : look at a passer-by and press E to talk (fixed text, not AI); residents remember
+             you; clerks remember regulars; street vending machines (estimated) sell drinks.
+  Car      : fuel and damage; at a fuel station (parking area, towns) press F to fill up or mend;
+             road service from the Bag app.
+  Music    : take out a guitar (general shop) from the Bag app and play with keys 1-8; N calls the
+             band; people may stop and tip. J puts it away.
+  Also     : schools (look at one on a weekday 8:30-15:30 and press E to sit in on a class),
+             swimming, regional weather, cherry blossom / rainy season / typhoons, captions for
+             station and on-board announcements.
+
 WORK AND HOBBIES (phone "Work" / "Hobbies" apps)
   Taxi driver (Tokyo tariff meter), delivery rider, train driver, convenience-store till;
   other jobs are "simple shifts" where time passes (labelled as such). Fishing (E at a quay,
@@ -91,7 +120,8 @@ ABOUT THE SOUND
   wind noise, a departure melody and door chimes (original tunes written for this game, not
   real station melodies), the ferry's horn, airliner cabin noise, the light aircraft's engine
   and stall horn, city hum, crossing guide tones, crows, rain, wind and footsteps. Levels are
-  game tuning values. There are no voices (announcements, conversation).
+  game tuning values. The guitar strings and the phone's music (composed as it runs) are
+  synthesised too. There are no voices (announcements are captions, talk is speech bubbles).
 
 SAVES AND SETTINGS
   Saves    : %APPDATA%\RealJapan\saves\slot0.sav (autosave), slot1-3.sav
@@ -108,16 +138,16 @@ HONEST NOTES
     vehicle / aircraft figures, climate) are game values, not statistics or real
     specifications. Trains, cars, aircraft, ships and stations are generic procedural
     models, not real types.
-  * Not implemented in Akitsu: toll barriers and acceleration lanes (interchanges are
-    simplified), using or eating what you buy, shop staff, entering buildings other than
-    stations and the walk-in shops. People and traffic appear only around the player.
+  * In Akitsu you can enter the stations, some shops and your flat only; the taxi ride, hotel
+    rooms and classrooms are not shown (time moves on). People and traffic appear only around
+    the player. Rents, fares and tips are game values.
   * In Shibuya, estimated content (crossings, signals, street lights, utility poles on roads
     PLATEAU does not cover, near-field building detail, lit windows at night) is labelled as
     estimated in the game.
-  * Not implemented: conversation, voices, a home, building interiors
-    other than the verified underground mall (no public source, so not invented), real data
-    beyond Shibuya, car damage, GI / ray tracing, photo-real quality (not reached). See
-    docs/STATUS.md in the repository for every item.
+  * Not implemented: voices, free conversation by a language model (talk is fixed text),
+    building interiors in Shibuya other than the verified underground mall (no public source,
+    so not invented), real data beyond Shibuya, GI / ray tracing, photo-real quality (not
+    reached), code signing. See docs/STATUS.md in the repository for every item.
   * Tested on Linux and Wine with software OpenGL; not yet on real Windows PCs / GPUs.
   * An Android build (experimental, not yet run on a device) is provided separately.
 

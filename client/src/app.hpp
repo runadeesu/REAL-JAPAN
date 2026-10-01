@@ -371,7 +371,30 @@ class App {
   rj::geo::Vec3d talk_at_{};
   std::string talk_speaker_;
   std::vector<std::string> talk_lines_;
-  std::map<size_t, int> talked_;  // walker -> times talked (this session)  // the rainy season (for its start / end message)
+  std::map<size_t, int> talked_;  // walker -> times talked (this session)
+  // what residents remember of the player: each talk (game time, where), kept in the save and replayed
+  // into rjcore's social memory (familiarity grows with meetings and fades with absence)
+  std::map<size_t, std::vector<std::pair<int64_t, std::string>>> met_log_;
+  std::map<int, int> shop_visits_;  // shop -> purchases (the clerk recognises a regular)
+  // regional weather (the fictional country): each region has its own weather and climate; the sky
+  // follows the region the player is in
+  struct WeatherRegion {
+    std::string key;
+    rj::geo::Geodetic g;
+    WeatherSim sim;
+  };
+  std::vector<WeatherRegion> regions_;
+  int region_ = -1;
+  bool weather_forced_ = false;
+  void setupRegions();
+  void updateRegions(double game_dt, float dt, float sun_el);
+  // the sea: the tide (semi-diurnal, springs and neaps; a game model, not tide tables), the waves'
+  // height from the wind, and swimming where it is too deep to stand
+  double tideM() const;
+  float waveAmp() const;
+  bool swimming_ = false;
+  void updateSwimming(const rj::geo::Vec3d& before, float dt);
+  const WeatherSim& localWeather() const { return region_ >= 0 ? regions_[static_cast<size_t>(region_)].sim : weather_; }  // the rainy season (for its start / end message)
   // what the controller's (and on touch builds the on-screen) buttons mean now (app_input.cpp)
   void updateInputContext();
   int shrine_frame_ = -10;  // last frame the shrine prompt was up (its extra buttons)
@@ -388,6 +411,7 @@ class App {
     int talks = 0;                         // conversations had
     bool guitar = false;                   // playing the guitar (app_music.cpp)
     int64_t tips = 0;                      // tips from busking, all told
+    int study = 0;                         // classes attended at a school (app_talk.cpp)
     int64_t last_unix = 0;                 // (game time of the last update)
   };
   Life life_;
@@ -510,6 +534,7 @@ class App {
   }
   void drawCaption(float dt);
   void drawSpeech(const Camera3D& cam);  // the words over passers-by's heads
+  void updateSchool();                   // attending a class at a school (app_talk.cpp)
   void updateAtc();
   std::string inventoryString() const;
   void parseInventory(const std::string& s);

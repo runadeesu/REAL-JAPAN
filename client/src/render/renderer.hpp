@@ -78,6 +78,7 @@ struct RenderOptions {
   bool post = true;
   bool ssao = true;
   bool bloom = true;
+  float motion_blur = 0.0f;  // camera motion blur strength (0 off)
 };
 
 class Renderer {
@@ -102,7 +103,9 @@ class Renderer {
   // Fictional country: snow-potential map (tex.id 0: none) with its raylib (x, z) -> uv mapping, and
   // the season (lying snow 0..1, rice paddies 0..3, leaves 0..2; see the lit shader)
   // Far view beyond the streamed cells (drawn first, in its own depth range; see App::renderScene)
-  void drawCellSeas(const World& world);  // sea surfaces of the streamed cells (with the far view)
+  void drawCellSeas(const World& world, float tide = 0.0f);  // sea surfaces of the streamed cells (with the far view), raised by the tide
+  // waves on the sea around the camera (amplitude ~ the wind), at sea level sea_y
+  void drawWaves(const Camera3D& cam, float sea_y, float amp);
   void drawClearGlass(const World& world);  // see-through glass of the street detail (after the opaque scene)
   void drawFarView(const class FarView& far, const World& world, const Camera3D& cam, float sea_y, float fog_density);
   void setSnowMap(Texture2D tex, Vector3 u, Vector3 v) {
@@ -216,6 +219,7 @@ class Renderer {
   std::string car_display_key_;
   Mesh ocean_{};
   Mesh ocean_curved_{};  // far view: the sea following the Earth's curvature
+  Mesh ocean_near_{};    // the wave mesh around the camera (3 m grid)
   TrainModels train_models_;
   ShipModels ship_models_;
   AircraftModels aircraft_models_;
@@ -233,6 +237,10 @@ class Renderer {
   Vector2 sky_res_override_{0, 0};
   void drawMirrorGlass(const Vector3 c[4], float u0, float u1);
   RenderTexture2D ao_{}, ao_blur_{}, bright_rt_{}, bloom_a_{}, bloom_b_{}, lum_{}, ssr_rt_{};
+  Camera3D scene_cam_{};       // (motion blur: this frame's and the last frame's view-projection)
+  Matrix prev_vp_{};
+  Vector3 prev_cam_pos_{};
+  bool prev_vp_ok_ = false;
   int tw_ = 0, th_ = 0;
   bool post_active_ = false;
   RenderOptions opt_{};

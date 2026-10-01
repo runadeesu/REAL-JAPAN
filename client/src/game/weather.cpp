@@ -65,7 +65,9 @@ void WeatherSim::update(double game_dt_s, double real_dt_s, float sun_elevation_
       const int cur = static_cast<int>(kind_);
       int nk = next[cur][static_cast<int>(rand01() * 3.999f)];
       if (tsuyu() && rand01() < 0.45f) nk = rand01() < 0.35f ? 3 : rand01() < 0.6f ? 4 : 5;  // the rainy season: grey and wet
-      if (typhoonSeason() && kind_ != WeatherKind::Typhoon && rand01() < 0.03f) nk = static_cast<int>(WeatherKind::Typhoon);
+      if (wet_bias_ > 0.0f && nk < 5 && rand01() < wet_bias_) ++nk;  // (a wetter region: the change leans to cloud and rain)
+      if (wet_bias_ < 0.0f && nk > 0 && nk <= 5 && rand01() < -wet_bias_) --nk;
+      if (typhoonSeason() && kind_ != WeatherKind::Typhoon && rand01() < 0.03f * typhoon_mul_) nk = static_cast<int>(WeatherKind::Typhoon);
       set(static_cast<WeatherKind>(nk), false);
       if (kind_ == WeatherKind::Typhoon) until_change_s_ = 3.0 * 3600.0 + 3.0 * 3600.0 * rand01();  // (it passes in a few hours)
     }

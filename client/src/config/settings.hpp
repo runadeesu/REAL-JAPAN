@@ -27,6 +27,7 @@ struct Settings {
   bool photo_textures = true;  // PLATEAU photo textures (contain real signage / ads)
   bool post_fx = true;         // SSAO + bloom + auto exposure + FXAA
   bool head_bob = true;        // natural head movement while walking (can be turned off)
+  bool motion_blur = false;    // camera motion blur (post effect; off by default)
   bool dev_overlay = false;    // developer HUD (coordinates, mesh, building data, perf); F3 toggles
   int volume = 80;             // master sound volume 0..100
   int render_height = 0;       // Android: lines drawn, scaled up to the panel (0 = the panel's own)

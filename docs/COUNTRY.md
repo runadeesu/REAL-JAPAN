@@ -41,7 +41,7 @@ capital 千景 with its layout kept; the country grew around it.
 | 秋津新幹線 | 千景中央 — 千景北 — 紫苑 — 新朝凪 (8 cars, up to 300 km/h) |
 | 雪見新幹線 | 千景北 — 湯の沢温泉 — (long tunnel under the spine) — 雪見 |
 | Roads | national roads between the towns (two lanes with paved shoulders outside the towns, sidewalks inside), mountain pass road, the volcano skyline road; road tunnels and viaducts where a road cannot follow the ground within its grade |
-| Expressway | 秋津自動車道 千景西 IC — 稲穂 IC — 紫苑 IC — 朝凪 IC (four lanes with a median barrier, guard rails, tunnels and viaducts; on viaducts through built-up land and over every road and railway it crosses; one two-way slip road per interchange, simplified; a toll plaza on each slip road, an ETC gantry where the slip road is a viaduct; 稲穂 PA with a car park and a shop) |
+| Expressway | 秋津自動車道 千景西 IC — 稲穂 IC — 紫苑 IC — 朝凪 IC (four lanes with a median barrier, guard rails, tunnels and viaducts; on viaducts through built-up land and over every road and railway it crosses; one two-way slip road per interchange, simplified, with a 320 m acceleration lane where it joins; a toll plaza with ETC barriers on each slip road, an ETC gantry where the slip road is a viaduct; 稲穂 PA on both carriageways with a car park, a shop, toilets, vending machines and a fuel station) |
 | Air | 千景空港 ⇄ 南島空港 (regional jet: take-off, cruise, approach and landing on the map) |
 | Sea | 千景港 ⇄ 台場 (harbour ferry), 千景港 ⇄ 島ノ浦港 (high-speed ferry), 朝凪港 ⇄ 島ノ浦港 (car ferry) |
 
@@ -83,7 +83,21 @@ look at the door and press E. The crosshair shows an icon and a label for what c
   mostly work near home (game assumptions, not statistics).
 * Single trees (conifers and broadleaf, from the land-cover forest mask) within about 100 m of the
   player; the canopy surface beyond.
-* Snow falls instead of rain in winter where the snow lies.
+* Snow falls instead of rain in winter where the snow lies; cherry blossom in early April, the rainy
+  season from early June to mid July, now and then a typhoon from mid August to mid October.
+* The player's flat (`home.txt`): a furnished one-room flat on the ground floor of a building in the
+  capital about 860 m from the start (the walk-in floor nearest the start that fits), rented from
+  the phone; the doorway is locked until then; the bed sleeps the night through.
+* Fuel stations (`fuel.txt`): at the parking area (both sides) and on a roadside lot in 11 towns
+  (apron, canopy over two pump islands, kiosk, a blank price board; generic, no brand).
+* Schools: 17 elementary, junior high and high schools in the towns (a three-storey building with a
+  clock, a sand sports ground with goals, a fence with a gate); the students among the residents
+  attend the nearest one. The player can sit in on a class (the classroom is not shown).
+* Estimated small street furniture (client side, from the road graph and the buildings): drink
+  vending machines with recycling bins, parked bicycles, shop stand signs.
+* Six weather regions (capital, west, Shion, north, mountains, southern island), each with its own
+  weather and leanings (a fictional climate); the sky follows the region the player is in.
+* Waves on the sea around the camera, a tide of up to about +-0.6 m (a game model), swimming.
 * Traffic beyond the area around the player is drawn as simple moving cars on the far roads.
 
 ## Data (pipeline/cook_country.py → game/data/world/country)
@@ -97,18 +111,18 @@ look at the door and press E. The crosshair shows an icon and a label for what c
 * `rail.txt` (lines with names, stations, readings), `transport.txt` (airports, piers, ferry routes),
   `roads.rjroad`, `residents.csv`, `client.txt` (cells, place names, readings, POIs).
 
-Figures of this build (v0.7.0): main island about 1,380 km², 1,507 cells, 196,283 generated
-buildings, about 530 MB of cell data (walk-in shops and stations add detail geometry; cook: about
-32 minutes on 4 processes). 49 road tunnels and 49 viaducts, 7 level crossings, 4 interchanges with
-toll plazas, 1 parking area, 5,940 walk-in shop counters, 12,000 residents.
+Figures of this build (v0.8.0): main island about 1,380 km², 1,507 cells, about 196,000 generated
+buildings, about 535 MB of cell data (walk-in shops and stations add detail geometry; cook: about
+45 minutes on 4 processes). 49 road tunnels and 49 viaducts, 7 level crossings, 4 interchanges with
+toll plazas, a parking area on both carriageways, 13 fuel stations, 17 schools, about 5,980 walk-in
+shop counters, the player's flat, 12,000 residents.
 
 ## Not implemented (honest list)
 
-* Interchanges are simplified (one two-way slip road, no acceleration lanes); toll plazas have no
-  barriers (pass and pay); one parking area on one side only, with a shop and no other buildings;
-  no switchbacks on mountain roads.
-* Bought goods cannot be eaten or used yet; no shop staff; other buildings cannot be entered
-  (stations and the walk-in shops only).
+* Interchanges are simplified (one two-way slip road each); no switchbacks on mountain roads.
+* Other buildings cannot be entered (stations, the walk-in shops and the player's flat only); the
+  schools' classrooms, the hotel rooms and the taxi ride are not shown (time moves on).
+* Talk, SNS posts, phone calls and announcements are fixed templates (no language model, no voices).
 * People and cars are shown around the player only (simple moving cars on the far roads).
 * Only the walk-in shops have see-through glass; other windows are opaque (photo texture or
   interior mapping).
