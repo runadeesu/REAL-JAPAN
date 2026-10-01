@@ -108,6 +108,8 @@ class LightPlane {
   bool stall_ = false, on_ground_ = true, crashed_ = false;
   bool snapped_ = false;  // wheels put on the ground once the terrain there is loaded
   float prop_angle_ = 0, rpm_ = 0;
+  rj::geo::Vec3d gust_{};    // turbulence: gusts about the steady wind (a random walk; game model)
+  uint32_t grng_ = 0x9e3779b9u;
   rj::geo::Vec3d cam_pos_{};
   bool cam_init_ = false;
 };

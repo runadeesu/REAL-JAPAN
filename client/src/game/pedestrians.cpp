@@ -1,6 +1,7 @@
 #include "game/pedestrians.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -466,11 +467,105 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
   }
   startJobs();
 
+  // People near each other (a 2 m grid): they step round one another and round the player, and now
+  // and then two residents who meet stop for a chat.
+  std::unordered_map<int64_t, std::vector<size_t>> grid;
+  auto cellKey = [](double x, double y) { return (static_cast<int64_t>(std::floor(x / 2.0)) << 32) ^ static_cast<int64_t>(std::floor(y / 2.0) + 1e6); };
+  for (const auto& [id, w] : walkers_) grid[cellKey(w.pos.x, w.pos.y)].push_back(id);
+  chat_clock_ += real_dt;
+  const bool chat_tick = chat_clock_ > 2.0;
+  if (chat_tick) chat_clock_ = 0;
+  n_chats_ = 0;
+
   // Advance at a real walking pace; wait at red pedestrian signals; drop arrivals and far walkers.
   n_visitors_ = 0;
   for (auto it = walkers_.begin(); it != walkers_.end();) {
     Walker& w = it->second;
     double step = w.speed * real_dt;
+    if (w.say_t > 0.0f) w.say_t -= real_dt;
+    // separation: step aside (to the left, as people keep left here) from whoever is close ahead,
+    // slow down behind them; the player counts too
+    {
+      const rj::nav::Vec2 perp{w.dir.y, -w.dir.x};  // right of the walking direction
+      double push = 0.0, slow = 1.0;
+      auto near = [&](double ox, double oy, double r) {
+        const double dx = ox - w.pos.x, dy = oy - w.pos.y, d = std::hypot(dx, dy);
+        if (d > r || d < 1e-4) return;
+        const double ahead = dx * w.dir.x + dy * w.dir.y, lat = dx * perp.x + dy * perp.y;
+        if (ahead > -0.2) push += (lat >= 0 ? -1.0 : 1.0) * (r - d) / r;
+        if (ahead > 0 && ahead < 0.9 && std::fabs(lat) < 0.45) slow = std::min(slow, 0.45);
+      };
+      const int64_t cx = static_cast<int64_t>(std::floor(w.pos.x / 2.0)), cy = static_cast<int64_t>(std::floor(w.pos.y / 2.0));
+      for (int64_t gx = cx - 1; gx <= cx + 1; ++gx)
+        for (int64_t gy = cy - 1; gy <= cy + 1; ++gy) {
+          auto g = grid.find((gx << 32) ^ static_cast<int64_t>(static_cast<double>(gy) + 1e6));
+          if (g == grid.end()) continue;
+          for (size_t o : g->second) {
+            if (o == it->first) continue;
+            const Walker& ow = walkers_.at(o);
+            near(ow.pos.x, ow.pos.y, 0.85);
+            // two residents who meet stop and talk a while (about one pair in twelve)
+            if (chat_tick && !w.visitor && !ow.visitor && w.chat_with == static_cast<size_t>(-1) && ow.chat_with == static_cast<size_t>(-1) && !w.waiting &&
+                std::hypot(ow.pos.x - w.pos.x, ow.pos.y - w.pos.y) < 1.8 && !hold_.count(it->first) && !hold_.count(o) &&
+                ((it->first * 2654435761u) ^ (o * 40503u)) % 12u == 0 && it->first < o) {
+              Walker& o2 = walkers_.at(o);
+              w.chat_with = o;
+              o2.chat_with = it->first;
+              w.chat_t = o2.chat_t = static_cast<float>(8.0 + rnd() * 6.0);
+              w.chat_line = o2.chat_line = 0;
+              w.say = SayHello;
+              w.say_t = 2.5f;
+            }
+          }
+        }
+      if (pl_on_) {
+        near(pl_.x, pl_.y, 0.9);
+        // bumped by the player: a word, a step back, and they stand a moment facing them
+        if (std::hypot(pl_.x - w.pos.x, pl_.y - w.pos.y) < 0.55 && pl_v_ > 0.8 && w.say_t <= 0.0f && w.chat_with == static_cast<size_t>(-1)) {
+          w.say = SaySorry;
+          w.say_t = 2.2f;
+          if (!hold_.count(it->first)) hold_[it->first] = {1.3f, pl_};
+          const double d = std::max(0.05, std::hypot(w.pos.x - pl_.x, w.pos.y - pl_.y));
+          w.sep.x += (w.pos.x - pl_.x) / d * 0.35;
+          w.sep.y += (w.pos.y - pl_.y) / d * 0.35;
+        }
+      }
+      const double k = std::min(1.0, 1.6 * real_dt);
+      w.sep.x += perp.x * push * k * 0.6;
+      w.sep.y += perp.y * push * k * 0.6;
+      const double sl = std::hypot(w.sep.x, w.sep.y);
+      if (sl > 0.9) {
+        w.sep.x *= 0.9 / sl;
+        w.sep.y *= 0.9 / sl;
+      }
+      const double decay = std::max(0.0, 1.0 - 0.5 * real_dt);
+      w.sep.x *= decay;
+      w.sep.y *= decay;
+      step *= slow;
+    }
+    // chatting: stand facing the other, taking turns (a line every 2.5 s)
+    bool chatting = false;
+    rj::nav::Vec2 chat_face{};
+    if (w.chat_with != static_cast<size_t>(-1)) {
+      auto o = walkers_.find(w.chat_with);
+      if (o == walkers_.end() || (w.chat_t -= real_dt) <= 0.0f) {
+        w.chat_with = static_cast<size_t>(-1);
+        w.say = SayBye;
+        w.say_t = 1.8f;
+      } else {
+        chatting = true;
+        ++n_chats_;
+        chat_face = o->second.pos;
+        const int line = static_cast<int>((14.0f - w.chat_t) / 2.5f);
+        if (line != w.chat_line) {
+          w.chat_line = line;
+          if (((line & 1) == 0) == (it->first < w.chat_with)) {
+            w.say = SayChat0 + static_cast<int>((it->first + static_cast<size_t>(line) * 7) % 6);
+            w.say_t = 2.3f;
+          }
+        }
+      }
+    }
     w.waiting = false;
     while (w.next_x < w.xings.size() && w.dist >= w.xings[w.next_x].first) ++w.next_x;  // on / past it
     if (markings_ && w.next_x < w.xings.size()) {
@@ -511,11 +606,19 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
       w.dodge.y *= k;
     }
     bool held = false;
-    if (auto h = hold_.find(it->first); h != hold_.end()) {  // talking to the player: stand, face them
+    rj::geo::Vec3d face{};
+    if (auto h = hold_.find(it->first); h != hold_.end()) {  // talking to (listening to) the player: stand, face them
       held = true;
+      face = h->second.face;
       step = 0.0;
       w.waiting = true;
-      if ((h->second -= real_dt) <= 0.0f) hold_.erase(h);
+      if ((h->second.t -= real_dt) <= 0.0f) hold_.erase(h);
+    }
+    if (chatting) {
+      held = true;
+      face = {chat_face.x, chat_face.y, 0.0};
+      step = 0.0;
+      w.waiting = true;
     }
     w.dist += step;
     if (!w.waiting && !dodging) w.phase += real_dt * 7.5f * (w.speed / 1.4f);
@@ -529,8 +632,10 @@ void Pedestrians::update(TownSim& town, const World& world, const TrafficSignals
     const float tgt = ok ? w.offset : 0.0f;
     const float rate = 0.9f * real_dt;
     w.off_eff += std::clamp(tgt - w.off_eff, -rate, rate);
-    w.pos = {base.x + perp.x * w.off_eff + w.dodge.x, base.y + perp.y * w.off_eff + w.dodge.y};
-    const double hy = held ? std::atan2(hold_face_.x - w.pos.x, hold_face_.y - w.pos.y) : std::atan2(w.dir.x, w.dir.y);
+    w.pos = {base.x + perp.x * w.off_eff + w.dodge.x + w.sep.x, base.y + perp.y * w.off_eff + w.dodge.y + w.sep.y};
+    double hy = held ? std::atan2(face.x - w.pos.x, face.y - w.pos.y) : std::atan2(w.dir.x, w.dir.y);
+    if (w.waiting && !held && pl_on_ && std::hypot(pl_.x - w.pos.x, pl_.y - w.pos.y) < 5.0)  // waiting near the player: a look at them
+      hy += wrapAngle(std::atan2(pl_.x - w.pos.x, pl_.y - w.pos.y) - hy) * 0.6;
     w.yaw = static_cast<float>(wrapAngle(w.yaw + wrapAngle(hy - w.yaw) * std::min(1.0, real_dt * 5.0)));
     if (auto h = world.surfaceHeight(w.pos.x, w.pos.y)) w.z = static_cast<float>(*h);
     const bool far = std::hypot(w.pos.x - me.x, w.pos.y - me.y) > (w.visitor ? kVisitorKeep : kVisibleRadius * 1.3);

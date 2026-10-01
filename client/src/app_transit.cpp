@@ -811,6 +811,11 @@ void App::updateJetAboard(float dt) {
         return;
       }
       if (jet_stair_ <= 0.0) {  // through the door: the fare
+        if (!jet_paid_ && flight_prepaid_) {  // (a ticket bought ahead in the phone's app)
+          flight_prepaid_ = false;
+          jet_paid_ = true;
+          toast(i18n_.f("jet.boarded", {{"fare", "0"}, {"dest", airportName(a->to)}}) + "  " + tr("flights.used_ticket"));
+        }
         if (!jet_paid_) {
           const int64_t fare = 12800;  // game value
           if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), fare, rj::econ::TxCategory::Fare, clock_.unixUtc(),
@@ -975,6 +980,7 @@ void App::updateAviationActions() {
     aim_label_ = tr("aim.fly");
     if (usePressed()) {
       flying_ = true;
+      atc_stage_ = -1;
       fly_cockpit_ = true;
       fly_look_yaw_ = fly_look_pitch_ = 0.0f;
       plane_in_ = PlaneControls{};

@@ -76,6 +76,7 @@ class Spec:
     crossings: list = field(default_factory=list)     # level crossings (dicts, see _level_crossings)
     tolls: list = field(default_factory=list)         # expressway toll plazas on the interchange ramps (dicts)
     pas: list = field(default_factory=list)           # parking areas: their shop building (dicts, shop.py plan)
+    fuel_lots: list = field(default_factory=list)     # fuel stations on a roadside lot in the towns (dicts)
 
 
 class CellExtra:
@@ -875,6 +876,143 @@ def _parking_areas(ctry, terrain):
     return out
 
 
+def pick_fuel_lots(ctry, terrain):
+    """A fuel station in each town (generic, no brand): a 26 x 24 m lot beside a main road (8 m or
+    wider) 250 m to 1.2 km from the town's centre, clear of other roads, on building land (the
+    parcels there get no building) and not too steep; no two within 1.5 km."""
+    from shapely.strtree import STRtree
+    from . import nation as N
+    allr = [r for r in ctry.net.roads if r.kind != "lot"]
+    atree = STRtree([r.line for r in allr])
+    ptree = STRtree([pc.poly for pc in ctry.parcels])
+    out = []
+    towns = list(N.CITIES) + [(n_, "", s_, p_) for n_, s_, p_ in L.DISTRICTS if n_ in ("古市", "西ヶ丘", "臨海")]  # (and the capital's)
+    for name, _en, style, poly in towns:
+        if style in ("center", "airport"):
+            continue
+        P = Polygon(poly)
+        cc = np.array([P.centroid.x, P.centroid.y])
+        cands = []
+        for k in atree.query(P, predicate="intersects"):
+            r = allr[int(k)]
+            if r.width < 8.0 or r.kind in ("expressway", "ramp"):
+                continue
+            for s_ in np.arange(20.0, r.line.length - 20.0, 40.0):
+                q = r.line.interpolate(float(s_))
+                dist = float(np.hypot(q.x - cc[0], q.y - cc[1]))
+                if 250.0 <= dist <= 1200.0 and P.contains(q):
+                    cands.append((dist, r, float(s_)))
+        cands.sort(key=lambda t: t[0])
+        for dist, r, s_ in cands:
+            q0, q1 = r.line.interpolate(max(0.0, s_ - 1.0)), r.line.interpolate(min(r.line.length, s_ + 1.0))
+            t = np.array([q1.x - q0.x, q1.y - q0.y])
+            t /= max(np.linalg.norm(t), 1e-9)
+            q = np.array([r.line.interpolate(s_).x, r.line.interpolate(s_).y])
+            ok = None
+            for sg in (1.0, -1.0):
+                n = np.array([-t[1], t[0]]) * sg
+                c = q + n * (r.width / 2 + 3.0 + 12.0)
+                rect = Polygon([c - t * 13 - n * 12, c + t * 13 - n * 12, c + t * 13 + n * 12, c - t * 13 + n * 12])
+                if any(math.hypot(c[0] - o["centre"][0], c[1] - o["centre"][1]) < 1500.0 for o in out):
+                    break
+                clash = False
+                for k in atree.query(rect.buffer(8.0)):
+                    o_ = allr[int(k)]
+                    if o_.line.distance(rect) < o_.width / 2 + (1.0 if o_ is r else 1.5) and not (o_ is r and o_.line.distance(rect) >= o_.width / 2 + 1.0):
+                        clash = True
+                        break
+                if clash:
+                    continue
+                pcs = [ctry.parcels[int(k)] for k in ptree.query(rect, predicate="intersects")]
+                cover = sum(pc.poly.intersection(rect).area for pc in pcs)
+                if cover < 0.75 * rect.area:
+                    continue
+                zs = terrain.sample(np.array([p_[0] for p_ in rect.exterior.coords]), np.array([p_[1] for p_ in rect.exterior.coords]))
+                if float(np.max(zs) - np.min(zs)) > 2.5:
+                    continue
+                ok = (c, n, rect, pcs)
+                break
+            if ok is None:
+                continue
+            c, n, rect, pcs = ok
+            for pc in pcs:
+                if pc.poly.intersection(rect).area > 0.25 * pc.poly.area:
+                    pc.fuel = True
+            n_out = -n
+            fuel = c + n_out * 2.0
+            out.append(dict(name=name, centre=c, d=t, n_out=n_out, depth=24.0, poly=rect, fuel=fuel,
+                            fuel_z=float(terrain.sample(fuel[0], fuel[1]))))
+            break
+    return out
+
+
+def _town_fuel(geos, ex, xf, lot, ground_c):
+    """A roadside fuel station (generic): a concrete apron over the lot, a canopy on four posts over
+    two pump islands, a kiosk at the back with a lit window, a blank price board on a pole by the
+    road. Colours are generic (no brand)."""
+    fu, d, n_out = lot["fuel"], lot["d"], lot["n_out"]
+    fz = ground_c(*fu)[2]
+    zc = xf.p([[fu[0], fu[1], 0.0]])[0][2]  # (cell-frame height of country z = 0 here)
+    fzc = fz - zc  # the ground at the pumps, country frame
+    # apron: the lot draped on the ground in 4 m squares (drawn just above it)
+    inner = lot["poly"].buffer(-0.4, join_style=2)
+    x0, y0, x1, y1 = inner.bounds
+    for x in np.arange(x0, x1, 4.0):
+        for y in np.arange(y0, y1, 4.0):
+            sq = sbox(x, y, x + 4.0, y + 4.0).intersection(inner)
+            for part in parts(sq):
+                ring = np.asarray(orient(part, 1.0).exterior.coords)[:-1]
+                if len(ring) < 3:
+                    continue
+                V = []
+                for q in ring:
+                    A = xf.p([[q[0], q[1], 0.0]])[0]
+                    A[2] = ground_c(q[0], q[1])[2] + 0.04
+                    V.append(A)
+                for k in range(1, len(V) - 1):
+                    _dquad(geos, "concrete", [V[0], V[k], V[k + 1], V[k + 1]], (178, 178, 172, 255))
+    # pump islands and the canopy
+    for sa in (-2.6, 2.6):
+        p = fu + n_out * sa
+        _obox_c(geos, xf, "concrete", p, d, fzc + 0.12, 2.2, 0.55, 0.12, (196, 194, 188, 255))
+        for sb in (-0.9, 0.9):
+            _obox_c(geos, xf, "metal", p + d * sb, d, fzc + 0.95, 0.3, 0.32, 0.72, (238, 238, 234, 255))
+            _obox_c(geos, xf, "sign", p + d * sb, d, fzc + 1.62, 0.31, 0.33, 0.06, (200, 50, 40, 255))
+            _obox_c(geos, xf, "lamp", p + d * sb + n_out * 0.33, d, fzc + 1.2, 0.2, 0.005, 0.12, (220, 235, 240, 255))
+        A = xf.p([[p[0] - d[0] * 2.2, p[1] - d[1] * 2.2, fzc]])[0]
+        B = xf.p([[p[0] + d[0] * 2.2, p[1] + d[1] * 2.2, fzc]])[0]
+        ex.walls.append((A[0], A[1], B[0], B[1], A[2] - 0.3, A[2] + 1.7))
+    for sa in (-1, 1):
+        for sc in (-1, 1):
+            q = fu + d * sa * 3.4 + n_out * sc * 2.6
+            _obox_c(geos, xf, "metal", q, d, fzc + 2.7, 0.16, 0.16, 2.7, (220, 220, 216, 255))
+    _obox_c(geos, xf, "concrete", fu, d, fzc + 5.5, 7.0, 6.0, 0.3, (236, 236, 232, 255))
+    for sc in (-1, 1):
+        _obox_c(geos, xf, "sign", fu + n_out * sc * 6.02, d, fzc + 5.5, 7.02, 0.03, 0.31, (200, 50, 40, 255))
+        _obox_c(geos, xf, "sign", fu + d * sc * 7.02, d, fzc + 5.5, 0.03, 6.02, 0.31, (200, 50, 40, 255))
+    _obox_c(geos, xf, "lamp", fu, d, fzc + 5.18, 5.0, 4.0, 0.01, (250, 250, 244, 255))
+    L0 = xf.p([[fu[0], fu[1], fzc + 4.6]])[0]
+    ex.lights.append(((L0[0], L0[1], L0[2]), 16.0, 3))
+    # kiosk at the back of the lot
+    kc = lot["centre"] - n_out * (lot["depth"] / 2 - 4.0)
+    kz = ground_c(*kc)[2] - zc
+    _obox_c(geos, xf, "concrete", kc, d, kz + 1.5, 4.0, 2.6, 1.8, (230, 228, 222, 255))
+    _obox_c(geos, xf, "lamp", kc + n_out * 2.61, d, kz + 1.5, 2.6, 0.01, 0.7, (240, 238, 220, 255))
+    _obox_c(geos, xf, "sign", kc + n_out * 2.62, d, kz + 2.9, 4.02, 0.02, 0.25, (200, 50, 40, 255))
+    for (a1, c1), (a2, c2) in (((-4, -2.6), (4, -2.6)), ((4, -2.6), (4, 2.6)), ((4, 2.6), (-4, 2.6)), ((-4, 2.6), (-4, -2.6))):
+        A = xf.p([[kc[0] + d[0] * a1 + n_out[0] * c1, kc[1] + d[1] * a1 + n_out[1] * c1, kz]])[0]
+        B = xf.p([[kc[0] + d[0] * a2 + n_out[0] * c2, kc[1] + d[1] * a2 + n_out[1] * c2, kz]])[0]
+        ex.walls.append((A[0], A[1], B[0], B[1], A[2] - 0.3, A[2] + 3.3))
+    # the price board by the road (blank panels: no prices or names)
+    pb = lot["centre"] + n_out * (lot["depth"] / 2 - 1.0) + d * 9.0
+    pz = ground_c(*pb)[2] - zc
+    _obox_c(geos, xf, "metal", pb, d, pz + 2.2, 0.1, 0.1, 2.2, (200, 200, 196, 255))
+    _obox_c(geos, xf, "sign", pb, d, pz + 4.6, 0.9, 0.08, 0.9, (240, 240, 236, 255))
+    _obox_c(geos, xf, "sign", pb + n_out * 0.09, d, pz + 5.2, 0.85, 0.01, 0.22, (200, 50, 40, 255))
+    for k in range(3):
+        _obox_c(geos, xf, "metal_dark", pb + n_out * 0.09, d, pz + 4.7 - k * 0.42, 0.75, 0.01, 0.14, (30, 30, 34, 255))
+
+
 def _obox_c(geos, xf, mat, p, d, zc, ha, hc, hz, col):
     """A box in the country frame: centre p (2D) at height zc, half sizes along d, across it, up."""
     d = np.asarray(d, float)
@@ -1117,6 +1255,9 @@ def cell_detail(spec: Spec, isl, cpoly: Polygon, xf, ts, rng, geos, rp=None) -> 
     for pa in spec.pas:
         if cpoly.contains(Point(float(pa["centre"][0]), float(pa["centre"][1]))):
             _parking_area(geos, ex, xf, pa, ground_c)
+    for lot in spec.fuel_lots:
+        if cpoly.contains(Point(float(lot["centre"][0]), float(lot["centre"][1]))):
+            _town_fuel(geos, ex, xf, lot, ground_c)
     # --- the expressway on the ground: median barrier and guard rails (collision walls too), open
     # where an interchange's slip road leaves ---
     slips = [q.line.buffer(q.carriage / 2.0 + 1.5) for q in isl.net.roads if q.kind == "ramp" and q.line.intersects(clip.buffer(300))]

@@ -24,6 +24,7 @@ struct SaveGame {
   std::string inventory;  // things bought in shops: "item:count;item:count"
   std::string life;       // the body and belongings: "key:value;..." (hunger, thirst, umbrella, car fuel, home ...)
   std::string notes;      // the notebook's lines, "|"-separated
+  std::string phone;      // the phone apps: messages, parcels and food on the way, a flight ticket (app_phone.cpp)
 };
 
 constexpr int kAutosaveSlot = 0;

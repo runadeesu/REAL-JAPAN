@@ -17,7 +17,7 @@
 namespace rjc {
 namespace {
 
-enum class UseKind { Eat, Drink, Umbrella, Light, Batteries, Note, Towel, Brush };
+enum class UseKind { Eat, Drink, Umbrella, Light, Batteries, Note, Towel, Brush, Guitar };
 struct ItemUse {
   const char* key;
   float food, drink;
@@ -27,10 +27,13 @@ struct ItemUse {
 const ItemUse kUses[] = {
     {"onigiri", 30, 0, UseKind::Eat, true},     {"sandwich", 35, 5, UseKind::Eat, true},     {"bento", 60, 5, UseKind::Eat, true},
     {"green_tea", 0, 40, UseKind::Drink, true}, {"coffee_can", 0, 25, UseKind::Drink, true}, {"ice_cream", 10, 10, UseKind::Eat, true},
+    {"water", 0, 35, UseKind::Drink, true},     {"sports_drink", 5, 40, UseKind::Drink, true},
+    {"gyudon", 55, 5, UseKind::Eat, true},      {"ramen", 55, 15, UseKind::Eat, true},       {"curry", 60, 5, UseKind::Eat, true},
+    {"pizza", 70, 0, UseKind::Eat, true},
     {"blend", 0, 30, UseKind::Drink, true},     {"latte", 5, 35, UseKind::Drink, true},      {"tea", 0, 30, UseKind::Drink, true},
     {"cake", 25, 5, UseKind::Eat, true},        {"toast", 35, 0, UseKind::Eat, true},        {"umbrella", 0, 0, UseKind::Umbrella, false},
     {"flashlight", 0, 0, UseKind::Light, false}, {"batteries", 0, 0, UseKind::Batteries, true}, {"notebook", 0, 0, UseKind::Note, false},
-    {"towel", 0, 0, UseKind::Towel, false},     {"toothbrush", 0, 0, UseKind::Brush, false},
+    {"towel", 0, 0, UseKind::Towel, false},     {"toothbrush", 0, 0, UseKind::Brush, false}, {"guitar", 0, 0, UseKind::Guitar, false},
 };
 
 const ItemUse* findUse(const std::string& k) {
@@ -43,9 +46,9 @@ const ItemUse* findUse(const std::string& k) {
 
 std::string App::lifeString() const {
   char b[320];
-  std::snprintf(b, sizeof b, "hunger:%.1f;thirst:%.1f;wet:%.2f;umbrella:%d;light:%d;battery:%.3f;fuel:%.3f;damage:%.3f;home:%d;rent:%lld;talks:%d",
+  std::snprintf(b, sizeof b, "hunger:%.1f;thirst:%.1f;wet:%.2f;umbrella:%d;light:%d;battery:%.3f;fuel:%.3f;damage:%.3f;home:%d;rent:%lld;talks:%d;tips:%lld",
                 life_.hunger, life_.thirst, life_.wet, life_.umbrella ? 1 : 0, life_.flashlight ? 1 : 0, life_.battery, life_.fuel, life_.damage,
-                life_.has_home ? 1 : 0, static_cast<long long>(life_.rent_paid_until), life_.talks);
+                life_.has_home ? 1 : 0, static_cast<long long>(life_.rent_paid_until), life_.talks, static_cast<long long>(life_.tips));
   return b;
 }
 
@@ -69,6 +72,7 @@ void App::parseLife(const std::string& s) {
     else if (k == "home") life_.has_home = v > 0.5;
     else if (k == "rent") life_.rent_paid_until = static_cast<int64_t>(v);
     else if (k == "talks") life_.talks = static_cast<int>(v);
+    else if (k == "tips") life_.tips = static_cast<int64_t>(v);
   }
 }
 
@@ -183,6 +187,9 @@ bool App::useItem(const std::string& key) {
       break;
     case UseKind::Brush:
       toast(tr("life.brushed"));
+      break;
+    case UseKind::Guitar:
+      setGuitar(!life_.guitar);
       break;
   }
   if (u->consumed && --it->second <= 0) inventory_.erase(it);

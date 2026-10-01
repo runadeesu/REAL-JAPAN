@@ -12,6 +12,8 @@
 //    played through a band-limited "PA speaker"
 //  * ferry diesel and sea, ship's horn (one prolonged blast on leaving the berth)
 //  * jet cabin noise (engine thrust, runway rumble), light aircraft engine / propeller, stall horn
+//  * the phone's music player: tracks composed at run time from a seed (tempo, key, chord
+//    progression, a pentatonic melody, bass, soft drums), and the player's guitar (plucked strings)
 //  * city: traffic rumble, pedestrian-signal guide tones (bird-call style, as used at Japanese
 //    crossings), crows and sparrows by day, rain, wind, footsteps; reverb underground
 // All levels are game tuning values, not measured sound pressure levels.
@@ -70,6 +72,9 @@ struct SoundScene {
   float jet = 0, jet_gain = 0, jet_rumble = 0;     // jet thrust 0..1, loudness; runway rumble 0..1
   float prop_rpm = 0, prop_gain = 0, airflow = 0;  // light aircraft
   bool stall_horn = false;
+  int music = -1;          // the phone's music player: track number (procedurally composed), -1 off
+  float music_gain = 0;
+  bool music_backing = false;  // (only the rhythm section: the band backing the player's guitar)
 };
 
 enum class Cue : int {
@@ -107,6 +112,11 @@ class Audio {
   bool active() const { return device_ || offline_; }
   void setScene(const SoundScene& s);
   void cue(Cue c, float gain = 1.0f, float pan = 0.0f);
+  // a plucked string (the player's guitar: Karplus-Strong), MIDI note number
+  void pluck(float midi, float gain = 1.0f);
+  static int musicTracks() { return 6; }
+  static float musicKey(int track) { return 52.0f + static_cast<float>((track * 5) % 9); }     // tonic (MIDI)
+  static float musicBpm(int track) { return 78.0f + 8.0f * static_cast<float>((track * 3) % 6); }
   // offline rendering (test aid): produce `seconds` of sound into the WAV buffer
   void advanceOffline(double seconds);
   void render(float* stereo, int frames);  // audio thread

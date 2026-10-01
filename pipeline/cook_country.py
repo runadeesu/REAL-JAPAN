@@ -180,6 +180,8 @@ def cook_cell(mesh: str):
     sx, sy = L.SCRAMBLE
     st_xy = G["st_xy"]
     for pc in G["parcels_by_cell"].get(mesh, []):
+        if getattr(pc, "fuel", False):  # (a town fuel station's lot: specials.py)
+            continue
         c = pc.poly.centroid
         ns = math.hypot(c.x - sx, c.y - sy)
         nst = float(np.min(np.hypot(st_xy[:, 0] - c.x, st_xy[:, 1] - c.y)))
@@ -699,6 +701,8 @@ def main() -> int:
     fi = LocalFrame(L.ORIGIN[0], L.ORIGIN[1], 0.0)
     terrain = ctry.terrain
     spec = specials.build_all(ctry, terrain, rng)
+    spec.fuel_lots = specials.pick_fuel_lots(ctry, terrain)
+    print(f"town fuel stations: {', '.join(o['name'] for o in spec.fuel_lots)}", flush=True)
     print(f"specials: {len(spec.buildings)} structures ({time.time() - t0:.0f}s)", flush=True)
     lc = LandCover(ctry, spec)
     print(f"land cover ({time.time() - t0:.0f}s)", flush=True)
@@ -796,7 +800,7 @@ def main() -> int:
     # fuel stations (the client fills the tank and mends the car there; prices are game values)
     with open(os.path.join(out, "fuel.txt"), "w", encoding="utf-8") as f:
         f.write("# fuel name lat lon h (fuel stations, generic; prices are game values)\n")
-        for pa in spec.pas:
+        for pa in spec.pas + spec.fuel_lots:
             la, lo = fi.to_geodetic(float(pa["fuel"][0]), float(pa["fuel"][1]))
             f.write(f"fuel {pa['name']} {la:.8f} {lo:.8f} {pa['fuel_z']:.2f}\n")
     print(f"toll plazas: {len(spec.tolls)}, parking areas: {len(spec.pas)}", flush=True)

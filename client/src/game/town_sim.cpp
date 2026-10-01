@@ -55,6 +55,13 @@ std::array<int, static_cast<size_t>(rj::sim::ActivityType::kCount)> TownSim::his
   return h;
 }
 
+rj::sim::ActivityType TownSim::activityOf(size_t i, const rj::sim::CivilDate& d, int minute) {
+  ensurePlans(d);
+  if (i >= plans_.size()) return rj::sim::ActivityType::HomeLeisure;
+  const auto* a = plans_[i].at(minute);
+  return a ? a->type : rj::sim::ActivityType::HomeLeisure;
+}
+
 }  // namespace rjc
 
 namespace rjc {

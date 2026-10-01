@@ -128,8 +128,9 @@ void mapPad(const Pad& p, float dt) {
   if (p.down) k[fly ? KEY_R : KEY_DOWN] = true;
   if (p.left) k[KEY_LEFT] = true;
   if (p.right) k[KEY_RIGHT] = true;
-  if (p.x) k[KEY_E] = true;
-  if (p.y) k[KEY_V] = true;
+  const bool play = mode == PadMode::Play;  // (the guitar: the face buttons are notes)
+  if (p.x) k[play ? KEY_THREE : KEY_E] = true;
+  if (p.y) k[play ? KEY_FOUR : KEY_V] = true;
   if (p.back) k[KEY_TAB] = true;
   if (p.start) k[KEY_ESCAPE] = true;
   switch (mode) {
@@ -163,6 +164,16 @@ void mapPad(const Pad& p, float dt) {
       break;
     case PadMode::Fish:
       if (p.a || p.rt > 0.3f) k[KEY_SPACE] = true;
+      break;
+    case PadMode::Play:  // eight notes: A B X Y, the shoulders and the triggers; R3 puts it away, L3 the band
+      if (p.a) k[KEY_ONE] = true;
+      if (p.b) k[KEY_TWO] = true;
+      if (p.lb) k[KEY_FIVE] = true;
+      if (p.rb) k[KEY_SIX] = true;
+      if (p.lt > 0.5f) k[KEY_SEVEN] = true;
+      if (p.rt > 0.5f) k[KEY_EIGHT] = true;
+      if (p.r3) k[KEY_J] = true;
+      if (p.l3) k[KEY_N] = true;
       break;
     case PadMode::Photo:
       if (p.a || p.rt > 0.5f) k[KEY_E] = true;

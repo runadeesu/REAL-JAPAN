@@ -44,6 +44,8 @@ int App::run() {
     updateSound(dt);
     BeginDrawing();
     draw();
+    drawTravel();
+    drawCaption(dt);
     drawToast(dt);
     EndDrawing();
     ++frame_;
@@ -220,6 +222,15 @@ void App::newGame() {
   inventory_.clear();
   life_ = Life{};
   notes_.clear();
+  band_on_ = false;
+  band_.clear();
+  audience_.clear();
+  tipped_.clear();
+  tips_session_ = 0;
+  parsePhone("");
+  music_track_ = -1;
+  travel_ = Travel{};
+  vend_open_ = -1;
   shop_open_ = -1;
   player_.pos = world_.toLocal({m.spawn_lat, m.spawn_lon, 0.0});
   player_.yaw = static_cast<float>(m.spawn_heading * DEG2RAD);
@@ -234,6 +245,9 @@ void App::newGame() {
   player_account_ = ledger_->open(rj::econ::AccountKind::Person, "player");
   ledger_->endow(player_account_, kStartMoney, clock_.unixUtc(), "初期資金 / starting funds");
   play_seconds_ = 0;
+  msgs_.push_back({clock_.unixUtc(), tr("msg.from.game"), tr(world_.meta().fictional ? "msg.welcome" : "msg.welcome_shibuya")});
+  if (home_.ok) msgs_.push_back({clock_.unixUtc(), tr("msg.from.agent"), tr("msg.flat_ad")});
+  msgs_unread_ = static_cast<int>(msgs_.size());
   autosave_timer_ = 0;
   session_t_ = 0;
   in_session_ = true;
@@ -259,6 +273,7 @@ bool App::saveSlot(int slot) {
   s.inventory = inventoryString();
   s.life = lifeString();
   s.notes = notesString();
+  s.phone = phoneString();
   const bool ok = writeSave(slot, s);
   if (slot != kAutosaveSlot) toast(tr(ok ? "save.saved" : "save.failed"));
   return ok;
@@ -286,6 +301,7 @@ bool App::loadSlot(int slot) {
   parseInventory(s->inventory);
   parseLife(s->life);
   parseNotes(s->notes);
+  parsePhone(s->phone);
   play_seconds_ = s->play_seconds;
   autosave_timer_ = 0;
   session_t_ = 0;
@@ -328,6 +344,8 @@ void App::applyLaunchOverrides() {
     life_.flashlight = v.find("light") != std::string::npos;
     if (v.find("hungry") != std::string::npos) life_.hunger = 10.0f;
     if (v.find("wet") != std::string::npos) life_.wet = 0.8f;
+    if (v.find("guitar") != std::string::npos) life_.guitar = true;
+    if (v.find("band") != std::string::npos) setBand(true);
     if (v.find("home") != std::string::npos) {
       life_.has_home = true;
       life_.rent_paid_until = clock_.unixUtc() + 30 * 86400;
@@ -564,6 +582,15 @@ void App::update(float dt) {
             if (st == "phone:wallet") phone_app_ = PhoneApp::Wallet;
             if (st == "phone:work") phone_app_ = PhoneApp::Work;
             if (st == "phone:hobby") phone_app_ = PhoneApp::Hobby;
+            static const std::pair<const char*, PhoneApp> more[] = {{"phone:messages", PhoneApp::Messages}, {"phone:call", PhoneApp::Call},
+                                                                    {"phone:transit", PhoneApp::Transit},   {"phone:camera", PhoneApp::Camera},
+                                                                    {"phone:music", PhoneApp::Music},       {"phone:shopping", PhoneApp::Shopping},
+                                                                    {"phone:delivery", PhoneApp::Delivery}, {"phone:taxi", PhoneApp::Taxi},
+                                                                    {"phone:flights", PhoneApp::Flights},   {"phone:hotel", PhoneApp::Hotel},
+                                                                    {"phone:sns", PhoneApp::Sns},           {"phone:flat", PhoneApp::Flat},
+                                                                    {"phone:bag", PhoneApp::Bag}};
+            for (const auto& [k, a] : more)
+              if (st == k) phone_app_ = a;
           }
         }
         if (!opt_.screenshot.empty()) shot_frames_ = opt_.frames;
@@ -574,7 +601,7 @@ void App::update(float dt) {
     return;
   }
 
-  const bool want_lock = (screen_ == Screen::Game) && !till_.on && shop_open_ < 0 && fuel_open_ < 0;
+  const bool want_lock = (screen_ == Screen::Game) && !till_.on && shop_open_ < 0 && fuel_open_ < 0 && vend_open_ < 0;
   if (want_lock != cursor_locked_) {
     if (want_lock) DisableCursor();
     else EnableCursor();
@@ -592,6 +619,7 @@ void App::update(float dt) {
       clock_.advanceReal(dt);
       updateLife(dt);
       updateCar(dt);
+      updatePhoneApps(dt);
       play_seconds_ += dt;
       session_t_ += dt;
       autosave_timer_ += dt;
@@ -676,6 +704,7 @@ void App::update(float dt) {
         const double dx = ap.rwy_b.x - ap.rwy_a.x, dy = ap.rwy_b.y - ap.rwy_a.y, l = std::max(1.0, std::hypot(dx, dy));
         aviation_.plane().reset({ap.rwy_a.x + dx / l * 120.0, ap.rwy_a.y + dy / l * 120.0, ap.rwy_a.z}, std::atan2(dx, dy) * RAD2DEG, world_);
         flying_ = true;
+        atc_stage_ = -1;
         fly_cockpit_ = std::getenv("RJ_FLY_COCKPIT") != nullptr;
         plane_in_ = PlaneControls{};
       }
@@ -741,6 +770,7 @@ void App::update(float dt) {
         if (flying_) {
           for (int k = 0; k < opt_.sim_speed; ++k) pl.update(dt, world_, plane_in_, weather_.now().wind_ms);
           player_.pos = pl.pos();
+          updateAtc();
           if (pl.crashed()) {
             if (crash_t_ < 0) {
               crash_t_ = 0;
@@ -802,7 +832,7 @@ void App::update(float dt) {
         player_.yaw = driving_.car().yaw + drive_look_yaw_;
       } else {
         if (trains_.loaded()) updateStationGates(dt);  // (the gate flaps shut in front of the player block the lane)
-        player_.update(dt, world_, settings_, screen_ == Screen::Game && !till_.on && worship_.stage == 0 && fish_.stage == 0 && shop_open_ < 0,
+        player_.update(dt, world_, settings_, screen_ == Screen::Game && !till_.on && worship_.stage == 0 && fish_.stage == 0 && shop_open_ < 0 && vend_open_ < 0 && !travel_.on,
                        insideInterior(), nearby,
                        &gate_walls_);
       }
@@ -830,6 +860,12 @@ void App::update(float dt) {
         const float crowd = wk == WeatherKind::Thunder ? 0.45f : wk == WeatherKind::HeavyRain ? 0.55f
                             : wk == WeatherKind::Rain ? 0.72f : wk == WeatherKind::LightRain ? 0.85f : 1.0f;
         peds_.setHazard(driving_.active(), driving_.car().pos, driving_.car().yaw, std::fabs(driving_.car().v));
+        {
+          static rj::geo::Vec3d last = player_.pos;
+          const double sp = dt > 1e-4 ? std::hypot(player_.pos.x - last.x, player_.pos.y - last.y) / dt : 0.0;
+          last = player_.pos;
+          peds_.setPlayer(!driving_.active() && ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0 && !flying_ && !player_.fly && sp < 15.0, player_.pos, sp);
+        }
         peds_.update(town_, world_, signals_, clock_.jst(), player_.pos, dt, crowd);
       }
       if (screen_ == Screen::Game) {
@@ -839,6 +875,8 @@ void App::update(float dt) {
         updateAviationActions();
         updateDriveActions();
         updateShopActions();
+        updateVending();
+        updateBusking(dt);
         updateHome(dt);
         updateFuelStation();
         updateTolls();
@@ -857,6 +895,8 @@ void App::update(float dt) {
           fuel_open_ = -1;
         } else if (IsKeyPressed(KEY_ESCAPE) && shop_open_ >= 0) {
           shop_open_ = -1;
+        } else if (IsKeyPressed(KEY_ESCAPE) && vend_open_ >= 0) {
+          vend_open_ = -1;
         } else if (IsKeyPressed(KEY_ESCAPE) && photo_mode_) {
           photo_mode_ = false;
         } else if (IsKeyPressed(KEY_ESCAPE) && till_.on) {
@@ -912,7 +952,7 @@ void App::update(float dt) {
   }
   const WeatherKind wk0 = weather_.kind();
   weather_.update(game_dt, dt, static_cast<float>(sun.elevation_deg));
-  if (in_session_ && wk0 != WeatherKind::Typhoon && weather_.kind() == WeatherKind::Typhoon) toast(tr("weather.typhoon_warn"));
+  if (in_session_ && wk0 != WeatherKind::Typhoon && weather_.kind() == WeatherKind::Typhoon) message(tr("msg.from.weather"), tr("weather.typhoon_warn"));
   if (in_session_ && weather_.tsuyu() != tsuyu_) {
     if (tsuyu_seen_) toast(tr(weather_.tsuyu() ? "weather.tsuyu_in" : "weather.tsuyu_out"));
     tsuyu_ = weather_.tsuyu();
@@ -1433,6 +1473,40 @@ void App::runSelfTest() {
       life_ = keep;
       player_.pos = keep_pos;
       check(locked && rented && w1.empty() && slept && kept, "the flat: locked until rented, rent from the wallet, sleep to 7:00, kept in the save");
+      {
+        // the phone: food delivered where you are, a parcel collected at the flat's door, the
+        // messages and orders kept in the save, a street vending machine
+        const auto inv = inventory_;
+        const auto msgs = msgs_;
+        const auto ords = orders_;
+        const Life keep2 = life_;
+        life_.has_home = true;
+        orders_.clear();
+        orders_.push_back({clock_.unixUtc() - 1, "ramen", 1, false});
+        orders_.push_back({clock_.unixUtc() - 1, "towel", 1, true});
+        player_.pos = {dm.x, dm.y, dm.z};
+        updatePhoneApps(0.0f);
+        const bool food = inventory_["ramen"] >= 1, parcel = inventory_["towel"] >= 1 && orders_.empty();
+        orders_.push_back({clock_.unixUtc() + 3600, "water", 6, true});
+        message("test", "hello");
+        const std::string saved = phoneString();
+        parsePhone(saved);
+        const bool kept_phone = !orders_.empty() && orders_.back().count == 6 && !msgs_.empty() && msgs_.back().text == "hello";
+        bool vend = true;
+        if (world_.meta().fictional) {
+          vend = !markings_.vendings().empty();
+          if (ledger_ && ledger_->balance(player_account_) < 200)
+            ledger_->transfer(ledger_->externalAccount(), player_account_, 200, rj::econ::TxCategory::Transfer, clock_.unixUtc(), "selftest");
+          const int before = inventory_["water"];
+          vend = vend && buyItem({"water", 110}) && inventory_["water"] == before + 1;
+        }
+        inventory_ = inv;
+        msgs_ = msgs;
+        orders_ = ords;
+        life_ = keep2;
+        player_.pos = keep_pos;
+        check(food && parcel && kept_phone && vend, "phone: food delivery, a parcel at the flat's door, messages kept in the save, a street vending machine");
+      }
     }
   }
   // Verified interior: enter through a real entrance, stand on a real floor, walls block.
@@ -1698,6 +1772,7 @@ void App::drawWorldView(const Camera3D& cam) {
     if (!trains_.crossings().empty()) renderer_.drawCrossings(trains_, cam, render_time_);
     if (!tolls_.empty()) drawTollBars(cam);
     drawHomeDoor(cam);
+    drawGuitar(cam);
     if (shops_.loaded()) drawShopClerks(cam);
     if (world_.meta().fictional && in_session_) renderer_.drawDistantTraffic(traffic_, cam, lighting_, render_time_, jst().hour);
     renderer_.drawStationSigns(trains_, cam);
@@ -1810,7 +1885,10 @@ void App::draw() {
     case Screen::Settings: drawSettings(); break;
     case Screen::Slots: drawSlots(); break;
     case Screen::Credits: drawCredits(); break;
-    case Screen::Game: drawHud(); break;
+    case Screen::Game:
+      drawSpeech(view_cam);
+      drawHud();
+      break;
     case Screen::Pause:
       drawHud();
       drawPause();
@@ -2098,8 +2176,10 @@ void App::drawHud() {
   const float vw = ui_.vw();
   drawActivityHud();
   if (screen_ == Screen::Game) drawLifeHud();
+  if (screen_ == Screen::Game) drawBuskingHud();
   if (photo_mode_) return;  // viewfinder only
   drawShopMenu();
+  drawVendMenu();
   drawFuelMenu();
   if (screen_ == Screen::Game) drawTalk();
   const auto g = world_.toGeodetic(player_.pos);
@@ -2445,33 +2525,49 @@ void App::drawPhone() {
         Color c;
       };
       const AppDef apps[] = {{"phone.map", PhoneApp::Map, Color{40, 140, 90, 255}},
+                             {"phone.messages", PhoneApp::Messages, Color{60, 170, 90, 255}},
+                             {"phone.call", PhoneApp::Call, Color{50, 150, 60, 255}},
+                             {"phone.transit", PhoneApp::Transit, Color{40, 110, 170, 255}},
+                             {"phone.taxi", PhoneApp::Taxi, Color{200, 160, 20, 255}},
                              {"phone.clock", PhoneApp::Clock, Color{60, 90, 190, 255}},
                              {"phone.wallet", PhoneApp::Wallet, Color{200, 140, 30, 255}},
-                             {"phone.town", PhoneApp::Town, Color{170, 60, 150, 255}},
+                             {"phone.shopping", PhoneApp::Shopping, Color{220, 110, 40, 255}},
+                             {"phone.delivery", PhoneApp::Delivery, Color{210, 70, 60, 255}},
                              {"phone.work", PhoneApp::Work, Color{210, 80, 40, 255}},
                              {"phone.hobby", PhoneApp::Hobby, Color{40, 150, 170, 255}},
+                             {"phone.camera", PhoneApp::Camera, Color{80, 80, 90, 255}},
+                             {"phone.music", PhoneApp::Music, Color{190, 60, 110, 255}},
+                             {"phone.sns", PhoneApp::Sns, Color{60, 120, 200, 255}},
+                             {"phone.town", PhoneApp::Town, Color{170, 60, 150, 255}},
                              {"phone.bag", PhoneApp::Bag, Color{110, 90, 60, 255}},
-                             {"phone.flat", PhoneApp::Flat, Color{90, 110, 140, 255}}};
-      const float bw = (cw - 20) / 2, bh = 78;
-      for (int i = 0; i < 8; ++i) {
-        const Rectangle r{cx + (i % 2) * (bw + 20), yy + (i / 2) * (bh + 20), bw, bh};
+                             {"phone.flat", PhoneApp::Flat, Color{90, 110, 140, 255}},
+                             {"phone.hotel", PhoneApp::Hotel, Color{120, 80, 150, 255}},
+                             {"phone.flights", PhoneApp::Flights, Color{40, 140, 190, 255}}};
+      constexpr int kApps = static_cast<int>(sizeof(apps) / sizeof(apps[0]));
+      const float bw = (cw - 24) / 3, bh = 60;
+      for (int i = 0; i < kApps; ++i) {
+        const Rectangle r{cx + (i % 3) * (bw + 12), yy + (i / 3) * (bh + 10), bw, bh};
         DrawRectangleRounded(ui_.px(r), 0.2f, 8, apps[i].c);
         if (ui_.hovered(r)) DrawRectangleRoundedLinesEx(ui_.px(r), 0.2f, 8, 3 * ui_.scale(), WHITE);
-        ui_.textCentered(tr(apps[i].key), r.x + bw / 2, r.y + bh / 2 - 16, 30, WHITE);
+        ui_.textCentered(tr(apps[i].key), r.x + bw / 2, r.y + bh / 2 - 12, 22, WHITE);
+        if (apps[i].app == PhoneApp::Messages && msgs_unread_ > 0) {  // unread badge
+          DrawCircleV({(r.x + bw - 10) * ui_.scale(), (r.y + 10) * ui_.scale()}, 12 * ui_.scale(), Color{220, 40, 40, 255});
+          ui_.textCentered(std::to_string(std::min(msgs_unread_, 99)), r.x + bw - 10, r.y + 1, 16, WHITE);
+        }
         if (ui_.hovered(r) && ui_.clicked()) {
           ui_.consumeClick();
           phone_app_ = apps[i].app;
+          phone_scroll_ = 0;
+          call_lines_.clear();
         }
       }
-      yy += 4 * (bh + 20) + 10;
-      if (ui_.button({cx, yy, cw, 64}, tr("phone.settings"), true, 28)) {
+      yy += static_cast<float>((kApps + 2) / 3) * (bh + 10) + 10;
+      if (ui_.button({cx, yy, cw, 56}, tr("phone.settings"), true, 26)) {
         settings_return_ = Screen::Phone;
         screen_ = Screen::Settings;
       }
-      yy += 90;
-      ui_.text(tr("phone.not_impl"), cx, yy, 26, theme::kWarn);
-      yy += 40;
-      ui_.textWrapped(tr("phone.not_impl_list"), cx, yy, cw, 22, theme::kMuted);
+      yy += 72;
+      ui_.textWrapped(tr("phone.apps_note"), cx, yy, cw, 18, theme::kMuted);
 #if defined(RJ_TOUCH)
       if (ui_.button({cx, y + h - 76, cw, 56}, tr("shop.close"), true, 28)) screen_ = Screen::Game;  // (no Tab key)
 #else
@@ -2523,6 +2619,17 @@ void App::drawPhone() {
       drawPhoneFlat(cx, yy, cw);
       back();
       break;
+    case PhoneApp::Messages: drawPhoneMessages(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Call: drawPhoneCall(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Transit: drawPhoneTransit(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Camera: drawPhoneCamera(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Music: drawPhoneMusic(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Shopping: drawPhoneShopping(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Delivery: drawPhoneDelivery(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Taxi: drawPhoneTaxi(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Flights: drawPhoneFlights(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Hotel: drawPhoneHotel(cx, yy, cw, y + h - 90); back(); break;
+    case PhoneApp::Sns: drawPhoneSns(cx, yy, cw, y + h - 90); back(); break;
     case PhoneApp::Bag: {
       ui_.text(tr("phone.bag"), cx, yy, 32, theme::kText);
       yy += 56;

@@ -41,7 +41,7 @@ bool App::buyItem(const ShopItem& it) {
   const std::string name = tr(std::string("shop.item.") + it.key);
   if (!ledger_ || ledger_->transfer(player_account_, ledger_->externalAccount(), it.yen, rj::econ::TxCategory::Purchase, clock_.unixUtc(), name) !=
                       rj::econ::TxResult::Ok) {
-    toast(tr("rail.no_money"));
+    toast(tr("money.short"));
     return false;
   }
   ++inventory_[it.key];
@@ -239,6 +239,88 @@ void App::updateTolls() {
     }
     return;
   }
+}
+
+// Street vending machines (estimated positions, game/road_markings.cpp): look at one close by and
+// press E for the drinks; they go into the bag like anything bought (prices are game values).
+namespace {
+const std::vector<ShopItem>& vendMenu() {
+  static const std::vector<ShopItem> m = {{"green_tea", 160}, {"coffee_can", 130}, {"water", 110}, {"sports_drink", 160}};
+  return m;
+}
+}  // namespace
+
+void App::updateVending() {
+  const auto& vs = markings_.vendings();
+  if (vend_open_ >= 0) {
+    if (vend_open_ >= static_cast<int>(vs.size())) {
+      vend_open_ = -1;
+      return;
+    }
+    const StreetVending& v = vs[static_cast<size_t>(vend_open_)];
+    if (std::hypot(v.pos.x - player_.pos.x, v.pos.y - player_.pos.y) > 2.6 || IsKeyPressed(KEY_E)) {
+      vend_open_ = -1;
+      return;
+    }
+    const auto& items = vendMenu();
+    for (size_t i = 0; i < items.size(); ++i)
+      if (IsKeyPressed(static_cast<KeyboardKey>(KEY_ONE + static_cast<int>(i)))) buyItem(items[i]);
+    return;
+  }
+  if (driving_.active() || ride_train_ >= 0 || ride_ferry_ >= 0 || ride_jet_ >= 0 || flying_ || player_.fly || aim_icon_ != AimIcon::None) return;
+  static const bool test = std::getenv("RJ_VEND_TEST") != nullptr;  // test aid: open the nearest machine's menu
+  int best = -1;
+  double bd = test ? 400.0 : 1.8;
+  for (size_t i = 0; i < vs.size(); ++i) {
+    const double d = std::hypot(vs[i].pos.x - player_.pos.x, vs[i].pos.y - player_.pos.y);
+    if (d < bd && std::fabs(vs[i].pos.z - player_.pos.z) < 1.5) {
+      bd = d;
+      best = static_cast<int>(i);
+    }
+  }
+  if (best < 0) return;
+  if (test) {
+    if (std::getenv("RJ_VEND_LOOK")) {  // (and stand in front of it, looking at it)
+      static bool once = false;
+      if (!once) {
+        once = true;
+        const StreetVending& v = vs[static_cast<size_t>(best)];
+        player_.pos = {v.pos.x + v.face.x * 2.8 + v.face.y * 0.9, v.pos.y + v.face.y * 2.8 - v.face.x * 0.9, v.pos.z};
+        player_.snapToGround(world_);
+        player_.yaw = static_cast<float>(std::atan2(-v.face.x - v.face.y * 0.3, -v.face.y + v.face.x * 0.3));
+        player_.pitch = -0.12f;
+      }
+      return;
+    }
+    vend_open_ = best;
+    return;
+  }
+  const StreetVending& v = vs[static_cast<size_t>(best)];
+  if (!aimAt({v.pos.x - v.face.x * 0.35, v.pos.y - v.face.y * 0.35, v.pos.z + 1.1}, 3.0, 40.0)) return;
+  aim_icon_ = AimIcon::Hand;
+  aim_label_ = tr("aim.vending");
+  if (usePressed()) vend_open_ = best;
+}
+
+void App::drawVendMenu() {
+  if (vend_open_ < 0) return;
+  const auto& items = vendMenu();
+  const float w = 640, x = (ui_.vw() - w) / 2, row = 64;
+  const float h = 230 + row * static_cast<float>(items.size());
+  float y = 540 - h / 2;
+  ui_.panel({x, y, w, h}, Color{16, 18, 22, 225});
+  ui_.text(tr("vending.name"), x + 30, y + 22, 34, theme::kText);
+  const int64_t bal = ledger_ ? ledger_->balance(player_account_) : 0;
+  ui_.textRight(i18n_.f("phone.wallet_balance", {{"n", withCommas(bal)}}), x + w - 30, y + 30, 24, theme::kMuted);
+  y += 80;
+  for (size_t i = 0; i < items.size(); ++i) {
+    const ShopItem& it = items[i];
+    const std::string label = std::to_string(i + 1) + "  " + tr(std::string("shop.item.") + it.key) + "  ¥" + withCommas(it.yen);
+    if (ui_.button({x + 24, y, w - 48, row - 8}, label, bal >= it.yen, 26.0f)) buyItem(it);
+    y += row;
+  }
+  ui_.text(tr("vending.hint"), x + 30, y + 18, 22, theme::kMuted);
+  if (ui_.button({x + w - 224, y + 52, 200, 52}, tr("shop.close"), true, 26.0f)) vend_open_ = -1;
 }
 
 }  // namespace rjc

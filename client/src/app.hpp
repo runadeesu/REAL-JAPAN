@@ -77,7 +77,7 @@ class App {
 
  private:
   enum class Screen { Boot, Loading, Title, Settings, Slots, Credits, Game, Pause, Phone, Fatal };
-  enum class PhoneApp { Home, Map, Clock, Wallet, Town, Work, Hobby, Bag, Flat };
+  enum class PhoneApp { Home, Map, Clock, Wallet, Town, Work, Hobby, Bag, Flat, Messages, Call, Transit, Camera, Music, Shopping, Delivery, Taxi, Flights, Hotel, Sns };
 
   bool boot();
   void shutdown();
@@ -172,6 +172,9 @@ class App {
   Trains trains_;
   Shops shops_;
   int shop_open_ = -1;                     // the shop whose counter menu is open
+  int vend_open_ = -1;                     // the street vending machine whose menu is open (markings_.vendings())
+  void updateVending();
+  void drawVendMenu();
   std::map<std::string, int> inventory_;  // bought in shops: item key -> count
   struct TollPlaza {
     std::string name;
@@ -383,6 +386,8 @@ class App {
     bool has_home = false;                 // renting the flat (app_home.cpp)
     int64_t rent_paid_until = 0;           // game unix time
     int talks = 0;                         // conversations had
+    bool guitar = false;                   // playing the guitar (app_music.cpp)
+    int64_t tips = 0;                      // tips from busking, all told
     int64_t last_unix = 0;                 // (game time of the last update)
   };
   Life life_;
@@ -436,6 +441,76 @@ class App {
   void drawHomeDoor(const Camera3D& cam);
   void drawPhoneFlat(float cx, float yy, float cw);
   void drawHomeOnMap(const std::function<Vector2(const rj::geo::Vec3d&)>& toScreen, double half);
+  // the phone's other apps (app_phone.cpp)
+  struct PhoneMsg {
+    int64_t t;
+    std::string from, text;
+  };
+  std::vector<PhoneMsg> msgs_;
+  int msgs_unread_ = 0;
+  struct Order {
+    int64_t due;
+    std::string item;
+    int count;     // (negative: arrived in the flat's parcel box, not collected yet)
+    bool to_home;  // online shop (to the flat) / food delivery (to the player)
+  };
+  std::vector<Order> orders_;
+  int music_track_ = -1;
+  int transit_dest_ = -1, taxi_dest_ = -1;
+  bool flight_prepaid_ = false;
+  std::set<int> sns_liked_;
+  std::vector<std::string> call_lines_;
+  std::string call_title_;
+  struct Travel {
+    bool on = false;
+    rj::geo::Geodetic dest;
+    float t = 0;
+    std::string label, done;
+  } travel_;
+  void message(const std::string& from, const std::string& text);
+  std::string phoneString() const;
+  void parsePhone(const std::string& s);
+  void updatePhoneApps(float dt);
+  void startTravel(const rj::geo::Geodetic& g, const std::string& label, const std::string& done);
+  void drawTravel();
+  std::string trackTitle(int k) const;
+  void drawPhoneMessages(float cx, float yy, float cw, float bottom);
+  void drawPhoneCall(float cx, float yy, float cw, float bottom);
+  void drawPhoneTransit(float cx, float yy, float cw, float bottom);
+  void drawPhoneCamera(float cx, float yy, float cw, float bottom);
+  void drawPhoneMusic(float cx, float yy, float cw, float bottom);
+  void drawPhoneShopping(float cx, float yy, float cw, float bottom);
+  void drawPhoneDelivery(float cx, float yy, float cw, float bottom);
+  void drawPhoneTaxi(float cx, float yy, float cw, float bottom);
+  void drawPhoneFlights(float cx, float yy, float cw, float bottom);
+  void drawPhoneHotel(float cx, float yy, float cw, float bottom);
+  void drawPhoneSns(float cx, float yy, float cw, float bottom);
+  // the guitar, the band and busking (app_music.cpp)
+  bool band_on_ = false;
+  std::vector<size_t> band_;        // bandmates (residents with the band / instrument hobby)
+  int band_track_ = 0;              // the backing (rhythm section) the band plays
+  std::vector<double> note_times_;  // (the groove: when the last notes were played)
+  std::set<size_t> tipped_;         // walkers who have tipped this session
+  std::map<size_t, float> audience_;  // walkers stopped to listen: seconds listened
+  float audience_t_ = 0;
+  int64_t tips_session_ = 0;
+  void setGuitar(bool on);
+  void setBand(bool on);
+  void updateBusking(float dt);
+  void drawGuitar(const Camera3D& cam);
+  void drawBuskingHud();
+  float bandKey() const;
+  // captions of what the public-address systems and the tower say (text only, no voices)
+  std::string caption_;
+  float caption_t_ = 0;
+  int atc_stage_ = -1;
+  void caption(const std::string& s) {
+    caption_ = s;
+    caption_t_ = 9.0f;
+  }
+  void drawCaption(float dt);
+  void drawSpeech(const Camera3D& cam);  // the words over passers-by's heads
+  void updateAtc();
   std::string inventoryString() const;
   void parseInventory(const std::string& s);
   // test aids (scripted drive / ride); the screenshot waits until they are finished

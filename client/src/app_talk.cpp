@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #include "app.hpp"
+#include "raymath.h"
 #include "rj/sim/npc.hpp"
 #include "ui/ui.hpp"
 #include "world/coords.hpp"
@@ -107,6 +108,27 @@ void App::drawTalk() {
     yy += 36;
   }
   ui_.textRight(tr("talk.note"), x + w - 20, y + 20, 18, theme::kMuted);
+}
+
+void App::drawSpeech(const Camera3D& cam) {
+  // speech bubbles over passers-by (a bump's "sorry", two people chatting): fixed words, no voices
+  const rj::geo::Vec3d cp = rlToEnu(cam.position);
+  for (const auto& [id, w] : peds_.walkers()) {
+    if (w.say < 0 || w.say_t <= 0.0f) continue;
+    const double d = std::hypot(w.pos.x - cp.x, w.pos.y - cp.y);
+    if (d > 25.0) continue;
+    const Vector3 head = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z) + 1.95 * w.height_scale});
+    // (behind the camera: not drawn)
+    const Vector3 fwd = Vector3Subtract(cam.target, cam.position), to = Vector3Subtract(head, cam.position);
+    if (Vector3DotProduct(fwd, to) <= 0.0f) continue;
+    const Vector2 s = GetWorldToScreen(head, cam);
+    const std::string text = tr("say." + std::to_string(w.say));
+    const float fs = static_cast<float>(std::clamp(26.0 - d * 0.5, 16.0, 26.0));
+    const float tw = ui_.measure(text, fs) + 24.0f, x = s.x / ui_.scale() - tw / 2, y = s.y / ui_.scale() - fs - 22.0f;
+    const unsigned char a = static_cast<unsigned char>(235.0f * std::clamp(w.say_t, 0.0f, 1.0f));
+    ui_.panel({x, y, tw, fs + 14.0f}, Color{250, 250, 246, a});
+    ui_.text(text, x + 12, y + 6, fs, Color{30, 30, 34, a});
+  }
 }
 
 }  // namespace rjc

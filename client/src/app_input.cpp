@@ -10,7 +10,7 @@
 namespace rjc {
 
 void App::updateInputContext() {
-  const bool menu = screen_ != Screen::Game || shop_open_ >= 0 || fuel_open_ >= 0 || till_.on;
+  const bool menu = screen_ != Screen::Game || shop_open_ >= 0 || fuel_open_ >= 0 || vend_open_ >= 0 || till_.on;
   input::PadMode m = input::PadMode::Walk;
   if (menu) m = input::PadMode::Menu;
   else if (flying_) m = input::PadMode::Fly;
@@ -18,6 +18,7 @@ void App::updateInputContext() {
   else if (driving_.active()) m = input::PadMode::Drive;
   else if (photo_mode_) m = input::PadMode::Photo;
   else if (fish_.stage > 0) m = input::PadMode::Fish;
+  else if (life_.guitar && !driving_.active() && ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0) m = input::PadMode::Play;
   input::setPadMode(m);
 
 #if defined(RJ_TOUCH)
@@ -46,6 +47,11 @@ void App::updateInputContext() {
       // (E takes the picture)
     } else if (fish_.stage > 0) {
       add(KEY_SPACE, "reel");
+    } else if (life_.guitar && ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0) {
+      keys.clear();  // the guitar: six notes, the band, put it away
+      for (int k = 0; k < 6; ++k) keys.push_back({KEY_ONE + k, std::to_string(k + 1)});
+      add(KEY_N, "band");
+      add(KEY_J, "guitar_away");
     } else if (ride_train_ < 0 && ride_ferry_ < 0 && ride_jet_ < 0) {
       add(KEY_SPACE, "jump");
       add(KEY_V, "view");

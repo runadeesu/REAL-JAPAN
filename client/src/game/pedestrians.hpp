@@ -58,6 +58,12 @@ struct Walker {
   bool waiting = false;   // standing at a red pedestrian signal
   float height_scale = 1.0f;
   rj::nav::Vec2 dodge{0, 0};  // stepped aside from the player's car (decays back to the route)
+  rj::nav::Vec2 sep{0, 0};    // stepped aside for other people and the player (decays back)
+  int say = -1;               // a few words over the head (Pedestrians::SayCode), for say_t seconds
+  float say_t = 0;
+  size_t chat_with = static_cast<size_t>(-1);  // standing talking with another walker
+  float chat_t = 0;
+  int chat_line = 0;
 };
 
 class Pedestrians {
@@ -79,10 +85,16 @@ class Pedestrians {
               const rj::geo::Vec3d& player, float real_dt, float crowd_factor = 1.0f);
   const std::map<size_t, Walker>& walkers() const { return walkers_; }
   // someone stops to talk to the player for a while (facing them), then walks on
-  void hold(size_t id, float seconds, const rj::geo::Vec3d& face) {
-    hold_[id] = seconds;
-    hold_face_ = face;
+  void hold(size_t id, float seconds, const rj::geo::Vec3d& face) { hold_[id] = {seconds, face}; }
+  // where the player is on foot (people step round them; a bump gets a "sorry"); speed in m/s
+  void setPlayer(bool on_foot, const rj::geo::Vec3d& p, double speed) {
+    pl_on_ = on_foot;
+    pl_ = p;
+    pl_v_ = speed;
   }
+  // the words over people's heads (App draws them): say.<code> in the language files
+  enum SayCode { SaySorry = 0, SayHello, SayChat0, SayChat1, SayChat2, SayChat3, SayChat4, SayChat5, SayBye, SayCount };
+  size_t chats() const { return n_chats_; }
   size_t idOf(const Walker* w) const {
     for (const auto& [id, x] : walkers_)
       if (&x == w) return id;
@@ -124,8 +136,16 @@ class Pedestrians {
   std::vector<int16_t> cross_id_;  // per nav cell: crossing index or -1
   const RoadMarkings* markings_ = nullptr;
   std::map<size_t, Walker> walkers_;
-  std::map<size_t, float> hold_;  // walker -> seconds left talking
-  rj::geo::Vec3d hold_face_{};
+  struct Hold {
+    float t;
+    rj::geo::Vec3d face;
+  };
+  std::map<size_t, Hold> hold_;  // walker -> seconds left standing, and whom they face
+  bool pl_on_ = false;
+  rj::geo::Vec3d pl_{};
+  double pl_v_ = 0;
+  size_t n_chats_ = 0;
+  double chat_clock_ = 0;
   std::map<size_t, int> pending_;  // npc -> trip start minute being routed
   std::map<size_t, int> failed_;   // npc -> trip start minute that had no route
   std::vector<Job> queue_;

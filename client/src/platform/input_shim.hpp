@@ -10,7 +10,7 @@
 namespace rjc::input {
 
 // What the controller's buttons stand for: the app sets it every frame from the situation.
-enum class PadMode { Walk, Drive, Fly, Train, Fish, Photo, Menu };
+enum class PadMode { Walk, Drive, Fly, Train, Fish, Photo, Menu, Play };
 
 // Once per frame, before the game reads input.
 void update();

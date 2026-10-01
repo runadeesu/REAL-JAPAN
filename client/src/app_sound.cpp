@@ -397,11 +397,19 @@ void App::updateSound(float dt) {
         float yaw, pitch;
         trains_.carPose(t, t.cars / 2, p, yaw, pitch);
         const float pn = aboard ? 0.0f : panOf(ear, p) * 0.5f;
-        if (prev > 15.0 && t.dwell <= 15.0 && t.dwell > 6.0) audio_.cue(Cue::DepartureMelody, aboard ? 0.25f : 0.5f, pn);
+        if (prev > 15.0 && t.dwell <= 15.0 && t.dwell > 6.0) {
+          audio_.cue(Cue::DepartureMelody, aboard ? 0.25f : 0.5f, pn);
+          std::string dest = trains_.destination(t);
+          dest = dest == "loop+" ? tr("rail.dest.outer") : dest == "loop-" ? tr("rail.dest.inner") : stationBaseName(dest);
+          caption(i18n_.f("pa.departing", {{"dest", dest}}));
+        }
         if (prev > 4.0 && t.dwell <= 4.0) audio_.cue(Cue::DoorChime, aboard ? 0.55f : 0.4f, pn);
         if (prev > 1.3 && t.dwell <= 1.3) audio_.cue(Cue::DoorAir, aboard ? 0.6f : 0.3f, pn);
       }
-      if (aboard && prev_at < 0 && t.at_station >= 0) audio_.cue(Cue::DoorAir, 0.6f);  // doors open on arrival
+      if (aboard && prev_at < 0 && t.at_station >= 0) {  // doors open on arrival
+        audio_.cue(Cue::DoorAir, 0.6f);
+        caption(i18n_.f("pa.arrived", {{"st", trains_.stations()[static_cast<size_t>(t.at_station)].name}}));
+      }
       if (aboard && prev_at >= 0 && t.at_station < 0) {
         if (t.manual) audio_.cue(Cue::DoorAir, 0.6f);
         snd_chime_t_ = 7.0f;  // next-stop announcement shortly after leaving
@@ -409,7 +417,11 @@ void App::updateSound(float dt) {
       snd_dwell_[t.id] = t.at_station >= 0 ? t.dwell : 1e9;
       snd_at_[t.id] = t.at_station;
     }
-    if (snd_chime_t_ > 0.0f && (snd_chime_t_ -= dt) <= 0.0f && ride_train_ >= 0) audio_.cue(Cue::TrainChime, 0.45f);
+    if (snd_chime_t_ > 0.0f && (snd_chime_t_ -= dt) <= 0.0f && ride_train_ >= 0) {
+      audio_.cue(Cue::TrainChime, 0.45f);
+      if (const Train* rt = trains_.train(ride_train_); rt && rt->next_stop >= 0)
+        caption(i18n_.f("pa.next", {{"st", trains_.stations()[static_cast<size_t>(rt->next_stop)].name}}));
+    }
     // level crossings: the bell rings twice a second while the lamps flash (the nearest one heard)
     snd_bell_t_ -= dt;
     if (snd_bell_t_ <= 0.0f) {
@@ -467,8 +479,10 @@ void App::updateSound(float dt) {
     const bool ground = a->phase != Airliner::Phase::Climb && a->phase != Airliner::Phase::Offmap && a->phase != Airliner::Phase::Approach;
     sc.jet_rumble = ground ? static_cast<float>(std::min(1.0, a->v / 45.0)) : 0.0f;
     const int ph = static_cast<int>(a->phase);
-    if (snd_jet_phase_ >= 0 && ph != snd_jet_phase_ && (a->phase == Airliner::Phase::Pushback || a->phase == Airliner::Phase::Approach))
+    if (snd_jet_phase_ >= 0 && ph != snd_jet_phase_ && (a->phase == Airliner::Phase::Pushback || a->phase == Airliner::Phase::Approach)) {
       audio_.cue(Cue::CabinChime, 0.5f);
+      caption(a->phase == Airliner::Phase::Pushback ? i18n_.f("pa.jet_depart", {{"ap", airportName(a->to)}}) : tr("pa.jet_approach"));
+    }
     if ((snd_jet_gear_ - 0.5f) * (a->gear - 0.5f) < 0.0f) audio_.cue(Cue::GearThunk, 0.6f);
     snd_jet_phase_ = ph;
     snd_jet_gear_ = a->gear;
@@ -496,6 +510,9 @@ void App::updateSound(float dt) {
   } else {
     snd_crashed_ = false;
   }
+  sc.music = band_on_ ? band_track_ : music_track_;  // the band's rhythm section, or the phone's music player
+  sc.music_gain = band_on_ ? 0.4f : music_track_ >= 0 ? 0.55f : 0.0f;
+  sc.music_backing = band_on_;
 
   audio_.setScene(sc);
   audio_.advanceOffline(dt);

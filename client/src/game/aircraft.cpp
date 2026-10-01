@@ -655,8 +655,20 @@ double LightPlane::pitchDeg() const { return std::asin(std::clamp(f_.z, -1.0, 1.
 double LightPlane::rollDeg() const { return std::atan2(-r_.z, u_.z) / kDeg; }
 
 void LightPlane::step(double h, const World& world, float wind_ms) {
-  // air-relative velocity (steady wind from the west, game assumption)
-  const V3 wind{static_cast<double>(wind_ms) * 0.6, 0.0, 0.0};
+  // air-relative velocity: a steady wind from the west (game assumption) and gusts about it, a random
+  // walk that grows with the wind (turbulence; weaker near the ground)
+  auto rnd = [&]() {
+    grng_ ^= grng_ << 13;
+    grng_ ^= grng_ >> 17;
+    grng_ ^= grng_ << 5;
+    return static_cast<double>(grng_ >> 8) / 8388608.0 - 1.0;
+  };
+  const double gs = (0.3 * wind_ms + 0.4) * 2.0 * std::sqrt(h);
+  gust_.x += -1.5 * gust_.x * h + gs * rnd();
+  gust_.y += -1.5 * gust_.y * h + gs * rnd();
+  gust_.z += -2.0 * gust_.z * h + gs * 0.5 * rnd();
+  const double gk = on_ground_ ? 0.2 : 1.0;
+  const V3 wind{static_cast<double>(wind_ms) * 0.6 + gust_.x * gk, gust_.y * gk, gust_.z * gk};
   const V3 va = sub(vel_, wind);
   const double V = len(va);
   airspeed_ = V;

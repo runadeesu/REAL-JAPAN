@@ -16,6 +16,10 @@
 //  * ESTIMATED street furniture: road lights (8 m poles, ~30 m apart) on carriageways >= 5.5 m where
 //    no surveyed street light is near; concrete utility poles (電柱) with overhead lines and a small
 //    LED street lamp (防犯灯) along narrow streets.
+//  * ESTIMATED small street furniture (not surveyed anywhere): drink vending machines (自販機) with
+//    recycling bins against building walls, parked bicycles in rows on wide pavements, and shop
+//    stand signs (看板スタンド, blank panels) on narrow shopping streets. Positions are generated from
+//    the road graph and the buildings; the machines sell drinks (game values).
 
 #include <cstddef>
 #include <vector>
@@ -36,6 +40,11 @@ struct Crossing {
   double heading = 0;         // walking direction across the road (compass radians, either sense)
   int group = -1, phase = 0;  // controlling signal (group -1: unsignalised)
   bool estimated = false;
+};
+
+struct StreetVending {
+  rj::geo::Vec3d pos;  // origin ENU: the middle of the machine's front, on the ground
+  rj::nav::Vec2 face;  // the way its front looks (unit)
 };
 
 struct EstimatedLight {
@@ -62,6 +71,7 @@ class RoadMarkings {
   size_t estimatedSignalHeads() const { return n_est_signals_; }
   size_t triangles() const { return tris_; }
   const std::vector<EstimatedLight>& lights() const { return lights_; }
+  const std::vector<StreetVending>& vendings() const { return vendings_; }
 
  private:
   std::vector<Mesh> meshes_;
@@ -69,6 +79,7 @@ class RoadMarkings {
   size_t n_est_crossings_ = 0;
   size_t n_est_signals_ = 0;
   std::vector<EstimatedLight> lights_;
+  std::vector<StreetVending> vendings_;
   size_t tris_ = 0;
 };
 

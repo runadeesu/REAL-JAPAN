@@ -129,6 +129,40 @@ struct MeshBuilder {
         idx.insert(idx.end(), {q[0], q[1], q[2], q[0], q[2], q[3]});
       }
   }
+  // Thin square rod from A to B (ENU x, y, z), w across: bicycle frames and wheels (drawn from both sides).
+  void rod(const double A[3], const double B[3], double w, int mat, Color c) {
+    if (pos.size() / 3 + 16 > 65000) flush();
+    double d[3] = {B[0] - A[0], B[1] - A[1], B[2] - A[2]};
+    const double l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (l < 1e-6) return;
+    for (double& x : d) x /= l;
+    double u[3] = {-d[1], d[0], 0.0};
+    const double ul = std::hypot(u[0], u[1]);
+    if (ul < 1e-6) {
+      u[0] = 1.0;
+      u[1] = 0.0;
+    } else {
+      u[0] /= ul;
+      u[1] /= ul;
+    }
+    const double v[3] = {d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]};
+    const double* axes[2] = {u, v};
+    const double h = w * 0.5;
+    const double off[4][2] = {{-1, 0}, {1, 0}, {1, 1}, {-1, 1}};  // (across, end)
+    for (int k = 0; k < 4; ++k) {
+      const double sg = k < 2 ? 1.0 : -1.0;
+      const double* nn = axes[k % 2];
+      const double* aa = axes[(k + 1) % 2];
+      unsigned short q[4];
+      for (int j = 0; j < 4; ++j) {
+        const double* E = off[j][1] == 0 ? A : B;
+        const double a = off[j][0] * h;
+        q[j] = vert(E[0] + nn[0] * h * sg + aa[0] * a, E[1] + nn[1] * h * sg + aa[1] * a, E[2] + nn[2] * h * sg + aa[2] * a, nn[0] * sg,
+                    nn[1] * sg, nn[2] * sg, mat, c);
+      }
+      idx.insert(idx.end(), {q[0], q[1], q[2], q[0], q[2], q[3], q[0], q[2], q[1], q[0], q[3], q[2]});
+    }
+  }
   // Vertical 8-sided pole from z0 to z1.
   void pole(double x, double y, double z0, double z1, double r, int mat, Color c) {
     if (pos.size() / 3 + 20 > 65000) flush();
@@ -329,6 +363,7 @@ void RoadMarkings::unload() {
   n_est_crossings_ = 0;
   n_est_signals_ = 0;
   lights_.clear();
+  vendings_.clear();
   tris_ = 0;
 }
 
@@ -746,9 +781,158 @@ void RoadMarkings::build(Traffic& traffic, TrafficSignals& signals, const World&
       }
     }
   }
+  // --- estimated small street furniture: vending machines with bins, parked bicycles, stand signs ---
+  {
+    auto hash = [](uint32_t a, uint32_t b) {
+      uint32_t h = a * 2654435761u ^ (b + 0x9e3779b9u + (a << 6) + (a >> 2));
+      h ^= h >> 15;
+      h *= 2246822519u;
+      h ^= h >> 13;
+      return h;
+    };
+    auto nearJunction = [&](const Traffic::Edge& e, double u) { return u < trim[&e - edges.data()][0] + 6.0 || u > e.length - trim[&e - edges.data()][1] - 6.0; };
+    // the first building wall out from the road's edge on one side (offset from the centre line), or -1
+    auto wallAt = [&](const Vec2& c, const Vec2& nl, int side, double from, double to) {
+      for (double off = from; off <= to; off += 0.4)
+        if (world.pointInBuilding(c.x + nl.x * side * off, c.y + nl.y * side * off)) return off;
+      return -1.0;
+    };
+    const Color kBody[4] = {{214, 40, 40, 255}, {236, 236, 232, 255}, {40, 100, 180, 255}, {40, 140, 80, 255}};
+    const Color kPack[6] = {{222, 72, 56, 255}, {52, 120, 206, 255}, {238, 196, 58, 255}, {84, 168, 86, 255}, {236, 236, 228, 255}, {150, 90, 170, 255}};
+    const Color kBike[5] = {{190, 192, 196, 255}, {30, 30, 34, 255}, {170, 40, 40, 255}, {50, 80, 150, 255}, {230, 230, 226, 255}};
+    const Color kDark{34, 34, 38, 255};
+    for (size_t i = 0; i < edges.size(); ++i) {
+      const Traffic::Edge& e = edges[i];
+      if (!near_edge[i] || internal[i] || e.pts.size() < 2 || e.length < 30.0 || e.width < 3.0f || e.width > 30.0f) continue;
+      const double edge_off = e.width * 0.5;
+      // vending machines: about one per 80 m of street, against a wall within 6 m of the kerb
+      for (double u = 18.0 + hash(static_cast<uint32_t>(i), 1) % 30; u < e.length - 12.0; u += 55.0 + hash(static_cast<uint32_t>(i), static_cast<uint32_t>(u)) % 50) {
+        if (nearJunction(e, u)) continue;
+        const uint32_t h = hash(static_cast<uint32_t>(i), static_cast<uint32_t>(u * 10));
+        const int side = (h & 1) ? 1 : -1;
+        const Vec2 t = tangentOn(e, u), nl = leftOf(t), c = pointOn(e, u);
+        const double w = wallAt(c, nl, side, edge_off + 0.8, edge_off + 6.0);
+        if (w < 0) continue;
+        const double o = w - 0.6;  // machine centre (0.2 m clear of the wall, 0.72 m deep)
+        const Vec2 mc = add(c, nl, side * o);
+        const Vec2 face{-nl.x * side, -nl.y * side};
+        bool clear = true;
+        for (double a : {-0.55, 0.55, 1.3})
+          for (double b : {-0.4, 0.4})
+            if (world.pointInBuilding(mc.x + t.x * a + face.x * b, mc.y + t.y * a + face.y * b) || world.onCrosswalk(mc.x + t.x * a, mc.y + t.y * a)) clear = false;
+        if (!clear) continue;
+        const double g = groundAt(mc);
+        const Color body = kBody[(h >> 3) % 4];
+        mb.box(mc.x, mc.y, g + 0.92, face, 0.5, 0.36, 0.92, kMatMetal, body);
+        const Vec2 fr = add(mc, face, 0.365);
+        mb.box(fr.x, fr.y, g + 1.28, face, 0.44, 0.006, 0.42, kMatLamp, Color{226, 236, 242, 255});  // lit display window
+        for (int row = 0; row < 2; ++row)
+          for (int k = 0; k < 6; ++k) {  // sample drinks in the window
+            const Vec2 sp = add(add(fr, face, 0.012), t, -0.35 + k * 0.14);
+            mb.box(sp.x, sp.y, g + 1.05 + row * 0.36, face, 0.035, 0.01, 0.1, kMatSign, kPack[(h >> (k + row * 6)) % 6]);
+          }
+        const Vec2 btn = add(fr, face, 0.01);
+        mb.box(btn.x, btn.y, g + 0.8, face, 0.44, 0.008, 0.03, kMatMetalDark, kDark);   // button row
+        mb.box(btn.x, btn.y, g + 0.3, face, 0.3, 0.02, 0.1, kMatMetalDark, kDark);      // take-out slot
+        const Vec2 coin = add(btn, t, 0.36);
+        mb.box(coin.x, coin.y, g + 1.0, face, 0.05, 0.012, 0.12, kMatMetalDark, Color{70, 72, 78, 255});
+        // two recycling bins beside it (cans and bottles)
+        for (int k = 0; k < 2; ++k) {
+          const Vec2 bp = add(add(mc, t, 0.82 + k * 0.46), face, 0.1);
+          mb.box(bp.x, bp.y, g + 0.42, face, 0.2, 0.2, 0.42, kMatMetal, k == 0 ? Color{40, 110, 190, 255} : Color{60, 150, 90, 255});
+          const Vec2 hp = add(bp, face, 0.2);
+          mb.box(hp.x, hp.y, g + 0.7, face, 0.08, 0.005, 0.05, kMatMetalDark, kDark);
+        }
+        lights_.push_back({{fr.x + face.x * 0.4, fr.y + face.y * 0.4, g + 1.3}, 4.5f, 0.12f});
+        vendings_.push_back({{fr.x, fr.y, g}, face});
+      }
+      // parked bicycles: a row of 3 to 6 against a wall on wide streets, now and then
+      if (e.width >= 7.0f) {
+        for (double u = 30.0 + hash(static_cast<uint32_t>(i), 7) % 60; u < e.length - 20.0; u += 140.0 + hash(static_cast<uint32_t>(i), static_cast<uint32_t>(u)) % 120) {
+          if (nearJunction(e, u)) continue;
+          const uint32_t h = hash(static_cast<uint32_t>(i), static_cast<uint32_t>(u * 7));
+          const int side = (h & 2) ? 1 : -1;
+          const Vec2 t = tangentOn(e, u), nl = leftOf(t), c = pointOn(e, u);
+          const double w = wallAt(c, nl, side, edge_off + 2.4, edge_off + 7.0);
+          if (w < 0) continue;
+          const Vec2 face{-nl.x * side, -nl.y * side};  // from the wall towards the road
+          const int n = 3 + static_cast<int>((h >> 4) % 4);
+          for (int k = 0; k < n; ++k) {
+            const Vec2 bc = add(add(c, nl, side * (w - 1.05)), t, (k - (n - 1) * 0.5) * 0.62);
+            if (world.pointInBuilding(bc.x, bc.y) || world.onCrosswalk(bc.x, bc.y)) continue;
+            const double g = groundAt(bc);
+            const Color fc = kBike[(h >> (k * 3 + 6)) % 5];
+            // local frame: f along the bike (front wheel at the wall), r across
+            const Vec2 f{-face.x, -face.y};
+            auto P = [&](double along, double z, double across, double out[3]) {
+              out[0] = bc.x + f.x * along + t.x * across;
+              out[1] = bc.y + f.y * along + t.y * across;
+              out[2] = g + z;
+            };
+            const double R = 0.33;
+            for (double wx : {-0.52, 0.52}) {  // wheels: 12-sided rims
+              for (int s = 0; s < 12; ++s) {
+                const double a0 = s * 3.14159265358979 / 6, a1 = (s + 1) * 3.14159265358979 / 6;
+                double A[3], B[3];
+                P(wx + std::cos(a0) * R, R + std::sin(a0) * R, 0, A);
+                P(wx + std::cos(a1) * R, R + std::sin(a1) * R, 0, B);
+                mb.rod(A, B, 0.035, kMatTyre, kDark);
+              }
+            }
+            double rh[3], fh[3], cr[3], st[3], hd[3], sa[3], hl[3], hr[3];
+            P(-0.52, R, 0, rh);
+            P(0.52, R, 0, fh);
+            P(-0.05, 0.3, 0, cr);
+            P(-0.2, 0.82, 0, st);
+            P(0.36, 0.86, 0, hd);
+            P(-0.22, 0.9, 0, sa);
+            P(0.36, 0.98, -0.28, hl);
+            P(0.36, 0.98, 0.28, hr);
+            mb.rod(rh, st, 0.03, kMatMetal, fc);
+            mb.rod(rh, cr, 0.03, kMatMetal, fc);
+            mb.rod(cr, st, 0.035, kMatMetal, fc);
+            mb.rod(cr, hd, 0.035, kMatMetal, fc);
+            mb.rod(hd, fh, 0.03, kMatMetal, fc);
+            mb.rod(hl, hr, 0.025, kMatMetal, Color{170, 172, 176, 255});
+            mb.box(sa[0], sa[1], sa[2], f, 0.07, 0.13, 0.03, kMatMetalDark, kDark);  // saddle
+            if ((h >> (k + 20)) & 1) {                                                  // a front basket
+              double bk[3];
+              P(0.62, 0.82, 0, bk);
+              mb.box(bk[0], bk[1], bk[2], f, 0.17, 0.14, 0.11, kMatFence, Color{150, 152, 156, 255});
+            }
+          }
+        }
+      }
+      // stand signs (blank) on narrow streets with buildings close to the road
+      if (e.width < 8.0f) {
+        for (double u = 12.0 + hash(static_cast<uint32_t>(i), 11) % 40; u < e.length - 10.0; u += 70.0 + hash(static_cast<uint32_t>(i), static_cast<uint32_t>(u + 3)) % 80) {
+          if (nearJunction(e, u)) continue;
+          const uint32_t h = hash(static_cast<uint32_t>(i), static_cast<uint32_t>(u * 13));
+          const int side = (h & 4) ? 1 : -1;
+          const Vec2 t = tangentOn(e, u), nl = leftOf(t), c = pointOn(e, u);
+          const double w = wallAt(c, nl, side, edge_off + 0.2, edge_off + 3.0);
+          if (w < 0) continue;
+          const Vec2 sp = add(c, nl, side * (w - 0.45));
+          if (world.pointInBuilding(sp.x, sp.y) || world.onCrosswalk(sp.x, sp.y)) continue;
+          const double g = groundAt(sp);
+          const Vec2 face{-nl.x * side, -nl.y * side};
+          const Color panel = (h >> 5) % 3 == 0 ? Color{36, 48, 40, 255} : (h >> 5) % 3 == 1 ? Color{240, 236, 226, 255} : kPack[(h >> 7) % 6];
+          // an A-frame: two panels leaning together, drawn as tilted rods of width 0.5
+          for (int s = -1; s <= 1; s += 2) {
+            double A[3] = {sp.x + face.x * 0.22 * s, sp.y + face.y * 0.22 * s, g + 0.02};
+            double B[3] = {sp.x + face.x * 0.03 * s, sp.y + face.y * 0.03 * s, g + 0.92};
+            for (double k = -0.2; k <= 0.21; k += 0.1) {
+              double A2[3] = {A[0] + t.x * k, A[1] + t.y * k, A[2]}, B2[3] = {B[0] + t.x * k, B[1] + t.y * k, B[2]};
+              mb.rod(A2, B2, 0.1, kMatSign, panel);
+            }
+          }
+        }
+      }
+    }
+  }
   mb.flush();
-  TraceLog(LOG_INFO, "RJ: road markings: %zu crossings (%zu estimated), %d estimated signal groups (%zu heads), %zu lights, %zu tris",
-           crossings_.size(), n_est_crossings_, signals.estimatedGroups(), n_est_signals_, lights_.size(), tris_);
+  TraceLog(LOG_INFO, "RJ: road markings: %zu crossings (%zu estimated), %d estimated signal groups (%zu heads), %zu lights, %zu vending machines, %zu tris",
+           crossings_.size(), n_est_crossings_, signals.estimatedGroups(), n_est_signals_, lights_.size(), vendings_.size(), tris_);
 }
 
 }  // namespace rjc

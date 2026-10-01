@@ -29,6 +29,8 @@ class TownSim {
   std::vector<WalkTrip> walkingTrips(const rj::sim::CivilDate& d, int minute);
   // Activity histogram at a JST date/minute (plans are regenerated per day).
   std::array<int, static_cast<size_t>(rj::sim::ActivityType::kCount)> histogram(const rj::sim::CivilDate& d, int minute);
+  // what resident i is doing at this minute (HomeLeisure when the plan has nothing)
+  rj::sim::ActivityType activityOf(size_t i, const rj::sim::CivilDate& d, int minute);
 
  private:
   void ensurePlans(const rj::sim::CivilDate& d);

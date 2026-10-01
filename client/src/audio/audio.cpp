@@ -655,6 +655,104 @@ struct Ambient {
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------
+// The music player: a looping tune composed from the track number (original, generated here).
+struct MusicVoice {
+  int track = -1;
+  double t = 0;
+  float bpm = 100, key = 57;
+  int prog[4] = {0, 5, 7, 3};  // chord roots (semitones above the key) per bar
+  bool minor[4] = {false, false, false, true};
+  int mel[32] = {};            // melody (scale steps, -1 rest) for 8 bars of quarter-notes... in eighths over 4 bars
+  Smooth gain;
+  Biquad hat_hp, pad_lp;
+  void setup(int tr) {
+    track = tr;
+    t = 0;
+    Rng r;
+    for (int i = 0; i <= tr * 3; ++i) r.next();
+    bpm = Audio::musicBpm(tr);
+    key = Audio::musicKey(tr);
+    static const int progs[4][4] = {{0, 7, 9, 5}, {0, 5, 7, 5}, {9, 5, 0, 7}, {0, 9, 5, 7}};
+    const auto& p = progs[r.next() % 4];
+    for (int i = 0; i < 4; ++i) {
+      prog[i] = p[i];
+      minor[i] = p[i] == 9 || p[i] == 4;
+    }
+    for (int& m : mel) m = (r.next() % 5 == 0) ? -1 : static_cast<int>(r.next() % 8);
+    hat_hp.highpass(7000, 0.7f, SR);
+    pad_lp.lowpass(1800, 0.7f, SR);
+    gain.time(0.4f, SR);
+  }
+  bool backing = false;
+  float run(int want, float g, Rng& rng) {
+    if (want != track && want >= 0) setup(want);
+    const float gv = gain.step(want >= 0 ? g : 0.0f);
+    if (track < 0 || gv < 1e-4f) {
+      if (want < 0) t = 0;
+      return 0;
+    }
+    t += 1.0 / SR;
+    const double beat = t * bpm / 60.0;
+    const int bar = static_cast<int>(beat / 4.0) % 4;
+    const double bt = std::fmod(beat, 1.0) * 60.0 / bpm;  // seconds into the beat
+    const float root = key + static_cast<float>(prog[bar]);
+    float y = 0;
+    // bass: root on the beat (triangle-ish)
+    {
+      const float f = midiHz(root - 12);
+      const float ph = static_cast<float>(std::fmod(t * f, 1.0));
+      y += (4.0f * std::fabs(ph - 0.5f) - 1.0f) * 0.22f * attackDecay(static_cast<float>(bt), 0.01f, 0.35f);
+    }
+    // pad: the triad, soft
+    {
+      const float third = minor[bar] ? 3.0f : 4.0f;
+      float pd = 0;
+      for (float iv : {0.0f, third, 7.0f}) pd += std::sin(static_cast<float>(kTau * midiHz(root + iv) * t)) + 0.3f * std::sin(static_cast<float>(kTau * midiHz(root + iv) * 2.0 * t));
+      y += pad_lp.run(pd) * 0.045f;
+    }
+    // melody: eighth notes from the major pentatonic an octave up
+    {
+      static const int penta[8] = {0, 2, 4, 7, 9, 12, 14, 16};
+      const double e = beat * 2.0;
+      const int k = static_cast<int>(e) % 32;
+      const float et = static_cast<float>(std::fmod(e, 1.0) * 30.0 / bpm);
+      if (mel[k] >= 0 && !backing) y += bell(et, midiHz(key + 12.0f + static_cast<float>(penta[mel[k]])), 0.35f) * 0.12f;
+    }
+    // drums: kick on 1 and 3, a soft hat on the eighths
+    {
+      const int b = static_cast<int>(beat) % 4;
+      const float kt = static_cast<float>(bt);
+      if (b == 0 || b == 2) y += std::sin(static_cast<float>(kTau) * (50.0f + 90.0f * decay(kt, 0.03f)) * kt) * 0.3f * decay(kt, 0.12f);
+      const float ht = static_cast<float>(std::fmod(beat * 2.0, 1.0) * 30.0 / bpm);
+      y += hat_hp.run(rng.white()) * 0.05f * decay(ht, 0.03f);
+    }
+    return y * gv;
+  }
+};
+
+// A plucked string (Karplus-Strong): a delay line of noise, averaged as it circulates.
+struct PluckVoice {
+  std::vector<float> line;
+  size_t pos = 0;
+  float gain = 1, t = 0;
+  void start(float midi, float g, Rng& rng) {
+    const size_t n = std::max<size_t>(2, static_cast<size_t>(SR / midiHz(midi)));
+    line.resize(n);
+    for (float& x : line) x = rng.white();
+    pos = 0;
+    gain = g;
+    t = 0;
+  }
+  float run() {
+    const size_t nx = (pos + 1) % line.size();
+    const float y = line[pos];
+    line[pos] = 0.4985f * (line[pos] + line[nx]);
+    pos = nx;
+    t += 1.0f / SR;
+    return y * gain * 0.35f;
+  }
+};
+
 struct Audio::Impl {
   std::mutex mu;
   SoundScene pending;
@@ -670,6 +768,9 @@ struct Audio::Impl {
   RailVoice rail[3];
   Ambient amb;
   std::vector<CueVoice> cues;
+  MusicVoice music;
+  std::vector<PluckVoice> plucks;
+  std::vector<std::pair<float, float>> pluck_queue;  // (midi, gain)
   Reverb rev;
   Echo echo;
   Smooth master, send_amt, room;
@@ -703,6 +804,13 @@ struct Audio::Impl {
         cues.push_back(std::move(v));
       }
       queue.clear();
+      for (const auto& [m, g] : pluck_queue) {
+        if (plucks.size() >= 8) plucks.erase(plucks.begin());
+        PluckVoice pv;
+        pv.start(m, g, rng);
+        plucks.push_back(std::move(pv));
+      }
+      pluck_queue.clear();
     }
     // (re)assign voices to the vehicles / trains in the scene
     for (int i = 0; i < 5; ++i) {
@@ -771,6 +879,25 @@ struct Audio::Impl {
           cues.pop_back();
         } else {
           ++i;
+        }
+      }
+      {
+        music.backing = sc.music_backing;
+        const float mu = music.run(sc.music, sc.music_gain, rng);  // (the phone: centred, a little room)
+        l += mu;
+        r += mu;
+        send += mu * 0.15f;
+        for (size_t i = 0; i < plucks.size();) {
+          const float x = plucks[i].run();
+          l += x;
+          r += x;
+          send += x * 0.5f;
+          if (plucks[i].t > 3.0f) {
+            plucks[i] = std::move(plucks.back());
+            plucks.pop_back();
+          } else {
+            ++i;
+          }
         }
       }
       const float e = echo.run(echo_in, 0.42f, 0.28f, SR) * 0.35f;
@@ -864,6 +991,12 @@ void Audio::cue(Cue c, float gain, float pan) {
   if (p_->queue.size() < 16) p_->queue.push_back({c, gain, std::clamp(pan, -1.0f, 1.0f)});
 }
 
+void Audio::pluck(float midi, float gain) {
+  if (!active()) return;
+  std::lock_guard<std::mutex> lk(p_->mu);
+  if (p_->pluck_queue.size() < 8) p_->pluck_queue.push_back({midi, gain});
+}
+
 void Audio::advanceOffline(double seconds) {
   if (!offline_) return;
   offline_carry_ += seconds * kRate;
@@ -898,6 +1031,9 @@ bool Audio::synthCheck() {
   im.pending = sc;
   im.has_pending = true;
   im.queue.push_back({Cue::DepartureMelody, 0.5f, 0.0f});
+  im.pending.music = 2;  // (the music player and a plucked string too)
+  im.pending.music_gain = 0.5f;
+  im.pluck_queue.push_back({52.0f, 0.8f});
   std::vector<float> buf(2048 * 2);
   double sum = 0;
   float peak = 0;

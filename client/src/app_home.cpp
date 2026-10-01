@@ -77,7 +77,7 @@ bool App::rentHome() {
   }
   life_.has_home = true;
   life_.rent_paid_until = clock_.unixUtc() + kLease;
-  toast(tr("home.rented"));
+  message(tr("msg.from.agent"), tr("home.rented"));
   autosave();
   return true;
 }
@@ -106,10 +106,10 @@ void App::updateHome(float dt) {
     if (ledger_ && ledger_->transfer(player_account_, ledger_->externalAccount(), kRentYen, rj::econ::TxCategory::Rent, clock_.unixUtc(),
                                      tr("home.rent_memo")) == rj::econ::TxResult::Ok) {
       life_.rent_paid_until += kLease;
-      toast(i18n_.f("home.rent_paid", {{"yen", withCommas(kRentYen)}}));
+      message(tr("msg.from.agent"), i18n_.f("home.rent_paid", {{"yen", withCommas(kRentYen)}}));
     } else {
       life_.has_home = false;
-      toast(tr("home.evicted"));
+      message(tr("msg.from.agent"), tr("home.evicted"));
     }
   }
   // the door leaf swings open once the flat is rented
