@@ -204,6 +204,7 @@ void App::shutdown() {
   audio_.shutdown();
   near_trees_.clear();
   world_.unloadAll();
+  chars_.unload();  // (stops a conversion still running, frees the meshes and textures)
   renderer_.shutdown();
   ui_.unload();
 }
