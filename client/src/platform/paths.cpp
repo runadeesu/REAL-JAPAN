@@ -198,4 +198,33 @@ std::string localTimestamp() {
   return buf;
 }
 
+std::vector<fs::path> userCharacterDirs() {
+  std::vector<fs::path> out;
+#if defined(__ANDROID__)
+  struct android_app* app = GetAndroidApp();
+  if (app && app->activity && app->activity->externalDataPath) out.push_back(fs::path(app->activity->externalDataPath) / "characters");
+  out.push_back(userDir() / "characters");
+#else
+  out.push_back(exeDir() / "characters");
+  out.push_back(userDir() / "characters");
+#endif
+  return out;
+}
+
+bool openFolder(const fs::path& dir) {
+  std::error_code ec;
+  fs::create_directories(dir, ec);
+#if defined(_WIN32)
+  return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+#elif defined(__ANDROID__)
+  (void)dir;
+  return false;
+#else
+  std::string s = dir.string();
+  if (s.find('\'') != std::string::npos) return false;
+  const std::string cmd = "xdg-open '" + s + "' >/dev/null 2>&1 &";
+  return std::system(cmd.c_str()) == 0;
+#endif
+}
+
 }  // namespace rjc

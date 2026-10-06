@@ -25,6 +25,7 @@
 #include "game/weather.hpp"
 #include "raylib.h"
 #include "render/aircraft.hpp"
+#include "render/characters.hpp"
 #include "render/humans.hpp"
 #include "render/ships.hpp"
 #include "render/textures.hpp"
@@ -125,6 +126,22 @@ class Renderer {
   void drawMeshMat(const Mesh& m, const Matrix& model, int material, Color tint, Vector3 emissive = {0, 0, 0});
   void drawPlayerBody(const Vector3& feet, float yaw_rad);
   void drawPedestrians(const Pedestrians& peds, float rain = 0.0f);
+  // Rigged characters (render/characters.hpp). Each frame, before the shadow pass: clearCharacters,
+  // then the people to draw as characters (pedestrians and passengers near the camera, the player);
+  // they cast shadows and drawPedestrians / drawCrowd leave them out. drawCharacters draws the list
+  // (main pass and mirror); drawCharacterNow draws one at once (clerks, bandmates: no shadow).
+  void setCharacters(const CharacterSet* set) { chars_ = set; }
+  void setPlayerCharacter(int ch) { player_char_ = ch; }  // (passers-by are never the player's character)
+  const CharacterSet* characters() const { return chars_; }
+  void clearCharacters();
+  void addCharacter(int ch, const Vector3& feet, float yaw_rad, float scale, const CharAnim& a, bool inside = false, bool umbrella_color = false,
+                    Color umbrella = WHITE);
+  // max_n nearest within max_d of the camera (people over 12; children stay figures)
+  void addPedestrianCharacters(const Pedestrians& peds, const Camera3D& cam, float rain, float time_s, int max_n, float max_d);
+  void addCrowdCharacters(const std::vector<CrowdPerson>& people, const Camera3D& cam, float time_s, int max_n, float max_d);
+  void drawCharacters();
+  void drawCharacterNow(int ch, const Vector3& feet, float yaw_rad, float scale, const CharAnim& a);
+  int charactersDrawn() const { return static_cast<int>(char_draws_.size()); }
   void drawInterior(const Interior& in);
   void drawFacades(const FacadeDetail& f);
   void drawMarkings(const RoadMarkings& m);
@@ -142,7 +159,9 @@ class Renderer {
   // the player's open umbrella (first person: held a little forward and to the side, the canopy
   // over the head) and people standing still (shop clerks)
   void drawPlayerUmbrella(const Vector3& feet, float yaw_rad, bool first_person);
-  void drawStandingPerson(const Vector3& feet, float yaw_rad, int variant, Color shirt, Color pants);
+  // (with rigged characters loaded: a character picked by variant, in pose; else a figure in those colours)
+  void drawStandingPerson(const Vector3& feet, float yaw_rad, int variant, Color shirt, Color pants, CharPose pose = CharPose::Stand,
+                          float time_s = 0.0f);
   // Traffic beyond the simulated vehicles (which exist only near the player): cars moving along the
   // road graph out to a few km, drawn cheaply (small boxes by day, head / tail lights at night).
   // Density by the hour and the road's width (a game assumption).
@@ -224,6 +243,22 @@ class Renderer {
   ShipModels ship_models_;
   AircraftModels aircraft_models_;
   void drawHuman(const Mesh& m, const Matrix& model, Color top, Color bottom, Color skin, Color hair);
+  struct CharDraw {
+    int ch = -1;
+    Matrix model{};
+    CharSkin skin{};
+    bool inside = false;
+    bool umbrella = false;
+    Color umbrella_col{};
+    float yaw = 0;
+  };
+  int characterFor(size_t id) const;  // which character a person is (stable by id)
+  int player_char_ = -1;
+  void drawCharacter(const CharDraw& d, bool depth_only);
+  const CharacterSet* chars_ = nullptr;
+  std::vector<CharDraw> char_draws_;
+  std::vector<size_t> char_walkers_;  // walker ids drawn as characters this frame (sorted)
+  std::vector<size_t> char_crowd_;    // crowd indices drawn as characters this frame (sorted)
   // shadows: 0 = near cascade, 1 = far cascade
   RenderTexture2D shadow_[2]{};
   int shadow_res_[2] = {2048, 4096};

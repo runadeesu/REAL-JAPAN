@@ -31,6 +31,8 @@ struct Settings {
   bool dev_overlay = false;    // developer HUD (coordinates, mesh, building data, perf); F3 toggles
   int volume = 80;             // master sound volume 0..100
   int render_height = 0;       // Android: lines drawn, scaled up to the panel (0 = the panel's own)
+  std::string character;       // the player's rigged character: "" the first one, "none" the plain figure, else its name
+  int char_people = 24;        // people near the camera drawn as rigged characters (0 = none; Android 8)
 
   static const std::vector<std::pair<int, int>>& resolutions();
   static const std::vector<int>& timeScales();

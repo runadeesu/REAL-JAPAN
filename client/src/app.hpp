@@ -125,6 +125,14 @@ class App {
   Ui ui_;
   World world_;
   Renderer renderer_;
+  // rigged characters (data/characters, render/characters.hpp): the player's in third person and
+  // the people near the camera; none loaded = the procedural figures as before
+  CharacterSet chars_;
+  int player_char_ = -1;
+  float player_speed_ = 0.0f, player_phase_ = 0.0f;  // (for the player's walk / run cycle)
+  void addFrameCharacters(const Camera3D& cam);
+  CharAnim playerAnim() const;
+  void applyCharacterSetting();
   Player player_;
   rj::sim::GameClock clock_{0};
   std::unique_ptr<rj::econ::Ledger> ledger_;

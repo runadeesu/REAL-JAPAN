@@ -178,7 +178,8 @@ void App::drawGuitar(const Camera3D& cam) {
   for (size_t k = 0; k < band_.size() || (band_on_ && k < 2 && band_.empty()); ++k) {
     const double side = k == 0 ? -1.7 : 1.7;
     const rj::geo::Vec3d feet = at(player_.pos, -0.5, side, 0.0);
-    renderer_.drawStandingPerson(enuToRl(feet), fy, static_cast<int>(3 + k), k == 0 ? Color{40, 40, 46, 255} : Color{160, 40, 50, 255}, Color{40, 44, 70, 255});
+    renderer_.drawStandingPerson(enuToRl(feet), fy, static_cast<int>(1003 + k), k == 0 ? Color{40, 40, 46, 255} : Color{160, 40, 50, 255}, Color{40, 44, 70, 255},
+                                 k == 0 ? CharPose::Guitar : CharPose::Drum, render_time_);
     if (k == 0) {
       renderer_.drawBox(at(feet, 0.22, 0.1, 1.0), fy, {0.22f, 0.05f, 0.14f}, 0, Color{30, 30, 34, 255});
       renderer_.drawBox(at(feet, 0.24, -0.3, 1.06), fy, {0.34f, 0.02f, 0.025f}, 0, Color{20, 20, 22, 255});

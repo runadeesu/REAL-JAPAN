@@ -32,6 +32,11 @@ std::optional<std::string> readText(const fs::path& p);
 bool writeFileAtomic(const fs::path& p, const std::string& contents);
 
 std::string pathToUtf8(const fs::path& p);
+// Folders the player can put their own characters in (FBX / .rjchr): <exe>/characters and
+// <userDir>/characters (Android: the app's folder on the shared storage, reachable over USB).
+std::vector<fs::path> userCharacterDirs();
+// Shows a folder in the system's file manager (Windows Explorer, xdg-open); false where there is none.
+bool openFolder(const fs::path& dir);
 std::string localTimestamp();  // "2026-09-26 16:20"
 
 }  // namespace rjc

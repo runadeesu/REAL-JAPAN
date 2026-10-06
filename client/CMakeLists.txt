@@ -69,6 +69,8 @@ set(RJ_SOURCES
   src/render/foliage.cpp
   src/render/vehicles.cpp
   src/render/humans.cpp
+  src/render/characters.cpp
+  src/render/fbx_import.cpp
   src/game/player.cpp
   src/game/town_sim.cpp
   src/game/pedestrians.cpp
@@ -120,6 +122,9 @@ else()
 endif()
 target_include_directories(RealJapan PRIVATE src)
 target_link_libraries(RealJapan PRIVATE rjcore raylib)
+if(WIN32)
+  target_link_libraries(RealJapan PRIVATE shell32)  # (ShellExecuteW: show the characters folder)
+endif()
 if(RJ_GLES)
   target_compile_definitions(RealJapan PRIVATE RJ_GLES=1 RJ_TOUCH=1)
 endif()

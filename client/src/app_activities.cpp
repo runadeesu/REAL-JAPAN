@@ -432,7 +432,8 @@ void App::drawWorldMarkers(const Camera3D& cam) {
   if (jobs_.active() && jobs_.kind() == JobKind::Taxi && jobs_.stage() == 0) {  // the passenger waiting at the kerb
     const V3 t = jobs_.target().pos;
     const float yaw = static_cast<float>(std::atan2(player_.pos.x - t.x, player_.pos.y - t.y));
-    renderer_.drawPlayerBody(enuToRl(t), yaw);
+    renderer_.drawStandingPerson(enuToRl(t), yaw, 2003 + static_cast<int>(jobs_.count() % 97), Color{40, 60, 110, 255}, Color{30, 32, 38, 255},
+                                 CharPose::Wave, render_time_);  // (hailing the taxi)
   }
 }
 

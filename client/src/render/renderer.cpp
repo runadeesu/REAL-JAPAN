@@ -270,6 +270,8 @@ bool Renderer::init() {
   setI(lit_, "texSnow", kSlotSnow);
   setI(lit_, "landOn", 0);
   setI(lit_, "materialOverride", -1);
+  setI(lit_, "skinned", 0);
+  setI(depth_, "skinned", 0);
   setI(sky_, "texNoise", kSlotNoise);
   if (!tex_.generate(512)) return false;
   leaf_tex_ = generateLeafTexture(512);
@@ -478,6 +480,8 @@ void Renderer::renderShadowMaps(const Camera3D& cam, const World& world, const L
       }
     }
     for (const Caster& ec : extra_casters) DrawMesh(*ec.mesh, mat_depth_, ec.model);
+    if (chars_ && c == 0)  // (people: the near cascade only)
+      for (const auto& d : char_draws_) drawCharacter(d, true);
     (void)r2;
     rlEnableBackfaceCulling();
     EndMode3D();
@@ -797,7 +801,17 @@ void Renderer::drawPlayerUmbrella(const Vector3& feet, float yaw_rad, bool first
   rlEnableBackfaceCulling();
 }
 
-void Renderer::drawStandingPerson(const Vector3& feet, float yaw_rad, int variant, Color shirt, Color pants) {
+void Renderer::drawStandingPerson(const Vector3& feet, float yaw_rad, int variant, Color shirt, Color pants, CharPose pose, float time_s) {
+  if (chars_ && chars_->count() > 0) {  // a rigged character (variant picks which)
+    const size_t key = static_cast<size_t>(variant) * 7919u + 17u;
+    const int ch = characterFor(key);
+    CharAnim a;
+    a.pose = pose;
+    a.time = time_s;
+    a.seed = static_cast<float>(key % 1000u) / 1000.0f;
+    drawCharacterNow(ch, feet, yaw_rad, 1.70f / std::max(1.0f, chars_->at(ch).height), a);
+    return;
+  }
   humans_.build();
   setI(lit_, "materialOverride", -1);
   setI(lit_, "useTexture", 0);
@@ -1789,7 +1803,9 @@ void Renderer::drawCrowd(const std::vector<CrowdPerson>& people) {
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
   rlDisableBackfaceCulling();
   bool lit_inside = false;
-  for (const auto& p : people) {
+  for (size_t pi = 0; pi < people.size(); ++pi) {
+    if (std::binary_search(char_crowd_.begin(), char_crowd_.end(), pi)) continue;  // drawn as a rigged character
+    const CrowdPerson& p = people[pi];
     if (p.inside != lit_inside) {  // people in a car are lit by its lights, like the interior
       lit_inside = p.inside;
       set3(lit_, "selfLight", lit_inside ? kCabinLight : Vector3{0, 0, 0});
@@ -1822,6 +1838,7 @@ void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
   mat_.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
   rlDisableBackfaceCulling();
   for (const auto& [id, w] : peds.walkers()) {
+    if (std::binary_search(char_walkers_.begin(), char_walkers_.end(), id)) continue;  // drawn as a rigged character
     const float s = w.height_scale;
     const Vector3 feet = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z)});
     const Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), MatrixRotateY(-w.yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
@@ -1861,6 +1878,180 @@ void Renderer::drawPedestrians(const Pedestrians& peds, float rain) {
   }
   rlEnableBackfaceCulling();
   for (const Bag& b : bags) drawBox(b.c, b.yaw, b.half, kMatDefault, b.col);
+}
+
+// ---------------------------------------------------------------------------
+// Rigged characters
+namespace {
+const Color kUmbrellaCols[] = {{226, 230, 234, 255}, {226, 230, 234, 255}, {226, 230, 234, 255}, {24, 24, 28, 255},
+                               {30, 38, 66, 255},    {176, 156, 128, 255}, {120, 30, 34, 255},   {60, 90, 70, 255}};
+// the umbrella mesh's grip (humans.cpp: the hand at 0.2 right, 0.12 forward, 1.02 up)
+const Vector3 kUmbrellaGrip{0.2f, 1.02f, -0.12f};
+Matrix personMatrix(const Vector3& feet, float yaw_rad, float scale) {
+  return MatrixMultiply(MatrixMultiply(MatrixScale(scale, scale, scale), MatrixRotateY(-yaw_rad)), MatrixTranslate(feet.x, feet.y, feet.z));
+}
+}  // namespace
+
+void Renderer::clearCharacters() {
+  char_draws_.clear();
+  char_walkers_.clear();
+  char_crowd_.clear();
+}
+
+void Renderer::addCharacter(int ch, const Vector3& feet, float yaw_rad, float scale, const CharAnim& a, bool inside, bool umbrella_color,
+                            Color umbrella) {
+  if (!chars_ || ch < 0 || ch >= chars_->count()) return;
+  CharDraw d;
+  d.ch = ch;
+  d.model = personMatrix(feet, yaw_rad, scale);
+  d.inside = inside;
+  d.umbrella = a.umbrella;
+  d.umbrella_col = umbrella_color ? umbrella : kUmbrellaCols[0];
+  d.yaw = yaw_rad;
+  CharacterSet::pose(chars_->at(ch), a, d.skin);
+  char_draws_.push_back(d);
+}
+
+int Renderer::characterFor(size_t id) const {
+  const int n = chars_ ? chars_->count() : 0;
+  if (n <= 0) return -1;
+  const uint32_t h = static_cast<uint32_t>(id * 2654435761u) >> 7;
+  if (n == 1 || player_char_ < 0 || player_char_ >= n) return static_cast<int>(h % static_cast<uint32_t>(n));
+  // (never the player's own character: nobody meets their double in the street)
+  const int k = static_cast<int>(h % static_cast<uint32_t>(n - 1));
+  return k >= player_char_ ? k + 1 : k;
+}
+
+void Renderer::addPedestrianCharacters(const Pedestrians& peds, const Camera3D& cam, float rain, float time_s, int max_n, float max_d) {
+  if (!chars_ || chars_->count() == 0 || max_n <= 0) return;
+  std::vector<std::pair<float, size_t>> near;
+  for (const auto& [id, w] : peds.walkers()) {
+    if (w.age < 13) continue;  // (children stay figures: an adult model scaled down looks wrong)
+    const Vector3 feet = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z)});
+    const float d2 = Vector3DistanceSqr(feet, cam.position);
+    if (d2 < max_d * max_d) near.push_back({d2, id});
+  }
+  if (static_cast<int>(near.size()) > max_n) {
+    std::nth_element(near.begin(), near.begin() + max_n, near.end());
+    near.resize(static_cast<size_t>(max_n));
+  }
+  for (const auto& [d2, id] : near) {
+    const Walker& w = peds.walkers().at(id);
+    const int ch = characterFor(id);
+    const Character& c = chars_->at(ch);
+    CharAnim a;
+    a.time = time_s;
+    a.seed = static_cast<float>((id * 40503u) % 1000u) / 1000.0f;
+    a.phase = w.phase;
+    a.pose = w.chat_with != static_cast<size_t>(-1) ? CharPose::Talk : w.waiting ? CharPose::Stand : CharPose::Walk;
+    const uint32_t h = static_cast<uint32_t>(id * 2654435761u);
+    a.umbrella = rain > 0.12f && (h & 1023u) < static_cast<uint32_t>(std::min(1.0f, 0.55f + rain) * 1023.0f);
+    const Vector3 feet = enuToRl({w.pos.x, w.pos.y, static_cast<double>(w.z)});
+    addCharacter(ch, feet, w.yaw, w.height_scale * 1.70f / std::max(1.0f, c.height), a, false, true, kUmbrellaCols[(h >> 10) % 8]);
+    char_walkers_.push_back(id);
+  }
+  std::sort(char_walkers_.begin(), char_walkers_.end());
+}
+
+void Renderer::addCrowdCharacters(const std::vector<CrowdPerson>& people, const Camera3D& cam, float time_s, int max_n, float max_d) {
+  if (!chars_ || chars_->count() == 0 || max_n <= 0) return;
+  std::vector<std::pair<float, size_t>> near;
+  for (size_t i = 0; i < people.size(); ++i) {
+    const float d2 = Vector3DistanceSqr(enuToRl(people[i].pos), cam.position);
+    if (d2 < max_d * max_d) near.push_back({d2, i});
+  }
+  if (static_cast<int>(near.size()) > max_n) {
+    std::nth_element(near.begin(), near.begin() + max_n, near.end());
+    near.resize(static_cast<size_t>(max_n));
+  }
+  for (const auto& [d2, i] : near) {
+    const CrowdPerson& p = people[i];
+    const size_t key = static_cast<size_t>(p.variant) * 7919u + static_cast<size_t>(std::llround(std::fabs(p.pos.x) * 3.0 + std::fabs(p.pos.y) * 7.0));
+    const int ch = characterFor(key);
+    const Character& c = chars_->at(ch);
+    CharAnim a;
+    a.time = time_s;
+    a.seed = static_cast<float>(key % 1000u) / 1000.0f;
+    a.phase = p.phase;
+    a.pose = p.pose == 1 ? CharPose::Walk : p.pose == 2 ? CharPose::Sit : p.pose == 3 ? CharPose::Strap : CharPose::Stand;
+    const float sc = p.scale * 1.70f / std::max(1.0f, c.height);
+    const Vector3 feet = enuToRl(p.pos);
+    Matrix R = MatrixRotateY(-p.face);
+    if (p.pitch != 0.0f || p.roll != 0.0f) R = MatrixMultiply(MatrixMultiply(R, MatrixRotateZ(-p.roll)), MatrixRotateX(p.pitch));
+    CharDraw d;
+    d.ch = ch;
+    d.model = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixScale(sc, sc, sc), R), MatrixRotateY(-p.yaw)), MatrixTranslate(feet.x, feet.y, feet.z));
+    d.inside = p.inside;
+    d.yaw = p.yaw;
+    CharacterSet::pose(c, a, d.skin);
+    char_draws_.push_back(d);
+    char_crowd_.push_back(i);
+  }
+  std::sort(char_crowd_.begin(), char_crowd_.end());
+}
+
+void Renderer::drawCharacter(const CharDraw& d, bool depth_only) {
+  const Character& c = chars_->at(d.ch);
+  Shader& sh = depth_only ? depth_ : lit_;
+  Material& m = depth_only ? mat_depth_ : mat_;
+  setI(sh, "skinned", 1);
+  SetShaderValueV(sh, GetShaderLocation(sh, "bones"), d.skin.rows, SHADER_UNIFORM_VEC4, kCharBones * 3);
+  if (!depth_only) {
+    setI(lit_, "materialOverride", -1);
+    setI(lit_, "useTexture", 1);
+    setI(lit_, "surfaceMode", 0);
+    if (d.inside) set3(lit_, "selfLight", kCabinLight);
+  }
+  const Texture2D white{rlGetTextureIdDefault(), 1, 1, 1, 7};
+  for (const auto& part : c.parts) {
+    m.maps[MATERIAL_MAP_DIFFUSE].texture = part.tex >= 0 ? c.textures[static_cast<size_t>(part.tex)] : white;
+    m.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    if (!depth_only) {
+      if (part.kind == 1) rlDisableBackfaceCulling();
+      else rlEnableBackfaceCulling();
+    }
+    DrawMesh(part.mesh, m, d.model);
+    ++draw_calls_;
+    triangles_ += part.mesh.triangleCount;
+  }
+  m.maps[MATERIAL_MAP_DIFFUSE].texture = white;
+  setI(sh, "skinned", 0);
+  if (!depth_only) {
+    setI(lit_, "useTexture", 0);
+    if (d.inside) set3(lit_, "selfLight", Vector3{0, 0, 0});
+  }
+  if (d.umbrella) {  // the umbrella's grip in the right hand
+    const Vector3 hand = Vector3Transform(d.skin.joint[kRHand], d.model);
+    // (the shaft leans back so the canopy is over the head, not out in front of the hand)
+    const Matrix M = MatrixMultiply(MatrixMultiply(MatrixMultiply(MatrixTranslate(-kUmbrellaGrip.x, -kUmbrellaGrip.y, -kUmbrellaGrip.z), MatrixRotateX(0.28f)),
+                                                   MatrixRotateY(-d.yaw)),
+                                    MatrixTranslate(hand.x, hand.y + 0.03f, hand.z));
+    if (!depth_only) {
+      rlDisableBackfaceCulling();
+      set3(lit_, "partTop", Vector3{d.umbrella_col.r / 255.0f, d.umbrella_col.g / 255.0f, d.umbrella_col.b / 255.0f});
+    }
+    DrawMesh(humans_.umbrella(), m, M);
+    ++draw_calls_;
+  }
+}
+
+void Renderer::drawCharacters() {
+  if (!chars_ || char_draws_.empty()) return;
+  for (const auto& d : char_draws_) drawCharacter(d, false);
+  rlEnableBackfaceCulling();
+}
+
+void Renderer::drawCharacterNow(int ch, const Vector3& feet, float yaw_rad, float scale, const CharAnim& a) {
+  if (!chars_ || ch < 0 || ch >= chars_->count()) return;
+  CharDraw d;
+  d.ch = ch;
+  d.model = personMatrix(feet, yaw_rad, scale);
+  d.yaw = yaw_rad;
+  d.umbrella = a.umbrella;
+  d.umbrella_col = kUmbrellaCols[0];
+  CharacterSet::pose(chars_->at(ch), a, d.skin);
+  drawCharacter(d, false);
+  rlEnableBackfaceCulling();
 }
 
 void Renderer::drawRain(const Camera3D& cam, const Lighting& L, float time_s, float snow) {

@@ -59,7 +59,8 @@ void App::drawShopClerks(const Camera3D& cam) {
     const double dx = sp.stand.x - sp.counter.x, dy = sp.stand.y - sp.counter.y, d = std::max(0.1, std::hypot(dx, dy));
     const rj::geo::Vec3d feet{sp.counter.x - dx / d * 0.75, sp.counter.y - dy / d * 0.75, sp.counter.z};
     const Color shirt = sp.kind == "konbini" ? Color{40, 110, 175, 255} : sp.kind == "cafe" ? Color{70, 48, 34, 255} : Color{176, 64, 52, 255};
-    renderer_.drawStandingPerson(enuToRl(feet), static_cast<float>(std::atan2(dx, dy)), static_cast<int>(i % 5), shirt, Color{36, 36, 42, 255});
+    renderer_.drawStandingPerson(enuToRl(feet), static_cast<float>(std::atan2(dx, dy)), static_cast<int>(i), shirt, Color{36, 36, 42, 255}, CharPose::Stand,
+                                 render_time_);
   }
 }
 

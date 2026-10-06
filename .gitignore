@@ -16,3 +16,5 @@ third_party/
 game/data/world/
 # Fetched by tools/fetch_deps.sh (SIL OFL 1.1)
 game/data/fonts/*.ttf
+# Rigged characters (tools/import_characters.py output; their licences are their authors', not in the repository)
+game/data/characters/

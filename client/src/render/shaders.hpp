@@ -11,6 +11,10 @@ in vec2 vertexTexCoord;
 in vec2 vertexTexCoord2;
 in vec3 vertexNormal;
 in vec4 vertexColor;
+in vec4 vertexBoneIds;      // rigged characters (render/characters.hpp): up to 4 bones a vertex
+in vec4 vertexBoneWeights;
+uniform int skinned;        // 1: skin with bones[] (3 rows of an affine map per bone)
+uniform vec4 bones[78];
 uniform mat4 mvp;
 uniform mat4 matModel;
 uniform mat4 matNormal;
@@ -26,14 +30,29 @@ out vec4 fragColor;
 out vec2 fragUV;
 out vec2 fragMat;
 void main() {
-  vec4 wp = matModel * vec4(vertexPosition, 1.0);
+  vec4 lp = vec4(vertexPosition, 1.0);
+  vec3 ln = vertexNormal;
+  if (skinned == 1) {
+    vec3 sp = vec3(0.0), sn = vec3(0.0);
+    for (int k = 0; k < 4; ++k) {
+      float w = vertexBoneWeights[k];
+      if (w <= 0.0) continue;
+      int b = int(vertexBoneIds[k] + 0.5) * 3;
+      vec4 r0 = bones[b], r1 = bones[b + 1], r2 = bones[b + 2];
+      sp += w * vec3(dot(r0, lp), dot(r1, lp), dot(r2, lp));
+      sn += w * vec3(dot(r0.xyz, ln), dot(r1.xyz, ln), dot(r2.xyz, ln));
+    }
+    lp = vec4(sp, 1.0);
+    ln = sn;
+  }
+  vec4 wp = matModel * lp;
   if (abs(vertexTexCoord2.x - 33.0) < 0.5 && vertexTexCoord2.y > 0.0) {
     // foliage sways with the wind (tips more than the inner crown)
     float ph = timeSec * 1.7 + wp.x * 0.21 + wp.z * 0.17;
     float a = vertexTexCoord2.y * windStrength;
     wp.xz += vec2(sin(ph), cos(ph * 0.83)) * 0.07 * a + vec2(sin(ph * 3.1), sin(ph * 2.7)) * 0.02 * a;
   }
-  vec3 nrm = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
+  vec3 nrm = normalize(vec3(matNormal * vec4(ln, 0.0)));
   if (waveAmp > 0.0) {
     // swell and wind waves: four travelling sines (deep-water speed c = sqrt(g / k)), crests up only
     // (no troughs under the flat sea further out), fading out 110-225 m from the camera (flat at the mesh edge)
@@ -361,6 +380,8 @@ Surf material(int id, vec3 ng, vec2 wuv) {
   else if (id == 32) { s.albedo = pow(partSkin, vec3(2.2)) * fragColor.r; s.rough = 0.5; }                        // skin
   else if (id == 37) { s.albedo = pow(partHair, vec3(2.2)) * fragColor.r; s.rough = 0.42; }                       // hair
   else if (id == 33) { s.rough = 0.7; s.porosity = 0.1; }                           // leaves
+  else if (id == 39) { s.albedo = vec3(1.0); s.rough = 0.72; s.porosity = 0.55; }     // rigged character: skin, clothes (texture)
+  else if (id == 42) { s.albedo = vec3(1.0); s.rough = 0.45; s.porosity = 0.35; }     // rigged character: hair cards
   else if (id == 38) {  // train windows / interior lights: dark glass, lit inside while in service
     s.albedo = vec3(0.02, 0.025, 0.03); s.rough = 0.12; s.porosity = 0.0;
     s.emit = vec3(0.85, 0.92, 1.0) * (0.04 + 0.7 * nightFactor);
@@ -975,9 +996,27 @@ void main() {
 inline const char* kDepthVs = R"(#version 330
 in vec3 vertexPosition;
 in vec2 vertexTexCoord;
+in vec4 vertexBoneIds;
+in vec4 vertexBoneWeights;
 uniform mat4 mvp;
+uniform int skinned;
+uniform vec4 bones[78];
 out vec2 fragUV;
-void main() { fragUV = vertexTexCoord; gl_Position = mvp * vec4(vertexPosition, 1.0); }
+void main() {
+  vec4 lp = vec4(vertexPosition, 1.0);
+  if (skinned == 1) {
+    vec3 sp = vec3(0.0);
+    for (int k = 0; k < 4; ++k) {
+      float w = vertexBoneWeights[k];
+      if (w <= 0.0) continue;
+      int b = int(vertexBoneIds[k] + 0.5) * 3;
+      sp += w * vec3(dot(bones[b], lp), dot(bones[b + 1], lp), dot(bones[b + 2], lp));
+    }
+    lp = vec4(sp, 1.0);
+  }
+  fragUV = vertexTexCoord;
+  gl_Position = mvp * lp;
+}
 )";
 inline const char* kDepthFs = R"(#version 330
 in vec2 fragUV;

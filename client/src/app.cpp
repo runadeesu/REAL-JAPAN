@@ -150,6 +150,34 @@ bool App::boot() {
     fatal_ = "Shader compilation failed (OpenGL 3.3 required)";
     return false;
   }
+#if defined(__ANDROID__)
+  const int max_chars = 8;  // (a phone's memory: a few of them)
+#else
+  const int max_chars = 0;
+#endif
+  chars_.load(data / "characters", max_chars);
+  {
+    // the player's own characters: FBX files dropped into a characters folder are converted (once,
+    // in the background) and join the game; a note in the folder says how
+    const auto dirs = userCharacterDirs();
+    for (const auto& d : dirs) {
+      std::error_code ec;
+      std::filesystem::create_directories(d, ec);
+      if (!ec && !fileExists(d / "README.txt"))
+        writeFileAtomic(d / "README.txt",
+                        "PROJECT: REAL JAPAN - characters / キャラクター\r\n\r\n"
+                        "Put rigged characters here as binary FBX files (a Mixamo-style skeleton, e.g. downloaded from\r\n"
+                        "mixamo.com as FBX with the skin, textures embedded). The game converts them once in the background\r\n"
+                        "when it starts; then choose yours in Settings -> Your character, and people in town use them too.\r\n\r\n"
+                        "ここにリグ付きキャラクターの FBX（バイナリ形式・Mixamo 形式のボーン。例: mixamo.com から\r\n"
+                        "スキン付き・テクスチャ埋め込みの FBX でダウンロードしたもの）を入れてください。起動時に一度だけ\r\n"
+                        "裏で変換され、設定の「自分のキャラクター」で選べます。街の人にも使われます。\r\n"
+                        "(キャラクターの権利はそれぞれの作者・配布元にあります。)\r\n");
+    }
+    chars_.startUserImport(dirs, userDir() / "characters_cache", 1024, max_chars);
+  }
+  renderer_.setCharacters(&chars_);
+  applyCharacterSetting();
   if (auto icon = readFile(data / "icon.png")) {
     Image img = LoadImageFromMemory(".png", icon->data(), static_cast<int>(icon->size()));
     if (img.data) {
@@ -840,6 +868,10 @@ void App::update(float dt) {
                        insideInterior(), nearby,
                        &gate_walls_);
         updateSwimming(before_move, dt);
+        // the walk / run cycle of the player's character (stride: 1.17 m walking, 2.4 m running)
+        const float v = dt > 0.0f ? static_cast<float>(std::hypot(player_.pos.x - before_move.x, player_.pos.y - before_move.y) / dt) : 0.0f;
+        player_speed_ += (std::min(v, 12.0f) - player_speed_) * std::min(1.0f, dt * 10.0f);
+        player_phase_ += dt * (swimming_ ? 2.4f : 2.0f * PI * player_speed_ / (player_speed_ > 3.0f ? 2.4f : 1.17f));
       }
       if (!inside_id_.empty() && player_.left_interior) {
         // Walked up the stairs and out onto the pavement.
@@ -952,6 +984,10 @@ void App::update(float dt) {
   const double game_dt = weather_prev_unix_ ? static_cast<double>(now_unix - weather_prev_unix_) : 0.0;
   weather_prev_unix_ = now_unix;
   render_time_ += dt;
+  if (const int n = chars_.pollImported(); n > 0) {  // the player's own characters, converted in the background
+    applyCharacterSetting();
+    toast(i18n_.f("chars.imported", {{"n", std::to_string(n)}, {"total", std::to_string(chars_.count())}}));
+  }
   {
     const auto jt = clock_.jst();
     weather_.setDate(jt.date.m, jt.date.d);
@@ -1570,6 +1606,31 @@ void App::runSelfTest() {
   const std::string ja = tr("menu.new_game");
   check(en == "New Game" && ja != en && ja != "menu.new_game", "Japanese and English strings");
   check(Audio::synthCheck(), "procedural sound synthesises (engine, train, melody)");
+  if (chars_.count() > 0) {
+    // every rigged character: loaded, of a person's height, every pose finite; standing and walking
+    // keep the head over the hips and the feet on the ground
+    bool ok = true;
+    for (int i = 0; i < chars_.count() && ok; ++i) {
+      const Character& c = chars_.at(i);
+      ok = !c.parts.empty() && c.triangles > 1000 && c.height > 1.3f && c.height < 2.2f;
+      for (int p = 0; p < static_cast<int>(CharPose::Count) && ok; ++p) {
+        CharAnim a;
+        a.pose = static_cast<CharPose>(p);
+        a.phase = 1.3f;
+        a.time = 2.0f;
+        CharSkin sk;
+        CharacterSet::pose(c, a, sk);
+        for (float v : sk.rows) ok = ok && std::isfinite(v);
+        if (a.pose == CharPose::Stand || a.pose == CharPose::Walk)
+          ok = ok && sk.joint[kHead].y > sk.joint[kHips].y + 0.3f && std::min(sk.joint[kLFoot].y, sk.joint[kRFoot].y) < c.joint[kLFoot].y + 0.06f &&
+               std::min(sk.joint[kLFoot].y, sk.joint[kRFoot].y) > c.joint[kLFoot].y - 0.08f;
+      }
+    }
+    const std::string what = "rigged characters load and pose (" + std::to_string(chars_.count()) + ")";
+    check(ok, what.c_str());
+  } else {
+    TraceLog(LOG_INFO, "RJ: no rigged characters in data/characters: people are the procedural figures");
+  }
   Settings reread;
   reread.load(dataDir() / "config" / "default.ini", userDir() / "settings.ini");
   check(reread.language == "ja", "settings.ini written and re-read");
@@ -1696,6 +1757,8 @@ void App::drawWorldView(const Camera3D& cam) {
   ro.ssao = settings_.post_fx;
   ro.bloom = settings_.post_fx;
   ro.motion_blur = settings_.post_fx && (settings_.motion_blur || std::getenv("RJ_MOTION_BLUR")) ? 0.7f : 0.0f;
+  renderer_.clearCharacters();
+  if (in_session_ && screen_ != Screen::Title && !deep && chars_.count() > 0) addFrameCharacters(cam);
   if (ro.shadows) {
     std::vector<Renderer::Caster> casters;
     facades_.forEachMesh([&](const Mesh& m, int lod) {
@@ -1724,6 +1787,7 @@ void App::drawWorldView(const Camera3D& cam) {
       renderer_.drawShips(ferries_, rear, lighting_);
       renderer_.drawAircraft(aviation_, rear, lighting_, -1, nullptr);
       renderer_.drawPedestrians(peds_, lighting_.rain);
+      renderer_.drawCharacters();
     });
   }
   // Indoors walls can be 0.3 m from the eye: pull the near plane in so it never cuts through them.
@@ -1835,16 +1899,79 @@ void App::drawWorldView(const Camera3D& cam) {
     for (const auto& [id, interior] : world_.interiors()) renderer_.drawInterior(*interior);
   }
   if (in_session_ && screen_ != Screen::Title && !deep) renderer_.drawPedestrians(peds_, lighting_.rain);
+  renderer_.drawCharacters();  // (the people near the camera and the player, collected in addFrameCharacters)
   if (in_session_ && screen_ != Screen::Title && !deep && !photo_request_) drawWorldMarkers(cam);
-  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_)
+  const bool char_body = player_char_ >= 0 && player_char_ < chars_.count();
+  if (in_session_ && player_.camera_mode == 1 && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_ &&
+      !char_body)
     renderer_.drawPlayerBody(enuToRl(player_.pos), player_.yaw);
   if (in_session_ && life_.umbrella && screen_ != Screen::Title && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_ &&
-      inside_id_.empty() && !player_.fly)
+      inside_id_.empty() && !player_.fly && !(char_body && player_.camera_mode == 1))
     renderer_.drawPlayerUmbrella(enuToRl(player_.pos), player_.yaw, player_.camera_mode == 0);
   renderer_.drawClearGlass(world_);
   renderer_.drawRain(cam, lighting_, render_time_, snowfall_);
   EndMode3D();
   renderer_.endScene(cam, lighting_, render_time_);
+}
+
+void App::applyCharacterSetting() {
+  // settings: "" = the first character, "none" = the procedural figure, else a character's name
+  if (settings_.character == "none" || chars_.count() == 0) player_char_ = -1;
+  else if (settings_.character.empty()) player_char_ = 0;
+  else player_char_ = std::max(0, chars_.find(settings_.character));
+  renderer_.setPlayerCharacter(player_char_);
+}
+
+CharAnim App::playerAnim() const {
+  CharAnim a;
+  a.time = render_time_;
+  a.phase = player_phase_;
+  a.seed = 0.4f;
+  a.umbrella = life_.umbrella && inside_id_.empty() && !swimming_;
+  if (swimming_) a.pose = CharPose::Swim;
+  else if (life_.guitar) a.pose = CharPose::Guitar;
+  else if (player_speed_ > 3.0f) a.pose = CharPose::Run;
+  else if (player_speed_ > 0.25f) a.pose = CharPose::Walk;
+  else a.pose = CharPose::Stand;
+  if (a.pose == CharPose::Guitar || a.pose == CharPose::Swim) a.umbrella = false;
+  return a;
+}
+
+void App::addFrameCharacters(const Camera3D& cam) {
+#if defined(__ANDROID__)
+  const float reach = 30.0f;
+#else
+  const float reach = 45.0f;
+#endif
+  const int n = settings_.char_people;
+  renderer_.addPedestrianCharacters(peds_, cam, lighting_.rain, render_time_, n, reach);
+  static const bool no_crowd = std::getenv("RJ_NO_CROWD") != nullptr;
+  if (!no_crowd) renderer_.addCrowdCharacters(crowd_.people(), cam, render_time_, std::max(0, n - renderer_.charactersDrawn()), reach);
+  if (const char* g = std::getenv("RJ_CHAR_GALLERY")) {
+    // test aid: every character in a row 4 m ahead, facing the player, in pose RJ_CHAR_GALLERY
+    // (CharPose order; -1 = each a different pose)
+    const int pose = std::atoi(g);
+    const double fx = std::sin(player_.yaw), fy = std::cos(player_.yaw), rx = fy, ry = -fx;
+    const int n = chars_.count();
+    for (int i = 0; i < n; ++i) {
+      CharAnim a;
+      a.time = render_time_;
+      a.phase = render_time_ * 7.5f + i * 0.7f;
+      a.seed = i / static_cast<float>(n);
+      a.pose = static_cast<CharPose>(pose >= 0 ? pose : i % static_cast<int>(CharPose::Count));
+      a.umbrella = std::getenv("RJ_CHAR_UMBRELLA") != nullptr;
+      const double side = (i - (n - 1) * 0.5) * 0.85;
+      const rj::geo::Vec3d p{player_.pos.x + fx * 4.0 + rx * side, player_.pos.y + fy * 4.0 + ry * side, player_.pos.z};
+      const char* turn = std::getenv("RJ_CHAR_GALLERY_TURN");  // (degrees: a side view)
+      renderer_.addCharacter(i, enuToRl(p), player_.yaw + PI + (turn ? std::atof(turn) * DEG2RAD : 0.0f), 1.0f, a);
+    }
+  }
+  if (player_char_ >= 0 && player_.camera_mode == 1 && ride_train_ < 0 && !driving_.active() && ride_jet_ < 0 && !flying_) {
+    const CharAnim a = playerAnim();
+    rj::geo::Vec3d feet = player_.pos;
+    if (a.pose == CharPose::Swim) feet.z += 1.25;  // (the swim pose's origin: the water surface over the hips)
+    renderer_.addCharacter(player_char_, enuToRl(feet), player_.yaw, 1.0f, a, false, true, Color{226, 230, 234, 255});
+  }
 }
 
 void App::draw() {
@@ -2003,7 +2130,7 @@ void App::drawSettings() {
   ui_.panel({x - 30, 20, w + 60, 1045});
   ui_.text(tr("settings.title"), x, 38, 44, theme::kText);
   float y = 100;
-  const float rh = 48, gap = 6;
+  const float rh = 42, gap = 4;
   auto onoff = [&](bool v) { return tr(v ? "settings.on" : "settings.off"); };
   bool changed = false;
 
@@ -2110,6 +2237,43 @@ void App::drawSettings() {
   y += rh + gap;
   if (ui_.stepper({x, y, w, rh}, tr("settings.motion_blur"), onoff(settings_.motion_blur))) {
     settings_.motion_blur = !settings_.motion_blur;
+    changed = true;
+  }
+  y += rh + gap;
+  {
+    // the player's character (third person, V): the plain figure, or one of the rigged characters
+    const int n = chars_.count();
+    const std::string cur = player_char_ >= 0 && player_char_ < n ? chars_.at(player_char_).name : tr("settings.char_none");
+    if (int d = ui_.stepper({x, y, w, rh}, tr("settings.character"), n > 0 ? cur : tr("settings.char_missing")); d && n > 0) {
+      int k = player_char_ + d;  // -1 = the plain figure
+      if (k < -1) k = n - 1;
+      if (k >= n) k = -1;
+      settings_.character = k < 0 ? "none" : chars_.at(k).name;
+      applyCharacterSetting();
+      changed = true;
+    }
+  }
+  y += rh + gap;
+  {
+    // where to put one's own characters (FBX): the button shows the folder
+    const auto dir = userCharacterDirs().back();
+    std::string label = tr("settings.char_folder");
+    if (chars_.importBusy()) label += "  " + i18n_.f("settings.char_converting", {{"n", std::to_string(chars_.importLeft())}});
+    else if (!chars_.importErrors().empty()) label += "  " + i18n_.f("settings.char_errors", {{"n", std::to_string(chars_.importErrors().size())}});
+    if (ui_.button({x, y, w, rh}, label + "  " + pathToUtf8(dir), true, 22.0f)) {
+      if (!openFolder(dir)) toast(pathToUtf8(dir));
+    }
+  }
+  y += rh + gap;
+  if (int d = ui_.stepper({x, y, w, rh}, tr("settings.char_people"),
+                          settings_.char_people > 0 ? i18n_.f("settings.char_people_n", {{"n", std::to_string(settings_.char_people)}}) : tr("settings.off"));
+      d) {
+    static const int kSteps[] = {0, 8, 16, 24, 32, 48};
+    int idx = 0;
+    for (int i = 0; i < 6; ++i)
+      if (kSteps[i] <= settings_.char_people) idx = i;
+    idx = (idx + d + 6) % 6;
+    settings_.char_people = kSteps[idx];
     changed = true;
   }
   y += rh + gap;

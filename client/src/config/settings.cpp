@@ -46,6 +46,9 @@ void applyKv(Settings& s, const std::map<std::string, std::string>& kv) {
   i("volume", s.volume);
   s.volume = std::clamp(s.volume, 0, 100);
   i("render_height", s.render_height);
+  if (auto x = get("character")) s.character = *x;
+  i("char_people", s.char_people);
+  s.char_people = std::clamp(s.char_people, 0, 64);
   s.render_height = std::clamp(s.render_height, 0, 4320);
   s.width = std::clamp(s.width, 800, 7680);
   s.height = std::clamp(s.height, 600, 4320);
@@ -100,6 +103,8 @@ bool Settings::save(const std::filesystem::path& user) const {
     << "dev_overlay = " << (dev_overlay ? 1 : 0) << "\n"
     << "volume = " << volume << "\n"
     << "render_height = " << render_height << "\n"
+    << "character = " << character << "\n"
+    << "char_people = " << char_people << "\n"
     << "world = " << world << "\n";
   return writeFileAtomic(user, o.str());
 }
