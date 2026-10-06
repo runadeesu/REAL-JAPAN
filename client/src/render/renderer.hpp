@@ -9,8 +9,9 @@
 //   * wet surfaces, puddles and ripples driven by the weather simulation
 //   * post chain: SSAO, screen-space reflections, bloom, auto exposure, colour temperature /
 //     grading, FXAA
+//   * camera motion blur (optional), GPU-skinned rigged characters (render/characters.hpp)
 // NOT implemented (honest list): ray-traced GI/reflections, volumetric light shafts, virtual
-// texturing, motion blur. See docs/STATUS.md.
+// texturing. See docs/STATUS.md.
 
 #include <functional>
 #include <vector>

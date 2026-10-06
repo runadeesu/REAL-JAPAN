@@ -151,6 +151,14 @@ HONEST NOTES
   * Tested on Linux and Wine with software OpenGL; not yet on real Windows PCs / GPUs.
   * An Android build (experimental, not yet run on a device) is provided separately.
 
+YOUR OWN 3D CHARACTERS
+  Put rigged characters as binary FBX files (a Mixamo-style skeleton) into the "characters" folder
+  next to RealJapan.exe (or %APPDATA%\RealJapan\characters) and start the game. They are converted
+  once in the background (tens of seconds); then choose yours in Settings -> Your character. You see
+  it in third person (V), and people nearby, passengers and clerks use them too.
+  For example: pick a character on mixamo.com and download it as FBX Binary with the skin.
+  No characters come with this package (their rights belong to their authors).
+
 DATA SOURCES
   * 3D City Model (Project PLATEAU) Shibuya-ku (FY2025), MLIT - processed
     (https://www.geospatial.jp/ckan/dataset/plateau-13113-shibuya-ku-2025)

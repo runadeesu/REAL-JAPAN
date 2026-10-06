@@ -134,6 +134,14 @@ PROJECT: REAL JAPAN  —  開発ビルド v0.8.0
     確認はまだです。
   ・Android 版（試作・実機未確認）は別に配布しています。
 
+■ 自分の 3D キャラクターを入れる
+  リグ付きのキャラクターを FBX（バイナリ形式・Mixamo 形式のボーン）で用意し、
+  RealJapan.exe の隣の characters フォルダ（または %APPDATA%\RealJapan\characters）に入れて
+  起動してください。初回だけ裏で変換され（数十秒）、「設定」→「自分のキャラクター」で選べます。
+  三人称（V キー）で自分の姿になり、近くの通行人・乗客・店員にも使われます。
+  例：mixamo.com でキャラクターを選び、FBX Binary・スキン付き（テクスチャ埋め込み）でダウンロード。
+  キャラクターはこの配布物には入っていません（権利はそれぞれの作者・配布元にあります）。
+
 ■ データ出典
   ・「3D都市モデル（Project PLATEAU）渋谷区（2025年度）」（国土交通省）
       （https://www.geospatial.jp/ckan/dataset/plateau-13113-shibuya-ku-2025）を加工して作成

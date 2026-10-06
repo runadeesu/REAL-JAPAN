@@ -1,6 +1,7 @@
 #include "render/characters.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <sstream>
@@ -253,6 +254,7 @@ void CharacterSet::startUserImport(const std::vector<std::filesystem::path>& dir
       }
     }
   }
+  TraceLog(LOG_INFO, "RJ: %d characters ready (own folder included)", count());
   if (jobs.empty()) return;
   import_left_ = static_cast<int>(jobs.size());
   TraceLog(LOG_INFO, "RJ: converting %d character FBX file(s) in the background", static_cast<int>(jobs.size()));

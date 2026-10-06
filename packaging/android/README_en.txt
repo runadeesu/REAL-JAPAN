@@ -40,6 +40,11 @@ slice from PLATEAU), running on OpenGL ES 3.0 with on-screen touch controls.
   The game draws 720 lines and the system scales them to the screen; view distance 800 m,
   post effects (SSAO, bloom, reflections) off, shadows on. Change them in Settings.
 
+■ Your own 3D characters
+  Copy binary FBX files (a Mixamo-style skeleton) over USB into
+  internal storage/Android/data/<this app>/files/characters and start the game (converted the first
+  time; at most 8). See README_en.txt of the Windows build.
+
 ■ Saves
   In the app's private storage (removed when the app is uninstalled). The autosave slot is
   written whenever the app is paused (home button and so on).

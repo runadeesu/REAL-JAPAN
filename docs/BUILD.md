@@ -101,6 +101,23 @@ Java のコードは無く、NativeActivity が `libmain.so`（raylib の androi
 署名は `packaging/android/debug.keystore`（リポジトリに置いた公開のデバッグ鍵。新しい版を上書き
 インストールしてセーブを残すため。パスワード `android`）。
 
+### リグ付き 3D キャラクター（任意）
+
+キャラクターはリポジトリに含めない。ゲームは起動時に次のフォルダの FBX（バイナリ、Mixamo 形式の
+ボーン）を裏で変換して使う（キャッシュ：`<ユーザーフォルダ>/characters_cache`）：
+`<exe>/characters`、`<ユーザーフォルダ>/characters`（Windows は `%APPDATA%\RealJapan\characters`、
+Android はアプリの外部ファイル領域の `characters`）。
+
+配布物に同梱したい場合（権利を確認したうえで）は、事前変換して `game/data/characters/` に置く
+（`.gitignore` 済み。パッケージ作成時に `data/characters` として入る）：
+
+```
+python3 tools/import_characters.py <FBX ファイルかフォルダ> [--out game/data/characters] [--tex 1024]
+```
+
+numpy と Pillow だけで動く（FBX の読み込みは自前）。骨は体の 22 本＋左右の指・親指に統合し、
+1 頂点 4 本まで、拡散テクスチャを縮小（JPEG／切り抜きのある髪などは PNG）。
+
 ## 6. 自動スクリーンショット（起動確認用）
 
 秋津国の各機能・各地方：`tools/shots_country.sh build-linux <出力先>`（`ONLY="air_shion ride_main"` で一部だけ）。

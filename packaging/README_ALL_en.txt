@@ -17,6 +17,7 @@ Android (experimental; not yet tested on a real device)
   It is about 560 MB; make sure there is room.
 
 Notes
+  Your own 3D characters (FBX): put them into the characters folder (Settings opens it).
   Akitsu is a fictional country modelled on Japanese landscapes; no real place, shop or person is depicted.
   Prices, fares and rents are game values. Talk, SNS posts and announcements are fixed text, not AI or voices.
   The Shibuya world uses PLATEAU (MLIT) and GSI data (see LICENSES).

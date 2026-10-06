@@ -20,10 +20,20 @@
 - **天気と季節**：**地域ごとの天気**（6 地域）、**桜・梅雨・台風**
 - **海**：**波**（風で高くなる）・**潮の満ち引き**・**泳げる**
 - **放送と管制の字幕**（車内放送・駅の放送・機内放送・管制塔。声は無い）、小型機の**乱気流**、**モーションブラー**（設定でオン）
+- **自分の 3D キャラクター**：リグ付きの FBX（Mixamo 形式のボーン。例：mixamo.com からテクスチャ埋め込みでダウンロードしたもの）を**キャラクター用フォルダに入れるだけ**で、起動時に裏で変換（2 回目からはキャッシュ）。三人称（V キー）の**自分の姿**になり、**近くの通行人・電車の乗客・店員・バンド仲間**にも使われる。骨は GPU スキニング、歩く・走る・立ち止まる・座る・つり革・話す・ギター・ドラム・泳ぐ・手を振る・傘を差すのポーズはプログラムで作る（アニメーションデータ不要）。影も落ちる。フォルダは設定の「キャラクターを追加」で開ける（Windows：`RealJapan.exe` の隣の `characters` か `%APPDATA%\RealJapan\characters`）。**キャラクターのデータはリポジトリ・配布物には含めない**（権利は各作者・配布元。入れていなければ従来の手続き生成の人物）
 
 ※ 料金・家賃・運賃・投げ銭はすべてゲーム上の値。会話・SNS・電話・放送は定型文（LLM や音声合成は使っていない）。タクシーの車内・ホテルの客室・教室は表示せず時間が進む。Android 版は実機未確認。詳しくは [docs/STATUS.md](docs/STATUS.md)。
 
-SCREENSHOTS_V8
+| | |
+|---|---|
+| ![characters](docs/screenshots/country_v8_characters.jpg) 自分で入れた 3D キャラクター（FBX、17 体） | ![walk](docs/screenshots/country_v8_characters_walk.jpg) 歩くポーズ（プログラムで生成） |
+| ![rain](docs/screenshots/country_v8_characters_rain.jpg) 雨の日は傘を差す | ![band](docs/screenshots/country_v8_band.jpg) 路上ライブ（ギター・ベース・ドラム） |
+| ![flat](docs/screenshots/country_v8_flat_door.jpg) 借りた部屋の玄関（借りるまで施錠） | ![room](docs/screenshots/country_v8_flat_room.jpg) 家具付きのワンルーム |
+| ![phone](docs/screenshots/country_v8_phone.jpg) スマホのアプリ（19 種すべて動く） | ![transit](docs/screenshots/country_v8_phone_transit.jpg) 乗換：次の電車と運賃 |
+| ![vending](docs/screenshots/country_v8_vending_night.jpg) 夜の自販機とゴミ箱 | ![pa](docs/screenshots/country_v8_parking_area.jpg) 上下線のパーキングエリア |
+| ![fuel](docs/screenshots/country_v8_fuel_night.jpg) 町のガソリンスタンド（夜） | ![school](docs/screenshots/country_v8_school.jpg) 学校（校舎と校庭） |
+| ![storm](docs/screenshots/country_v8_sea_storm.jpg) 台風の海（波が高い） | ![swim](docs/screenshots/country_v8_swim.jpg) 泳げる海 |
+| ![talk](docs/screenshots/country_v8_talk.jpg) 通行人と話す（定型文） | ![sakura](docs/screenshots/country_v8_sakura.jpg) 4 月の桜並木 |
 
 ### v0.7.0 の新要素：Android 版・買い物・料金所と PA・踏切の安全
 
