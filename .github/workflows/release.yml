@@ -1,5 +1,6 @@
-# Builds every package from the source and attaches them to a DRAFT GitHub release (drafts are
-# visible only to the repository's collaborators until someone publishes them):
+# Builds every package from the source and attaches them to the GitHub release v<ver>: a draft by
+# default (visible only to the repository's collaborators), published when run with publish = true;
+# the notes come from packaging/RELEASE_NOTES.md:
 #   RealJapan-<ver>-all.zip                 the Windows installer and the Android APK in one file
 #   RealJapan-<ver>-win64-setup.exe         Windows 10/11 x64, one-file installer
 #   RealJapan-<ver>-win64.zip               Windows 10/11 x64, the same as one ZIP
@@ -15,6 +16,10 @@ on:
         description: "Also fetch and cook the Shibuya world (PLATEAU / GSI downloads)"
         type: boolean
         default: true
+      publish:
+        description: "Publish the release (otherwise it stays a draft, visible only to collaborators)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -81,33 +86,36 @@ jobs:
       - name: All in one
         run: tools/package_all.sh
 
-      - name: Draft release
+      - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
           VER: ${{ steps.ver.outputs.ver }}
           SHIBUYA: ${{ steps.shibuya.outcome }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           cd dist
+          FILES="RealJapan-${VER}-win64-setup.exe RealJapan-${VER}-win64.zip RealJapan-${VER}-android-arm64-full.apk RealJapan-${VER}-all.zip"
           {
-            echo "PROJECT: REAL JAPAN v${VER} (development build, built by this workflow from commit ${GITHUB_SHA::7})"
+            sed "s/{VER}/${VER}/g" ../packaging/RELEASE_NOTES.md
             echo
-            echo "- RealJapan-${VER}-all.zip: the Windows installer and the Android APK in one file"
-            echo "- RealJapan-${VER}-win64-setup.exe: Windows 10/11 x64 installer (not code-signed)"
-            echo "- RealJapan-${VER}-win64.zip: the same as a ZIP (extract, run RealJapan.exe)"
-            echo "- RealJapan-${VER}-android-arm64-full.apk: Android 7.0+ arm64 (experimental, not tested on a device)"
+            if [ "$SHIBUYA" = "success" ]; then echo "収録ワールド：秋津国（架空）と渋谷（PLATEAU・国土地理院のデータ）"; \
+            else echo "収録ワールド：秋津国（架空）のみ（このビルドには渋谷ワールドが入っていません）"; fi
             echo
-            if [ "$SHIBUYA" = "success" ]; then echo "Worlds: the fictional country Akitsu and Shibuya (PLATEAU / GSI data, see LICENSES)."; \
-            else echo "Worlds: the fictional country Akitsu only (the Shibuya world was not included in this build)."; fi
+            echo "ビルド：コミット ${GITHUB_SHA::7} から GitHub Actions で作成"
             echo
             echo "SHA-256:"
-            sha256sum RealJapan-${VER}-all.zip RealJapan-${VER}-win64-setup.exe RealJapan-${VER}-win64.zip RealJapan-${VER}-android-arm64-full.apk
+            echo '```'
+            sha256sum $FILES
+            echo '```'
           } > notes.md
           cat notes.md
           TAG="v${VER}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" --clobber RealJapan-${VER}-all.zip RealJapan-${VER}-win64-setup.exe RealJapan-${VER}-win64.zip RealJapan-${VER}-android-arm64-full.apk
-            gh release edit "$TAG" --notes-file notes.md
+            gh release upload "$TAG" --clobber $FILES
+            gh release edit "$TAG" --title "PROJECT: REAL JAPAN v${VER}" --notes-file notes.md
+            if [ "$PUBLISH" = "true" ]; then gh release edit "$TAG" --draft=false --latest; fi
+          elif [ "$PUBLISH" = "true" ]; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "PROJECT: REAL JAPAN v${VER}" --notes-file notes.md --latest $FILES
           else
-            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "PROJECT: REAL JAPAN v${VER}" --notes-file notes.md \
-              RealJapan-${VER}-all.zip RealJapan-${VER}-win64-setup.exe RealJapan-${VER}-win64.zip RealJapan-${VER}-android-arm64-full.apk
+            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "PROJECT: REAL JAPAN v${VER}" --notes-file notes.md $FILES
           fi

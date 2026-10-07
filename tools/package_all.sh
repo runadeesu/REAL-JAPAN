@@ -7,7 +7,7 @@
 # script run them: BUILD=1).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VER="0.8.0"
+VER="1.0.0"
 if [ "${BUILD:-0}" = "1" ]; then
   "$ROOT/tools/package_windows.sh"
   python3 "$ROOT/tools/package_android.py" --single

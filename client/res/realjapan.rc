@@ -4,8 +4,8 @@
 1 24 "realjapan.manifest"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,8,0,0
- PRODUCTVERSION 0,8,0,0
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -17,13 +17,13 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "PROJECT: REAL JAPAN\0"
-      VALUE "FileDescription", "PROJECT: REAL JAPAN (Shibuya Vertical Slice)\0"
-      VALUE "FileVersion", "0.8.0\0"
+      VALUE "FileDescription", "PROJECT: REAL JAPAN\0"
+      VALUE "FileVersion", "1.0.0\0"
       VALUE "InternalName", "RealJapan\0"
       VALUE "LegalCopyright", "Map data: MLIT Project PLATEAU, GSI Japan (see LICENSES)\0"
       VALUE "OriginalFilename", "RealJapan.exe\0"
       VALUE "ProductName", "PROJECT: REAL JAPAN\0"
-      VALUE "ProductVersion", "0.8.0\0"
+      VALUE "ProductVersion", "1.0.0\0"
     END
   END
   BLOCK "VarFileInfo"

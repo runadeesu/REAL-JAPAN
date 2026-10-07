@@ -8,7 +8,7 @@
 #          pipeline/cook_slice.py for the Shibuya world, optional) -> this script
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VER="0.8.0"
+VER="1.0.0"
 NAME="RealJapan-${VER}-win64"
 BUILD="$ROOT/build-win"
 DIST="$ROOT/dist/$NAME"

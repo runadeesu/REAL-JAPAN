@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  Android development build v0.8.0 (experimental)
+PROJECT: REAL JAPAN  —  Android build v1.0.0 (experimental)
 ======================================================================
 
 The same game as the Windows build (the fictional country Akitsu and the real-data Shibuya
@@ -13,11 +13,11 @@ slice from PLATEAU), running on OpenGL ES 3.0 with on-screen touch controls.
   - Signed with a public debug key kept in the repository (not a Google Play release).
 
 ■ Files
-  RealJapan-0.8.0-android-arm64-full.apk   everything in this one file (about 560 MB)
+  RealJapan-1.0.0-android-arm64-full.apk   everything in this one file (about 560 MB)
 
 ■ Installing (either way)
   A. On the phone: save the APK, tap it in a file manager and allow "install unknown apps".
-  B. From a PC: enable USB debugging and run  adb install RealJapan-0.8.0-android-arm64-full.apk
+  B. From a PC: enable USB debugging and run  adb install RealJapan-1.0.0-android-arm64-full.apk
   Update the same way (the same signature keeps your saves).
   (For developers, tools/package_android.py can also make a main APK plus split data APKs.)
   Free space needed: about 600 MB (the data is read from the APKs; nothing is copied on start).

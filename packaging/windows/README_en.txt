@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  development build v0.8.0
+PROJECT: REAL JAPAN  —  v1.0.0
 ==========================================================================
 
 Two worlds are included:
@@ -11,11 +11,11 @@ Two worlds are included:
     world = shibuya in settings.ini or the launch option --world shibuya.
 
 HOW TO START
-  Installer (RealJapan-0.8.0-win64-setup.exe, one file)
+  Installer (RealJapan-1.0.0-win64-setup.exe, one file)
     Run it: it installs for you into %LOCALAPPDATA%\Programs\RealJapan (no administrator
     rights). Start from the Start menu or the desktop ("PROJECT REAL JAPAN"). Uninstall from
     Settings -> Apps (saves and settings are kept).
-  ZIP (RealJapan-0.8.0-win64.zip, one file)
+  ZIP (RealJapan-1.0.0-win64.zip, one file)
   1. Extract the ZIP anywhere (e.g. your Desktop).
   2. Double-click RealJapan.exe. No extra runtime (DLL) is needed.
      This development build is not signed: if Windows shows "Windows protected your PC",
@@ -87,7 +87,7 @@ SHOPS
   press E (or click) to buy: number keys or a click on an item. The goods and prices are game
   values; what you buy is kept in the save and listed in the phone's wallet.
 
-DAILY LIFE (v0.8.0)
+DAILY LIFE (since v0.8.0)
   Body     : hunger and thirst fall with time (at zero you cannot run); rain soaks your clothes.
              Eat, drink and use what you bought from the phone's Bag app (umbrella, flashlight and
              batteries, notebook, towel).

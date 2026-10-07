@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  開発ビルド v{VER}（Windows 版と Android 版をひとつにまとめたもの）
+PROJECT: REAL JAPAN  —  v{VER}（Windows 版と Android 版をひとつにまとめたもの）
 
 中身
   Windows/RealJapan-{VER}-win64-setup.exe   Windows 10/11 (64 ビット) 用のインストーラ（これ 1 つで全部入り）

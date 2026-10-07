@@ -1,5 +1,5 @@
 ; One-file installer for PROJECT: REAL JAPAN (Windows x64).
-;   makensis -DVER=0.8.0 -DSRC=dist/RealJapan-0.8.0-win64 -DICON=client/res/realjapan.ico -DOUT=dist/RealJapan-0.8.0-win64-setup.exe installer.nsi
+;   makensis -DVER=1.0.0 -DSRC=dist/RealJapan-1.0.0-win64 -DICON=client/res/realjapan.ico -DOUT=dist/RealJapan-1.0.0-win64-setup.exe installer.nsi
 ; Installs for the current user (no administrator rights) into %LOCALAPPDATA%\Programs\RealJapan,
 ; with Start menu and desktop shortcuts and an uninstaller. The saves and settings
 ; (%APPDATA%\RealJapan) are not touched by installing, updating or uninstalling.
@@ -9,7 +9,7 @@ SetCompressorDictSize 64
 RequestExecutionLevel user
 
 !ifndef VER
-  !define VER "0.8.0"
+  !define VER "1.0.0"
 !endif
 !include "MUI2.nsh"
 

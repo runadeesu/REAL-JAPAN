@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  development build v{VER} (the Windows and Android builds in one file)
+PROJECT: REAL JAPAN  —  v{VER} (the Windows and Android builds in one file)
 
 Contents
   Windows/RealJapan-{VER}-win64-setup.exe   installer for Windows 10/11 (64-bit), everything in one file

@@ -2,9 +2,14 @@
 
 「現実世界そのものをゲームにする」——実在の日本を、公的な地理・建物データから再構築して、その中で生活できるオープンワールドゲーム。
 
-**現在：v0.8.0（開発ビルド）/ Windows 10・11 x64 ネイティブ EXE ＋ Android 版 APK（試作・実機未確認）**
+**現在：v1.0.0 / Windows 10・11 x64 ネイティブ EXE ＋ Android 版 APK（試作・実機未確認）** — ダウンロードは [Releases](https://github.com/runadeesu/REAL-JAPAN/releases)
 
 2 つのワールドを収録：**秋津国（架空）**＝日本の風景を参考に手続き生成した架空の国（既定）、**渋谷**＝PLATEAU・国土地理院の実データ（`--world shibuya` または settings.ini の `world = shibuya` で切替）。
+
+### v1.0.0：正式リリース・自分の 3D キャラクター
+
+- **ダウンロード**：[Releases](https://github.com/runadeesu/REAL-JAPAN/releases) の `RealJapan-1.0.0-win64-setup.exe`（Windows インストーラ）・`RealJapan-1.0.0-win64.zip`（同じ内容の ZIP）・`RealJapan-1.0.0-android-arm64-full.apk`（Android、試作）・`RealJapan-1.0.0-all.zip`（全部入り）
+- **自分の 3D キャラクター**：リグ付き FBX を `characters` フォルダに入れるとゲームが変換して使う（下の v0.8.0 の項目の最後を参照）
 
 ### v0.8.0 の新要素：1 ファイルで配布・コントローラー・暮らし
 

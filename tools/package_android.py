@@ -29,8 +29,8 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VER = "0.8.0"
-VCODE = 80
+VER = "1.0.0"
+VCODE = 100
 PKG = "io.github.runadeesu.realjapan"
 MIN_SDK, TARGET_SDK = 24, 34
 SPLIT_BUDGET = int(28.5 * 1024 * 1024)  # file bytes per data APK (stored, the cells are compressed already)

@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  Android 版 開発ビルド v0.8.0（試作）
+PROJECT: REAL JAPAN  —  Android 版 v1.0.0（Android 版は試作）
 ======================================================================
 
 Windows 版と同じゲーム（秋津国〈架空〉と渋谷〈PLATEAU 実データ〉の 2 ワールド）を、
@@ -14,12 +14,12 @@ Android 向けに OpenGL ES 3.0 で動くようにしたものです。画面の
   ・署名はリポジトリに入っている公開のデバッグ鍵です（Google Play 配布版ではありません）。
 
 ■ ファイル
-  RealJapan-0.8.0-android-arm64-full.apk   これ 1 つに全部入っています（約 560MB）
+  RealJapan-1.0.0-android-arm64-full.apk   これ 1 つに全部入っています（約 560MB）
 
 ■ インストール方法（どちらか）
   A. スマホだけで：APK をスマホに保存してファイルアプリでタップし、「提供元不明のアプリ」の
      インストールを許可してインストール。
-  B. PC から：USB デバッグを有効にして  adb install RealJapan-0.8.0-android-arm64-full.apk
+  B. PC から：USB デバッグを有効にして  adb install RealJapan-1.0.0-android-arm64-full.apk
   更新するときも同じように入れ直してください（署名が同じなのでセーブは残ります）。
   必要な空き容量：約 600MB（データは APK の中から直接読み、初回にコピーはしません）。
   （開発者向けに、本体＋スプリット APK に分けた形式も tools/package_android.py で作れます）
