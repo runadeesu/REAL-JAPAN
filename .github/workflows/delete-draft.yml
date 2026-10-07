@@ -1,0 +1,30 @@
+# Deletes a DRAFT release by its tag name (published releases are never touched; a draft has no git
+# tag, so nothing else is removed).
+name: delete-draft-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name of the draft release to delete (e.g. v0.8.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          IDS=$(gh api "repos/$REPO/releases" --paginate | jq -r --arg t "$TAG" '.[] | select(.draft and .tag_name == $t) | .id')
+          if [ -z "$IDS" ]; then echo "no draft release with the tag $TAG"; exit 1; fi
+          for id in $IDS; do
+            gh api -X DELETE "repos/$REPO/releases/$id"
+            echo "deleted the draft release $TAG (id $id)"
+          done
