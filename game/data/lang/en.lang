@@ -50,6 +50,9 @@ settings.saved_note = Settings are saved automatically
 loading.title = Loading
 loading.cells = Loading the city… {n}/{total}
 loading.font = Preparing glyphs…
+loading.slow = Loading is taking long (it goes on after 45 s without progress). Log: {path}
+loading.roads = Preparing the roads, signals and people...
+perf.lightened = The picture was too heavy for this PC: lighter settings now (no shadows or post effects, 800 m view). Settings can change them back
 
 hud.money = Money ¥{n}
 hud.fly = Fly mode

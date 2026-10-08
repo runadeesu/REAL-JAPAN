@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  v1.0.0
+PROJECT: REAL JAPAN  —  v1.0.1
 ==========================================================================
 
 Two worlds are included:
@@ -11,11 +11,11 @@ Two worlds are included:
     world = shibuya in settings.ini or the launch option --world shibuya.
 
 HOW TO START
-  Installer (RealJapan-1.0.0-win64-setup.exe, one file)
+  Installer (RealJapan-1.0.1-win64-setup.exe, one file)
     Run it: it installs for you into %LOCALAPPDATA%\Programs\RealJapan (no administrator
     rights). Start from the Start menu or the desktop ("PROJECT REAL JAPAN"). Uninstall from
     Settings -> Apps (saves and settings are kept).
-  ZIP (RealJapan-1.0.0-win64.zip, one file)
+  ZIP (RealJapan-1.0.1-win64.zip, one file)
   1. Extract the ZIP anywhere (e.g. your Desktop).
   2. Double-click RealJapan.exe. No extra runtime (DLL) is needed.
      This development build is not signed: if Windows shows "Windows protected your PC",

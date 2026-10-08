@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(RealJapan VERSION 1.0.0 LANGUAGES C CXX)
+project(RealJapan VERSION 1.0.1 LANGUAGES C CXX)
 
 # PROJECT: REAL JAPAN native client (Windows x64 primary target, Linux for dev).
 #   Linux:   cmake -S client -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -71,6 +71,7 @@ set(RJ_SOURCES
   src/render/humans.cpp
   src/render/characters.cpp
   src/render/fbx_import.cpp
+  src/platform/logfile.cpp
   src/game/player.cpp
   src/game/town_sim.cpp
   src/game/pedestrians.cpp

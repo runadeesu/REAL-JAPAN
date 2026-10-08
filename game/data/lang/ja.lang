@@ -50,6 +50,9 @@ settings.saved_note = 設定は自動保存されます
 loading.title = 読み込み中
 loading.cells = 街を読み込み中… {n}/{total}
 loading.font = 文字を準備中…
+loading.slow = 読み込みに時間がかかっています（45 秒進まなければ先へ進みます）。ログ: {path}
+loading.roads = 道路・信号・人を準備中…
+perf.lightened = 描画が重いため画質を下げました（影・後処理オフ、描画距離 800 m）。設定で戻せます
 
 hud.money = 所持金 ¥{n}
 hud.fly = 飛行モード

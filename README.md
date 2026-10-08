@@ -2,13 +2,19 @@
 
 「現実世界そのものをゲームにする」——実在の日本を、公的な地理・建物データから再構築して、その中で生活できるオープンワールドゲーム。
 
-**現在：v1.0.0 / Windows 10・11 x64 ネイティブ EXE ＋ Android 版 APK（試作・実機未確認）** — ダウンロードは [Releases](https://github.com/runadeesu/REAL-JAPAN/releases)
+**現在：v1.0.1 / Windows 10・11 x64 ネイティブ EXE ＋ Android 版 APK（試作・実機未確認）** — ダウンロードは [Releases](https://github.com/runadeesu/REAL-JAPAN/releases)
 
 2 つのワールドを収録：**秋津国（架空）**＝日本の風景を参考に手続き生成した架空の国（既定）、**渋谷**＝PLATEAU・国土地理院の実データ（`--world shibuya` または settings.ini の `world = shibuya` で切替）。
 
+### v1.0.1：Windows で読み込みが止まる問題の対策
+
+- 読み込み画面（「街を読み込み中… 16/1507」）から先へ進まなくなる Windows の PC があった問題の対策。読み込み用のスレッドを起動時に作って使い回す方式に変更（作業ごとにスレッドを作って終了を待つ方式で、本体が「応答なし」になることがあった）
+- ログファイル（`%APPDATA%\RealJapan\log.txt`。ZIP 版のポータブルモードでは `userdata\log.txt`）。本体が 8 秒以上止まると、どの処理で止まったかを記録する
+- 読み込みが 45 秒進まなければ先へ進む、重い処理の前に「準備中」を表示、描画が重い PC では自動で画質を下げる（設定で戻せる）
+
 ### v1.0.0：正式リリース・自分の 3D キャラクター
 
-- **ダウンロード**：[Releases](https://github.com/runadeesu/REAL-JAPAN/releases) の `RealJapan-1.0.0-win64-setup.exe`（Windows インストーラ）・`RealJapan-1.0.0-win64.zip`（同じ内容の ZIP）・`RealJapan-1.0.0-android-arm64-full.apk`（Android、試作）・`RealJapan-1.0.0-all.zip`（全部入り）
+- **ダウンロード**：[Releases](https://github.com/runadeesu/REAL-JAPAN/releases) の `RealJapan-1.0.x-win64-setup.exe`（Windows インストーラ）・`RealJapan-1.0.x-win64.zip`（同じ内容の ZIP）・`RealJapan-1.0.x-android-arm64-full.apk`（Android、試作）・`RealJapan-1.0.x-all.zip`（全部入り）
 - **自分の 3D キャラクター**：リグ付き FBX を `characters` フォルダに入れるとゲームが変換して使う（下の v0.8.0 の項目の最後を参照）
 
 ### v0.8.0 の新要素：1 ファイルで配布・コントローラー・暮らし

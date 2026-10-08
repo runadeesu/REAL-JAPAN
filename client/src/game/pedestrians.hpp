@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "platform/jobs.hpp"
 #include "raylib.h"
 #include "game/town_sim.hpp"
 #include "rj/geo/local_frame.hpp"
@@ -168,6 +169,7 @@ class Pedestrians {
   bool hz_on_ = false;
   rj::geo::Vec3d hz_{};
   double hz_yaw_ = 0, hz_v_ = 0;
+  JobPool pool_{1};  // (path finding thread; last member: destroyed first)
 };
 
 }  // namespace rjc

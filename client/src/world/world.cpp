@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <sstream>
 
+#include "platform/logfile.hpp"
 #include "platform/paths.hpp"
 #include "util/text.hpp"
 #include "world/canopy.hpp"
@@ -200,22 +201,31 @@ void World::requestLoad(const rj::stream::StreamKey& key) {
   const std::filesystem::path dpath = dir_ / "cells" / (code + ".rjdet");
   Job j;
   j.key = key;
-  j.fut = std::async(std::launch::async, [path, dpath]() -> std::unique_ptr<CellCpu> {
-    auto data = readFile(path);
-    if (!data) return nullptr;
-    auto c = std::make_unique<CellCpu>();
-    std::string err;
-    if (!parseCell(*data, *c, err)) {
-      TraceLog(LOG_WARNING, "RJ: cell parse failed: %s", err.c_str());
+  j.t0 = GetTime();
+  j.fut = pool_.submit([path, dpath, code]() -> std::unique_ptr<CellCpu> {
+    try {
+      auto data = readFile(path);
+      if (!data) {
+        TraceLog(LOG_WARNING, "RJ: cell %s: cannot read %s", code.c_str(), pathToUtf8(path).c_str());
+        return nullptr;
+      }
+      auto c = std::make_unique<CellCpu>();
+      std::string err;
+      if (!parseCell(*data, *c, err)) {
+        TraceLog(LOG_WARNING, "RJ: cell %s parse failed: %s", code.c_str(), err.c_str());
+        return nullptr;
+      }
+      prepareTerrain(*c);
+      if (auto det = readFile(dpath)) {
+        if (!parseDetail(*det, c->detail, err)) TraceLog(LOG_WARNING, "RJ: cell %s street detail parse failed: %s", code.c_str(), err.c_str());
+        c->bytes += det->size();
+      }
+      buildCanopy(*c);  // forest crowns from the land-cover map (fictional country)
+      return c;
+    } catch (const std::exception& e) {  // (a broken or truncated file: the cell stays empty)
+      TraceLog(LOG_WARNING, "RJ: cell %s failed: %s", code.c_str(), e.what());
       return nullptr;
     }
-    prepareTerrain(*c);
-    if (auto det = readFile(dpath)) {
-      if (!parseDetail(*det, c->detail, err)) TraceLog(LOG_WARNING, "RJ: street detail parse failed: %s", err.c_str());
-      c->bytes += det->size();
-    }
-    buildCanopy(*c);  // forest crowns from the land-cover map (fictional country)
-    return c;
   });
   jobs_.push_back(std::move(j));
 }
@@ -382,6 +392,7 @@ void World::rebuildHash() {
 
 bool World::update(rj::geo::Vec3d& player, double view_distance_m) {
   if (!streamer_) return false;
+  phase("world: streaming");
   bool rebased = false;
   if (origin_ && origin_->update(player)) {
     rebased = true;
@@ -402,6 +413,11 @@ bool World::update(rj::geo::Vec3d& player, double view_distance_m) {
   bool uploaded = false;
   for (auto it = jobs_.begin(); it != jobs_.end();) {
     if (it->fut.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+      if (!it->warned && GetTime() - it->t0 > 15.0) {
+        it->warned = true;
+        TraceLog(LOG_WARNING, "RJ: cell %s still loading after %.0f s (%d jobs pending)", it->key.cell.str().c_str(), GetTime() - it->t0,
+                 static_cast<int>(jobs_.size()));
+      }
       ++it;
       continue;
     }
@@ -409,6 +425,7 @@ bool World::update(rj::geo::Vec3d& player, double view_distance_m) {
       ++it;
       continue;
     }
+    phase("world: collect a loaded cell");
     std::unique_ptr<CellCpu> cpu = it->fut.get();
     const rj::stream::StreamKey key = it->key;
     const bool cancelled = it->cancelled;
@@ -422,14 +439,18 @@ bool World::update(rj::geo::Vec3d& player, double view_distance_m) {
     lc->meta = {cpu->mesh, cpu->anchor[0], cpu->anchor[1], cpu->anchor[2]};
     lc->frame = rj::geo::LocalFrame({cpu->anchor[0], cpu->anchor[1], cpu->anchor[2]});
     const size_t bytes = cpu->bytes;
+    phase("world: upload a cell to the GPU");
     uploadCell(*cpu, lc->gpu);
+    phase("world: upload a cell's street detail to the GPU");
     uploadDetail(cpu->detail, lc->gpu.detail);
+    phase("world: place the cell");
     lc->cpu = std::move(cpu);
     placeCell(*lc);
     loaded_[lc->meta.mesh] = std::move(lc);
     rebuildHash();
     streamer_->onLoaded(key, bytes);
     uploaded = true;
+    TraceLog(LOG_INFO, "RJ: cell %s ready (%zu KB, %d resident)", key.cell.str().c_str(), bytes >> 10, static_cast<int>(loaded_.size()));
   }
   if (interior_streamer_)
     interior_streamer_->update({g.lat_deg, g.lon_deg}, interior_candidates_,

@@ -58,8 +58,8 @@ cmake --build build-linux
 Windows x64（Release, 配布用）:
 ```bash
 tools/package_windows.sh
-# -> dist/RealJapan-1.0.0-win64.zip         1 本の ZIP（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
-#    dist/RealJapan-1.0.0-win64-setup.exe   1 本のインストーラ（NSIS: makensis。INSTALLER=0 で作らない）
+# -> dist/RealJapan-1.0.1-win64.zip         1 本の ZIP（RealJapan.exe, data/, README_ja/en.txt, LICENSES/）
+#    dist/RealJapan-1.0.1-win64-setup.exe   1 本のインストーラ（NSIS: makensis。INSTALLER=0 で作らない）
 #    PARTS=1 で ZIP を約 29 MB ごとに分けたもの（-partN.zip）も作る
 ```
 インストーラはユーザー単位（管理者権限不要）で `%LOCALAPPDATA%\Programs\RealJapan` に入れ、スタートメニューと
@@ -68,7 +68,7 @@ tools/package_windows.sh
 
 Windows と Android をひとつに（`tools/package_all.sh`、先に下の Android の `--single` も作る）:
 ```bash
-tools/package_all.sh        # -> dist/RealJapan-1.0.0-all.zip（Windows/…-setup.exe, Android/…apk, README）
+tools/package_all.sh        # -> dist/RealJapan-1.0.1-all.zip（Windows/…-setup.exe, Android/…apk, README）
 ```
 
 GitHub の下書きリリース（ソースから全部を作る）：Actions の「release」ワークフロー（`.github/workflows/release.yml`）を
@@ -89,12 +89,12 @@ Android（arm64-v8a, OpenGL ES 3.0, Android 7.0 以上）:
 #       Ubuntu: sudo apt-get install -y google-android-ndk-r26c-installer aapt zipalign apksigner \
 #                 libandroid-23-java openjdk-21-jre-headless
 python3 tools/package_android.py --single # 全部入りの 1 本だけ（約 560 MB）
-# -> dist/RealJapan-1.0.0-android-arm64-full.apk   インストール: adb install <apk>
+# -> dist/RealJapan-1.0.1-android-arm64-full.apk   インストール: adb install <apk>
 python3 tools/package_android.py          # 本体＋スプリット APK（各 30 MB 未満）、--full で 1 本も
-# -> dist/RealJapan-1.0.0-android/
-#      RealJapan-1.0.0-android-arm64.apk     本体（libmain.so・設定・言語・フォント・地図）
-#      RealJapan-1.0.0-android-dataNN.apk    街のセル（スプリット APK）
-#    インストール: adb install-multiple dist/RealJapan-1.0.0-android/*.apk
+# -> dist/RealJapan-1.0.1-android/
+#      RealJapan-1.0.1-android-arm64.apk     本体（libmain.so・設定・言語・フォント・地図）
+#      RealJapan-1.0.1-android-dataNN.apk    街のセル（スプリット APK）
+#    インストール: adb install-multiple dist/RealJapan-1.0.1-android/*.apk
 ```
 Java のコードは無く、NativeActivity が `libmain.so`（raylib の android_main → main()）を読み込む。
 ゲームデータは APK の中から AAssetManager で直接読む（`platform/paths.cpp` の `apk:/data`）。

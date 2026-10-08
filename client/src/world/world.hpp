@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "platform/jobs.hpp"
 #include "raylib.h"
 #include "rj/geo/local_frame.hpp"
 #include "rj/stream/streamer.hpp"
@@ -160,6 +161,8 @@ class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
     rj::stream::StreamKey key;
     std::future<std::unique_ptr<CellCpu>> fut;
     bool cancelled = false;
+    double t0 = 0;        // (GetTime() when requested: slow loads are written to the log)
+    bool warned = false;
   };
   std::vector<Job> jobs_;
   std::vector<rj::stream::StreamKey> empty_completions_;
@@ -170,6 +173,8 @@ class World : public rj::stream::ICellIO, public rj::stream::IInteriorIO {
 
   static constexpr double kBucket = 25.0;
   std::unordered_map<int64_t, std::vector<std::pair<const LoadedCell*, int>>> hash_;
+  // cell loading threads (the streamer keeps at most 2 cells in flight); last member: destroyed first
+  JobPool pool_{2};
 };
 
 }  // namespace rjc

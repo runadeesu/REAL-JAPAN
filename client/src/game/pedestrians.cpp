@@ -275,7 +275,7 @@ void Pedestrians::startJobs() {
     queue_.pop_back();
   }
   const rj::nav::GridNav* nav = &nav_;
-  job_ = std::async(std::launch::async, [nav, batch]() {
+  job_ = pool_.submit([nav, batch]() {
     std::vector<Result> out;
     for (const auto& j : batch) out.push_back({j, nav->findPath(j.from, j.to, 250000)});
     return out;

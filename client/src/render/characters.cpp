@@ -182,7 +182,10 @@ bool CharacterSet::loadBytes(const std::vector<unsigned char>& bytes, const std:
 
 void CharacterSet::unload() {
   stop_ = true;
-  if (worker_.joinable()) worker_.join();
+  if (import_done_.valid()) {
+    import_done_.wait();
+    import_done_ = {};
+  }
   stop_ = false;
   import_left_ = 0;
   ready_.clear();
@@ -209,7 +212,7 @@ void CharacterSet::addLoaded(Character&& c) {
 void CharacterSet::startUserImport(const std::vector<std::filesystem::path>& dirs, const std::filesystem::path& cache_dir, int max_tex,
                                    int max_count) {
   namespace fs = std::filesystem;
-  if (worker_.joinable()) return;
+  if (import_done_.valid()) return;
   if (max_count > 0) max_count_ = max_count;
   struct Job {
     fs::path src, cache, stamp;
@@ -258,7 +261,7 @@ void CharacterSet::startUserImport(const std::vector<std::filesystem::path>& dir
   if (jobs.empty()) return;
   import_left_ = static_cast<int>(jobs.size());
   TraceLog(LOG_INFO, "RJ: converting %d character FBX file(s) in the background", static_cast<int>(jobs.size()));
-  worker_ = std::thread([this, jobs, max_tex]() {
+  import_done_ = pool_.submit([this, jobs, max_tex]() {
     for (const auto& j : jobs) {
       if (stop_) break;
       std::vector<unsigned char> out;
@@ -296,7 +299,6 @@ int CharacterSet::pollImported() {
       ++added;
     }
   }
-  if (!importBusy() && worker_.joinable()) worker_.join();
   return added;
 }
 

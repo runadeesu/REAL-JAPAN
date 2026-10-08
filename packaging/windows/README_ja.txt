@@ -1,4 +1,4 @@
-PROJECT: REAL JAPAN  —  v1.0.0
+PROJECT: REAL JAPAN  —  v1.0.1
 ======================================================================
 
 2 つのワールドを収録しています。
@@ -10,11 +10,11 @@ PROJECT: REAL JAPAN  —  v1.0.0
                      world = shibuya、または起動オプション --world shibuya で切替）。
 
 ■ 起動方法
-  インストーラ版（RealJapan-1.0.0-win64-setup.exe、1 ファイル）
+  インストーラ版（RealJapan-1.0.1-win64-setup.exe、1 ファイル）
     実行するとユーザーごとに %LOCALAPPDATA%\Programs\RealJapan へ入ります（管理者権限は不要）。
     スタートメニューとデスクトップの「PROJECT REAL JAPAN」から起動。アンインストールは
     「設定 → アプリ」から（セーブと設定は残ります）。
-  ZIP 版（RealJapan-1.0.0-win64.zip、1 ファイル）
+  ZIP 版（RealJapan-1.0.1-win64.zip、1 ファイル）
   1. ZIP を好きな場所に展開します（例：デスクトップ）。
   2. フォルダ内の「RealJapan.exe」をダブルクリックします。
      ※ 追加のランタイム（DLL）は不要です。

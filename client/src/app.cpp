@@ -10,6 +10,7 @@
 #include <set>
 
 #include "game/station_names.hpp"
+#include "platform/logfile.hpp"
 #include "platform/paths.hpp"
 #include "raymath.h"
 #include "rj/env/solar.hpp"
@@ -34,19 +35,26 @@ bool parseJst(const std::string& s, rj::sim::CivilDate& d, int& hh, int& mm) {
 
 // ---------------------------------------------------------------------------
 int App::run() {
+  startWatchdog();
   while (!quit_) {
+    heartbeat();
+    phase("events");
     if (WindowShouldClose()) {
       if (in_session_) saveSlot(kAutosaveSlot);
       break;
     }
     const float dt = GetFrameTime();
+    phase("update");
     update(dt);
+    phase("sound");
     updateSound(dt);
+    phase("draw");
     BeginDrawing();
     draw();
     drawTravel();
     drawCaption(dt);
     drawToast(dt);
+    phase("present (EndDrawing)");
     EndDrawing();
     ++frame_;
     const bool walking = scriptBusy();  // scripted walk / drive / ride finishes first
@@ -201,6 +209,7 @@ bool App::boot() {
 }
 
 void App::shutdown() {
+  stopWatchdog();
   audio_.shutdown();
   near_trees_.clear();
   world_.unloadAll();
@@ -437,6 +446,22 @@ void App::update(float dt) {
   input::update();  // (before anything reads the keys, the mouse or the controller)
   ui_.beginFrame();
   if (screen_ == Screen::Boot) return;  // boot happens after the first frame is shown
+  // A PC whose graphics cannot keep up (several frames of over 0.6 s in a row once the town is
+  // shown) gets a lighter picture once: no shadows or post effects, a shorter view, fewer rigged
+  // people. Saved, and the settings screen can turn them back on.
+  if ((screen_ == Screen::Title || screen_ == Screen::Game) && !lightened_ && opt_.screenshot.empty() && !opt_.selftest) {
+    slow_frames_ = dt > 0.6f ? slow_frames_ + 1 : 0;
+    if (slow_frames_ >= 4 && (settings_.shadows || settings_.post_fx || settings_.view_distance_m > 800)) {
+      lightened_ = true;
+      TraceLog(LOG_WARNING, "RJ: frames take %.1f s: lighter picture (shadows, post effects off, view 800 m)", dt);
+      settings_.shadows = false;
+      settings_.post_fx = false;
+      settings_.view_distance_m = 800;
+      settings_.char_people = std::min(settings_.char_people, 8);
+      saveSettings();
+      toast(tr("perf.lightened"));
+    }
+  }
   if (screen_ == Screen::Fatal) {
     if (!opt_.screenshot.empty() && shot_frames_ < 0) shot_frames_ = 3;  // test aid: capture the error screen
     return;
@@ -512,8 +537,22 @@ void App::update(float dt) {
 
   if (screen_ == Screen::Loading) {
     // Small slices load completely; streamed worlds start once the cells around the spawn are in.
-    if (world_.residentCount() >= world_.knownCount() ||
-        (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > (world_.knownCount() > 8 || opt_.has_pos ? 20 : 600))) {
+    // A cell that never finishes loading does not keep the game on this screen: with no progress
+    // for 45 s it goes on (the rest streams in during play; the log names the cell).
+    if (world_.residentCount() != load_seen_) {
+      load_seen_ = world_.residentCount();
+      load_change_t_ = GetTime();
+    }
+    const bool stalled = world_.residentCount() > 0 && GetTime() - load_change_t_ > 45.0;
+    if (stalled) TraceLog(LOG_WARNING, "RJ: loading made no progress for 45 s (%d cells in, %d jobs pending): going on", world_.residentCount(), world_.pendingJobs());
+    const bool ready = world_.residentCount() >= world_.knownCount() || stalled ||
+                       (world_.pendingJobs() == 0 && world_.residentCount() > 0 && frame_ > (world_.knownCount() > 8 || opt_.has_pos ? 20 : 600));
+    // (the roads, signals and people are built next, which takes a moment: one frame says so first)
+    if (ready && !load_finishing_) {
+      load_finishing_ = true;
+      TraceLog(LOG_INFO, "RJ: cells around the start are in (%d); preparing roads and people", world_.residentCount());
+    } else if (load_finishing_) {
+      phase("loading: roads, signals, people");
       player_.snapToGround(world_);
       placeRoads();
       screen_ = Screen::Title;
@@ -2079,11 +2118,13 @@ void App::drawLoading() {
   ui_.textCentered(tr("title.name"), cx, 520, 64, theme::kText);
   const std::string msg = i18n_.f("loading.cells", {{"n", std::to_string(world_.residentCount())},
                                                     {"total", std::to_string(world_.knownCount())}});
-  ui_.textCentered(msg, cx, 620, 32, theme::kMuted);
+  ui_.textCentered(load_finishing_ ? tr("loading.roads") : msg, cx, 620, 32, theme::kMuted);
   const float pw = 700, px = cx - pw / 2;
   DrawRectangleRec(ui_.px({px, 680, pw, 10}), Color{40, 40, 48, 255});
   const float f = world_.knownCount() ? static_cast<float>(world_.residentCount()) / static_cast<float>(world_.knownCount()) : 0;
   DrawRectangleRec(ui_.px({px, 680, pw * f, 10}), theme::kAccent);
+  if (load_seen_ >= 0 && GetTime() - load_change_t_ > 12.0)  // (no progress for a while: where the log is)
+    ui_.textCentered(i18n_.f("loading.slow", {{"path", pathToUtf8(logFilePath())}}), cx, 740, 22, theme::kWarn);
   ui_.textCentered(tr("credits.plateau"), cx, 980, 22, theme::kMuted);
   ui_.textCentered(tr("credits.gsi"), cx, 1012, 22, theme::kMuted);
 }
@@ -2120,7 +2161,7 @@ void App::drawTitle() {
   if (ui_.button({x, y, w, h}, tr("menu.quit"))) quit_ = true;
 
   ui_.text(tr("title.build"), 110, 1000, 22, theme::kMuted);
-  ui_.textRight("v1.0.0  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
+  ui_.textRight("v1.0.1  ·  " + std::to_string(world_.buildingCount()) + (world_.meta().fictional ? " buildings (fictional country)" : " buildings (PLATEAU)"),
                  vw - 30, 1040, 20, theme::kMuted);
 }
 

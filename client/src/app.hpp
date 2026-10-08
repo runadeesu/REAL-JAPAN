@@ -562,6 +562,11 @@ class App {
   rj::geo::Vec3d roads_center_{1e30, 1e30, 0};  // where markings / walk network were last built (large worlds)
   int64_t weather_prev_unix_ = 0;
   float render_time_ = 0.0f;
+  int load_seen_ = -1;          // (loading screen: cells in at the last change, and when)
+  double load_change_t_ = 0.0;
+  bool load_finishing_ = false;  // the cells are in: roads and people next (after one frame)
+  int slow_frames_ = 0;          // consecutive very slow frames (a weak GPU: the picture is made lighter once)
+  bool lightened_ = false;
   std::vector<PointLight> collectLights(const Camera3D& cam) const;
 
   // sound (app_sound.cpp): the scene heard at the camera, and events detected from the simulation

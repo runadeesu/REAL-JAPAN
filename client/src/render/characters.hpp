@@ -13,9 +13,10 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
-#include <thread>
+#include <future>
 #include <vector>
 
+#include "platform/jobs.hpp"
 #include "raylib.h"
 
 namespace rjc {
@@ -90,13 +91,14 @@ class CharacterSet {
   void addLoaded(Character&& c);
   std::vector<Character> chars_;
   int max_count_ = 0;
-  std::thread worker_;
+  std::future<void> import_done_;  // the conversion task (on pool_)
   std::atomic<bool> stop_{false};
   std::atomic<int> import_left_{0};
   std::mutex ready_mx_;
   std::vector<std::pair<std::string, std::vector<unsigned char>>> ready_;  // converted, waiting for the GL thread
   std::vector<std::string> pending_errors_;
   std::vector<std::string> import_errors_;
+  JobPool pool_{1};  // (the FBX conversion thread; last member: destroyed first)
 };
 
 }  // namespace rjc

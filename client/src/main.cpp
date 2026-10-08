@@ -7,6 +7,7 @@
 
 #include "app.hpp"
 #include "config/settings.hpp"
+#include "platform/logfile.hpp"
 #include "platform/paths.hpp"
 #include "raylib.h"
 
@@ -80,6 +81,7 @@ int main(int argc, char** argv) {
   // tools/package_android.sh).
   SetConfigFlags(FLAG_FULLSCREEN_MODE);
   SetTraceLogLevel(LOG_INFO);
+  rjc::installLogFile(rjc::userDir() / "log.txt", LOG_INFO);
   InitWindow(0, std::max(0, s.render_height), "PROJECT: REAL JAPAN");
   if (!IsWindowReady()) return 2;
   SetExitKey(KEY_NULL);
@@ -87,7 +89,11 @@ int main(int argc, char** argv) {
   unsigned int flags = FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT;
   if (s.vsync) flags |= FLAG_VSYNC_HINT;
   SetConfigFlags(flags);
-  SetTraceLogLevel(opt.screenshot.empty() && !opt.selftest ? LOG_WARNING : (std::getenv("RJ_DEBUG") ? LOG_DEBUG : LOG_INFO));
+  // the log file (<userDir>/log.txt) gets the game's own messages in every run; the console only
+  // warnings, unless taking screenshots / testing
+  const int console = opt.screenshot.empty() && !opt.selftest ? LOG_WARNING : (std::getenv("RJ_DEBUG") ? LOG_DEBUG : LOG_INFO);
+  SetTraceLogLevel(std::min(console, static_cast<int>(LOG_INFO)));
+  rjc::installLogFile(rjc::userDir() / "log.txt", console);
   InitWindow(s.width, s.height, "PROJECT: REAL JAPAN");
   if (!IsWindowReady()) return 2;
   if (s.fullscreen) ToggleBorderlessWindowed();
